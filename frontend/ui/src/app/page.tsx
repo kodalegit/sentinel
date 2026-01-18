@@ -1,65 +1,228 @@
-import Image from "next/image";
+/**
+ * Sentinel Dashboard - Main page.
+ */
 
-export default function Home() {
+"use client";
+
+import { useState } from "react";
+import { useDashboardStats, useTenders, useTenderDetail, useTenderGraph } from "@/hooks/useTenders";
+import { formatKES } from "@/lib/api";
+import type { RiskCategory } from "@/lib/types";
+import { TenderCard } from "@/components/TenderCard";
+import { TenderDetailModal } from "@/components/TenderDetailModal";
+import { ShadowGraph } from "@/components/ShadowGraph";
+import { StatCard } from "@/components/ui/StatCard";
+import { Modal } from "@/components/ui/Modal";
+import {
+  Shield,
+  AlertTriangle,
+  AlertCircle,
+  CheckCircle,
+  FileText,
+  Clock,
+  TrendingUp,
+  Network,
+  Loader2,
+} from "lucide-react";
+import Link from "next/link";
+
+type FilterTab = "ALL" | RiskCategory;
+
+export default function Dashboard() {
+  const [activeTab, setActiveTab] = useState<FilterTab>("ALL");
+  const [selectedTenderId, setSelectedTenderId] = useState<string | null>(null);
+  const [showGraph, setShowGraph] = useState(false);
+
+  const { stats, loading: statsLoading } = useDashboardStats();
+  const { tenders, loading: tendersLoading } = useTenders(
+    activeTab === "ALL" ? undefined : activeTab
+  );
+  const { detail, loading: detailLoading } = useTenderDetail(selectedTenderId);
+  const { graph, loading: graphLoading } = useTenderGraph(
+    showGraph ? selectedTenderId : null
+  );
+
+  const tabs: { key: FilterTab; label: string; color: string }[] = [
+    { key: "ALL", label: "All Tenders", color: "bg-slate-600" },
+    { key: "HIGH", label: "High Risk", color: "bg-red-600" },
+    { key: "MEDIUM", label: "Medium Risk", color: "bg-amber-500" },
+    { key: "LOW", label: "Low Risk", color: "bg-emerald-600" },
+  ];
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+      {/* Header */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center">
+                <Shield className="text-white" size={22} />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-slate-900">SENTINEL</h1>
+                <p className="text-xs text-slate-500">Public Procurement Guardian</p>
+              </div>
+            </div>
+
+            <Link
+              href="/graph"
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+              <Network size={18} />
+              Explore Shadow Graph
+            </Link>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Stats */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          {statsLoading ? (
+            Array.from({ length: 4 }).map((_, i) => (
+              <div
+                key={i}
+                className="h-28 bg-white rounded-xl border border-slate-200 animate-pulse"
+              />
+            ))
+          ) : stats ? (
+            <>
+              <StatCard
+                title="Total Tenders"
+                value={stats.total_tenders}
+                icon={<FileText />}
+                subtitle={`${formatKES(stats.total_value)} total value`}
+              />
+              <StatCard
+                title="High Risk"
+                value={stats.high_risk_count}
+                icon={<AlertTriangle />}
+                variant="danger"
+                subtitle={`${stats.flagged_today} new today`}
+              />
+              <StatCard
+                title="Medium Risk"
+                value={stats.medium_risk_count}
+                icon={<AlertCircle />}
+                variant="warning"
+              />
+              <StatCard
+                title="Pending Review"
+                value={stats.pending_review}
+                icon={<Clock />}
+                subtitle="Open & Evaluation"
+              />
+            </>
+          ) : null}
+        </div>
+
+        {/* Filter tabs */}
+        <div className="flex items-center gap-2 mb-6 overflow-x-auto pb-2">
+          {tabs.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`
+                px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all
+                ${
+                  activeTab === tab.key
+                    ? `${tab.color} text-white shadow-lg`
+                    : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
+                }
+              `}
+            >
+              {tab.label}
+              {stats && (
+                <span className="ml-2 opacity-75">
+                  {tab.key === "ALL"
+                    ? stats.total_tenders
+                    : tab.key === "HIGH"
+                    ? stats.high_risk_count
+                    : tab.key === "MEDIUM"
+                    ? stats.medium_risk_count
+                    : stats.low_risk_count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* Tender list */}
+        <div className="space-y-4">
+          {tendersLoading ? (
+            Array.from({ length: 5 }).map((_, i) => (
+              <div
+                key={i}
+                className="h-40 bg-white rounded-xl border border-slate-200 animate-pulse"
+              />
+            ))
+          ) : tenders.length === 0 ? (
+            <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
+              <CheckCircle className="mx-auto text-emerald-500 mb-4" size={48} />
+              <p className="text-slate-600">
+                No tenders found with this filter.
+              </p>
+            </div>
+          ) : (
+            tenders.map((tender) => (
+              <TenderCard
+                key={tender.tender.id}
+                tender={tender}
+                onClick={() => setSelectedTenderId(tender.tender.id)}
+              />
+            ))
+          )}
         </div>
       </main>
+
+      {/* Tender Detail Modal */}
+      <TenderDetailModal
+        detail={detail}
+        loading={detailLoading}
+        isOpen={!!selectedTenderId && !showGraph}
+        onClose={() => setSelectedTenderId(null)}
+        onViewGraph={() => setShowGraph(true)}
+      />
+
+      {/* Graph Modal */}
+      <Modal
+        isOpen={showGraph}
+        onClose={() => setShowGraph(false)}
+        title={`Connection Graph: ${detail?.tender.title || ""}`}
+        size="xl"
+      >
+        <div className="h-[600px] p-4">
+          {graphLoading ? (
+            <div className="flex items-center justify-center h-full">
+              <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+            </div>
+          ) : graph ? (
+            <ShadowGraph data={graph} focusNodeId={selectedTenderId || undefined} />
+          ) : (
+            <div className="flex items-center justify-center h-full text-slate-500">
+              No graph data available
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* Footer */}
+      <footer className="mt-16 border-t border-slate-200 bg-white">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-slate-500">
+              Sentinel MVP • AI Hackathon 2026
+            </div>
+            <div className="flex items-center gap-4 text-sm text-slate-500">
+              <span className="flex items-center gap-1">
+                <TrendingUp size={14} />
+                Powered by AI
+              </span>
+            </div>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
