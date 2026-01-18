@@ -39,11 +39,31 @@ export function useTenders(filter?: RiskCategory) {
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    setLoading(true);
-    getTenders({ riskLevel: filter, sortBy: "risk" })
-      .then(setTenders)
-      .catch(setError)
-      .finally(() => setLoading(false));
+    let isActive = true;
+
+    const loadTenders = async () => {
+      setLoading(true);
+      try {
+        const data = await getTenders({ riskLevel: filter, sortBy: "risk" });
+        if (isActive) {
+          setTenders(data);
+        }
+      } catch (fetchError) {
+        if (isActive) {
+          setError(fetchError as Error);
+        }
+      } finally {
+        if (isActive) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadTenders();
+
+    return () => {
+      isActive = false;
+    };
   }, [filter]);
 
   return { tenders, loading, error };
@@ -55,16 +75,41 @@ export function useTenderDetail(tenderId: string | null) {
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    if (!tenderId) {
-      setDetail(null);
-      return;
-    }
+    let isActive = true;
 
-    setLoading(true);
-    getTenderDetail(tenderId)
-      .then(setDetail)
-      .catch(setError)
-      .finally(() => setLoading(false));
+    const resetDetail = () => {
+      setDetail(null);
+      setLoading(false);
+    };
+
+    const loadDetail = async () => {
+      if (!tenderId) {
+        resetDetail();
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const data = await getTenderDetail(tenderId);
+        if (isActive) {
+          setDetail(data);
+        }
+      } catch (fetchError) {
+        if (isActive) {
+          setError(fetchError as Error);
+        }
+      } finally {
+        if (isActive) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadDetail();
+
+    return () => {
+      isActive = false;
+    };
   }, [tenderId]);
 
   return { detail, loading, error };

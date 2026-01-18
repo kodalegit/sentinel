@@ -161,12 +161,12 @@ function createEdges(graphData: GraphData): Edge[] {
   }));
 }
 
-export function ShadowGraph({ data, focusNodeId, onNodeClick }: ShadowGraphProps) {
+export function ShadowGraph({ data, onNodeClick }: ShadowGraphProps) {
   const initialNodes = useMemo(() => layoutNodes(data), [data]);
   const initialEdges = useMemo(() => createEdges(data), [data]);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const [nodes, , onNodesChange] = useNodesState(initialNodes);
+  const [edges, , onEdgesChange] = useEdgesState(initialEdges);
 
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
