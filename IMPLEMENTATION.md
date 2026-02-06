@@ -1,6 +1,6 @@
 # Project Sentinel - Implementation Documentation
 
-Sentinel is an AI-powered public procurement oversight system designed to transform opaque tender data into actionable intelligence through graph analytics and anomaly detection. This document details the architectural decisions, design patterns, and implementation status of the Sentinel MVP.
+Sentinel is an AI-powered public procurement oversight system that transforms opaque tender data into actionable intelligence through **hybrid risk scoring** (rules + ML), **graph analytics**, and **LLM-powered explainability**.
 
 ---
 
@@ -10,9 +10,10 @@ Sentinel provides a **proactive prevention layer** for government auditors and c
 
 **Core Value Proposition:**
 
-- **Real-time Risk Scoring**: Automated assessment of tenders using 5 multi-dimensional rules.
-- **Shadow Graph Visualization**: Revealing hidden connections between companies, directors, and officials.
-- **Explainable AI**: Every risk flag is grounded in human-readable evidence and legal justifications.
+- **Hybrid Risk Scoring**: 5 rule-based checks fused with Isolation Forest anomaly detection (60/40 weighting).
+- **Shadow Graph Visualization**: Revealing hidden connections between companies, directors, and officials with community detection (Louvain).
+- **Grounded AI Explanations**: LangGraph agent with evidence packs ensures every explanation cites real data — never hallucinated.
+- **PostgreSQL Persistence**: Production-grade async database with Alembic migrations.
 
 ---
 
@@ -20,33 +21,38 @@ Sentinel provides a **proactive prevention layer** for government auditors and c
 
 ```mermaid
 graph TB
-    subgraph Frontend["Frontend (Next.js 16)"]
+    subgraph Frontend["Frontend (Next.js 16 + shadcn/ui)"]
         Dashboard["Dashboard Page"]
-        Modal["Tender Detail Modal"]
+        Modal["Tender Detail Dialog"]
         GraphExplorer["Graph Explorer (React Flow)"]
     end
 
     subgraph Backend["Backend (FastAPI)"]
         API["REST API"]
-        RiskEngine["Risk Scoring Engine"]
+        HybridScorer["Hybrid Risk Scorer"]
+        RuleEngine["Rule Engine (5 rules)"]
+        MLEngine["Isolation Forest"]
         GraphBuilder["Graph Builder (NetworkX)"]
-        DataStore["In-Memory Data Store"]
+        Communities["Community Detection (Louvain)"]
+        Agent["LangGraph Investigation Agent"]
     end
 
-    subgraph Data["Synthetic Data Layer"]
-        Tenders["20 Tender Records"]
-        Entities["Companies & Directors"]
-        Officials["Public Officials"]
+    subgraph Database["PostgreSQL 16"]
+        Tables["Tenders, Bids, Companies, Directors, Officials, Risk Assessments"]
     end
 
     Dashboard --> API
     Modal --> API
     GraphExplorer --> API
-    API --> RiskEngine
+    API --> HybridScorer
     API --> GraphBuilder
-    RiskEngine --> DataStore
-    GraphBuilder --> DataStore
-    DataStore --> Data
+    API --> Agent
+    HybridScorer --> RuleEngine
+    HybridScorer --> MLEngine
+    GraphBuilder --> Communities
+    Agent --> API
+    HybridScorer --> Database
+    GraphBuilder --> Database
 ```
 
 ---
@@ -55,29 +61,42 @@ graph TB
 
 ### **Tech Stack**
 
-- **Frontend**: Next.js 16 (TypeScript), TailwindCSS, **React Flow (v12)** for network visualization.
-- **Backend**: FastAPI (Python 3.12), **NetworkX** for graph analytics, Pydantic for data validation.
-- **Data Persistence**: In-memory data store for the MVP to prioritize performance and ease of demonstration.
+- **Frontend**: Next.js 16 (TypeScript), TailwindCSS v4, shadcn/ui, React Flow (v12)
+- **Backend**: FastAPI (Python 3.12), async SQLAlchemy + asyncpg, NetworkX, scikit-learn, LangChain v1 + LangGraph
+- **Database**: PostgreSQL 16 with Alembic migrations
+- **ML**: Isolation Forest (12 engineered features), StandardScaler normalization
+- **LLM**: Provider-agnostic via `init_chat_model` (OpenAI, Anthropic, Ollama, etc.)
 
 ### **Design Decisions**
 
-1. **React Flow vs. Force Graphs**: We opted for React Flow to provide a highly controlled, interactive experience that allows auditors to "trace" paths logically rather than dealing with physics-based movement.
-2. **Advisory Role**: Sentinel is designed as a **decision-support tool**, not a judge. It uses language like "Elevated Risk" rather than "Corrupt" to respect legal and institutional constraints.
-3. **Explainability First**: Every risk score is decomposed into "Risk Factors" with specific evidence (dates, names, percentages) to ensure legal defensibility.
+1. **Hybrid Intelligence**: Rules provide interpretable baselines; ML catches novel patterns. 60/40 fusion ensures explainability is never sacrificed.
+2. **Advisory Role**: Sentinel is a **decision-support tool**, not a judge. Language like "elevated risk" and "warrants review" respects legal constraints.
+3. **Evidence Packs**: Structured context bundles (tender summary, risk factors, graph paths, metrics) ground LLM output and prevent hallucination.
+4. **Provider-Agnostic LLM**: `init_chat_model` supports OpenAI, Anthropic, Google, Ollama — swap via environment variables.
 
 ---
 
-## 4. The Risk Scoring Engine
+## 4. The Hybrid Risk Scoring Engine
 
-Sentinel implements 5 core rules mapped to real-world Kenyan procurement abuse patterns:
+### Rule-Based Detection (60% weight)
 
-| Rule                     | Weight | Description                              | Detection Method                          |
-| ------------------------ | ------ | ---------------------------------------- | ----------------------------------------- |
-| **Conflict of Interest** | 30     | Relationship between winner and official | Graph path finding (bfs_successors)       |
-| **Cartel Pattern**       | 25     | Consistently bidding in the same groups  | Cluster detection in co-bidding graph     |
-| **Shell Company**        | 20     | Company registered just before winning   | Temporal analysis (Creation vs. Deadline) |
-| **Price Anomaly**        | 15     | Price >150% above estimated value        | Statistical deviation analysis            |
-| **Rushed Timeline**      | 10     | Submission window < 7 days               | Date delta analysis                       |
+| Rule                     | Weight | Detection Method                         |
+| ------------------------ | ------ | ---------------------------------------- |
+| **Conflict of Interest** | 30     | Graph shortest-path to officials         |
+| **Cartel Pattern**       | 25     | Co-bidding cluster detection             |
+| **Shell Company**        | 20     | Temporal analysis (registration vs. bid) |
+| **Price Anomaly**        | 15     | Statistical deviation from category mean |
+| **Rushed Timeline**      | 10     | Submission window analysis               |
+
+### ML Anomaly Detection (40% weight)
+
+12 engineered features fed to Isolation Forest:
+
+- **Price**: `price_ratio`, `price_zscore`
+- **Timeline**: `timeline_days`
+- **Competition**: `bidder_count`, `bid_spread`, `winner_margin`
+- **Vendor**: `company_age_days`, `win_rate`
+- **Graph**: `graph_degree`, `suspicious_edges`, `official_distance`, `community_size`
 
 ---
 
@@ -86,85 +105,127 @@ Sentinel implements 5 core rules mapped to real-world Kenyan procurement abuse p
 ### **Knowledge Graph Schema**
 
 - **Nodes**: `COMPANY`, `DIRECTOR`, `OFFICIAL`, `TENDER`
-- **Edges**:
-  - `DIRECTOR_OF` (Person -> Company)
-  - `AWARD_BY` (Tender -> Official)
-  - `WON` / `BID_ON` (Company -> Tender)
-  - `RELATED_TO` (Official <-> Director)
-  - `SHARES_ADDRESS` / `SHARES_PHONE` (Company <-> Company)
+- **Edges**: `DIRECTOR_OF`, `AWARDED_BY`, `WON`, `BID_ON`, `RELATED_TO`, `SHARES_ADDRESS`, `SHARES_PHONE`
 
-### **The "Wanjiku Construction" Story (Synthetic Scenario)**
+### **Embedded Fraud Scenarios**
 
-The MVP's synthetic data tells three specific stories of corruption:
-
-- **The Cartel**: 4 companies sharing the same Industrial Area plot that rotate wins.
-- **The Shell**: A 4-day-old company winning a KES 78M IT contract.
-- **The Conflict**: A KEMSA official awarding a contract to his brother's firm.
+- **The Cartel**: 5 companies (Wanjiku Construction cluster) sharing directors/phones, rotating wins.
+- **The Shell**: FastTrack Solutions — 4-day-old company winning a KES 78M IT contract.
+- **The Conflict**: HealthFirst Medical Supplies — official's relative's firm awarded at 80% above estimate.
 
 ---
 
 ## 6. Implementation Status
 
-### **Backend (Complete)**
+### **Backend**
 
-- [x] Pydantic domain models ([models.py](backend/models.py))
-- [x] NetworkX Graph construction logic ([graph/builder.py](backend/graph/builder.py))
-- [x] Explainable Risk Engine ([risk/engine.py](backend/risk/engine.py))
-- [x] 20-tender synthetic data generator ([data/synthetic.py](backend/data/synthetic.py))
-- [x] REST API endpoints ([main.py](backend/main.py))
+- [x] PostgreSQL schema with async SQLAlchemy ORM (`db/models.py`, `db/config.py`)
+- [x] Alembic migrations (`alembic/`)
+- [x] Async CRUD repository (`db/repository.py`)
+- [x] Database seeding from synthetic data (`db/seed.py`)
+- [x] Pydantic ↔ SQLAlchemy mappers (`db/mappers.py`)
+- [x] Rule-based risk engine (`risk/engine.py`)
+- [x] Feature engineering — 12 features (`ml/features.py`)
+- [x] Isolation Forest anomaly detector (`ml/anomaly_detector.py`)
+- [x] Hybrid risk scorer (`ml/hybrid_scorer.py`)
+- [x] Community detection with Louvain (`graph/communities.py`)
+- [x] LangGraph investigation agent (`intelligence/agent.py`)
+- [x] Evidence pack builder (`intelligence/evidence.py`)
+- [x] REST API with 14 endpoints (`main.py`)
 
-### **Frontend (Complete)**
+### **Frontend**
 
-- [x] Dashboard with Pulse navigation for High Risk tenders.
-- [x] Explainable Evidence modal for every tender.
-- [x] Interactive Shadow Graph with suspicious edge highlighting.
-- [x] Responsive layout with TailwindCSS.
+- [x] shadcn/ui component library (Card, Dialog, Button, Badge, etc.)
+- [x] Dashboard with stat cards and risk-filtered tender list
+- [x] Tender detail dialog with risk factor breakdown
+- [x] Interactive Shadow Graph with React Flow
+- [x] Graph explorer page
+
+### **Infrastructure**
+
+- [x] Docker Compose (PostgreSQL + backend + frontend)
+- [x] Railway deployment configs
+- [x] Dockerfiles for backend and frontend
 
 ---
 
-## 7. How to Run & Demo
+## 7. How to Run
 
-### **1. Start Backend**
+### **Option A: Docker Compose (recommended)**
 
 ```bash
+docker compose up --build
+```
+
+Open `http://localhost:3000`.
+
+### **Option B: Local Development**
+
+```bash
+# 1. Start PostgreSQL
+docker run -d --name sentinel-db -e POSTGRES_USER=sentinel -e POSTGRES_PASSWORD=sentinel -e POSTGRES_DB=sentinel -p 5432:5432 postgres:16-alpine
+
+# 2. Backend
 cd backend
+cp .env.example .env
+uv sync
+uv run alembic upgrade head
+uv run python seed.py
 uv run uvicorn main:app --reload --port 8000
+
+# 3. Frontend
+cd frontend/ui
+npm install
+npm run dev
 ```
 
-### **2. Start Frontend**
+### **LLM Configuration (optional)**
+
+Set in `.env` to enable AI-powered explanations:
 
 ```bash
-cd frontend/ui
-pnpm dev
+LLM_MODEL=gpt-4o-mini
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+
+# Or use Ollama for local models:
+LLM_MODEL=llama3
+LLM_PROVIDER=ollama
+LLM_BASE_URL=http://localhost:11434/v1
 ```
 
-### **3. Demo Flow (The Auditor's Journey)**
-
-1. **Discover**: Open the dashboard at `localhost:3000`. Sort by "Risk Score".
-2. **Audit**: Click on the **Enterprise IT Modernization** tender (HIGH RISK).
-3. **Investigate**: Read the evidence (registered 4 days ago, 5-day window).
-4. **Trace**: Click "Explore Connections" to see the family tie between the Director and the Official in the Shadow Graph.
-5. **Action**: View the "Recommended Actions" (Freeze payment, Escalate to internal audit).
+Without an LLM key, the system falls back to structured template explanations.
 
 ---
 
 ## 8. API Reference
 
-| Endpoint             | Method | Response                                             |
-| -------------------- | ------ | ---------------------------------------------------- |
-| `/api/stats`         | GET    | Global procurement health metrics                    |
-| `/api/tenders`       | GET    | Risk-scored tender list (filtered by category/level) |
-| `/api/tenders/{id}`  | GET    | Full risk breakdown + bidder list                    |
-| `/api/graph/explore` | GET    | Full knowledge graph in React Flow format            |
+| Endpoint                            | Method | Description                               |
+| ----------------------------------- | ------ | ----------------------------------------- |
+| `/api/stats`                        | GET    | Dashboard statistics                      |
+| `/api/tenders`                      | GET    | Risk-scored tender list (filterable)      |
+| `/api/tenders/{id}`                 | GET    | Full risk breakdown + bidder list         |
+| `/api/tenders/{id}/graph`           | GET    | Tender subgraph (k-hop)                   |
+| `/api/tenders/{id}/evidence`        | GET    | Structured evidence pack                  |
+| `/api/tenders/{id}/explain`         | GET    | AI-generated risk explanation             |
+| `/api/graph/explore`                | GET    | Full shadow graph                         |
+| `/api/graph/cartels`                | GET    | Detected cartel clusters                  |
+| `/api/graph/communities`            | GET    | Louvain communities with suspicion scores |
+| `/api/graph/communities/{id}`       | GET    | Community subgraph                        |
+| `/api/graph/path?source=X&target=Y` | GET    | Shortest path between entities            |
+| `/api/graph/entity/{id}`            | GET    | Entity neighborhood (k-hop)               |
+| `/api/companies/{id}`               | GET    | Company details + directors               |
 
 ---
 
-## 9. Success Criteria
+## 9. Demo Flow (The Auditor's Journey)
 
-- ✅ **Prevention**: Tenders are flagged _before_ contract signing.
-- ✅ **Transparency**: Auditors can see _why_ a tender is risky.
-- ✅ **Network Awareness**: The system detects cartels across multiple disconnected tenders.
-- ✅ **Institutional Fit**: Output respects the advisory role of oversight bodies.
+1. **Discover**: Open dashboard. High-risk tenders pulse with red indicators.
+2. **Audit**: Click **Supply of Pharmaceutical Products** (risk score: 61).
+3. **Understand**: Read 3 risk factors — conflict of interest, price anomaly (80% above estimate), ML anomaly (score: 100/100).
+4. **Trace**: Click "Explore Connections" to see the path between HealthFirst Medical and the procurement officer.
+5. **Investigate**: Hit `/api/tenders/{id}/explain` for an AI-generated audit brief.
+6. **Cluster**: Visit `/api/graph/communities` to see the Wanjiku Construction cartel (suspicion: 85/100).
 
 ---
 
