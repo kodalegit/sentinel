@@ -138,3 +138,27 @@ export interface CartelsResponse {
   cartels: CartelCluster[];
   total: number;
 }
+
+// Community detection
+export interface CommunityCluster {
+  id: string;
+  company_ids: string[];
+  company_names: string[];
+  size: number;
+  suspicion_score: number;
+  shared_attributes: {
+    addresses: { address: string; companies: string[] }[];
+    phones: { phone: string; companies: string[] }[];
+    directors: { director_id: string; companies: string[] }[];
+  };
+  co_bid_count: number;
+  win_pattern: {
+    total_bids: number;
+    bids_per_company: Record<string, number>;
+  };
+}
+
+export interface CommunitiesResponse {
+  clusters: CommunityCluster[];
+  total: number;
+}

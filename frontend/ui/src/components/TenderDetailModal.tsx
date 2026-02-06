@@ -1,13 +1,23 @@
 /**
  * Tender detail modal showing full risk breakdown.
+ * Built on shadcn/ui Dialog, Button, Card, Separator primitives.
  */
 
 "use client";
 
 import type { TenderDetail, RiskFactor } from "@/lib/types";
 import { formatKES } from "@/lib/api";
-import { Modal } from "@/components/ui/Modal";
-import { RiskBadge, StatusBadge } from "@/components/ui/Badge";
+import { RiskBadge, StatusBadge } from "@/components/ui/RiskBadge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   AlertTriangle,
   Building2,
@@ -37,137 +47,156 @@ export function TenderDetailModal({
   onClose,
   onViewGraph,
 }: TenderDetailModalProps) {
-  if (loading) {
-    return (
-      <Modal isOpen={isOpen} onClose={onClose} title="Loading...">
-        <div className="flex items-center justify-center py-20">
-          <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-        </div>
-      </Modal>
-    );
-  }
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-4xl max-h-[90vh] p-0">
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="w-8 h-8 animate-spin text-primary" />
+          </div>
+        ) : detail ? (
+          <>
+            <DialogHeader className="px-6 pt-6 pb-0">
+              <DialogTitle className="text-lg leading-snug">
+                {detail.tender.title}
+              </DialogTitle>
+            </DialogHeader>
+            <ScrollArea className="max-h-[calc(90vh-80px)]">
+              <TenderDetailContent
+                detail={detail}
+                onViewGraph={onViewGraph}
+              />
+            </ScrollArea>
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
 
-  if (!detail) return null;
-
+function TenderDetailContent({
+  detail,
+  onViewGraph,
+}: {
+  detail: TenderDetail;
+  onViewGraph: () => void;
+}) {
   const { tender, risk, bids, winning_company } = detail;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={tender.title} size="xl">
-      <div className="p-6 space-y-6">
-        {/* Header with risk score */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200">
-          <div className="flex items-center gap-3">
-            <div
-              className={`
-                w-16 h-16 rounded-xl flex items-center justify-center text-2xl font-bold
-                ${risk.category === "HIGH" ? "bg-red-100 text-red-600" : ""}
-                ${risk.category === "MEDIUM" ? "bg-amber-100 text-amber-600" : ""}
-                ${risk.category === "LOW" ? "bg-emerald-100 text-emerald-600" : ""}
-              `}
-            >
-              {risk.overall}
-            </div>
-            <div>
-              <div className="text-sm text-slate-500">Risk Score</div>
-              <RiskBadge category={risk.category} size="lg" />
-            </div>
-          </div>
-
-          <button
-            onClick={onViewGraph}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+    <div className="px-6 pb-6 space-y-6">
+      {/* Header with risk score */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div
+            className={`
+              w-16 h-16 rounded-xl flex items-center justify-center text-2xl font-bold
+              ${risk.category === "HIGH" ? "bg-red-100 text-red-600" : ""}
+              ${risk.category === "MEDIUM" ? "bg-amber-100 text-amber-600" : ""}
+              ${risk.category === "LOW" ? "bg-emerald-100 text-emerald-600" : ""}
+            `}
           >
-            <Network size={18} />
-            Explore Connections
-          </button>
+            {risk.overall}
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground">Risk Score</div>
+            <RiskBadge category={risk.category} size="lg" />
+          </div>
         </div>
 
-        {/* Tender info grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          <InfoItem icon={<FileText size={16} />} label="Reference">
-            {tender.reference_number}
-          </InfoItem>
-          <InfoItem icon={<Building2 size={16} />} label="Procuring Entity">
-            {tender.procuring_entity}
-          </InfoItem>
-          <InfoItem icon={<Calendar size={16} />} label="Deadline">
-            {tender.deadline}
-          </InfoItem>
-          <InfoItem icon={<DollarSign size={16} />} label="Estimated Value">
-            {formatKES(tender.estimated_value)}
-          </InfoItem>
-          {tender.awarded_amount && (
-            <InfoItem icon={<DollarSign size={16} />} label="Awarded Amount">
-              {formatKES(tender.awarded_amount)}
-            </InfoItem>
-          )}
-          <InfoItem icon={<Users size={16} />} label="Bidders">
-            {bids.length} companies
-          </InfoItem>
-        </div>
+        <Button onClick={onViewGraph}>
+          <Network size={18} />
+          Explore Connections
+        </Button>
+      </div>
 
-        {/* Status */}
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-slate-500">Status:</span>
-          <StatusBadge status={tender.status} />
-        </div>
+      <Separator />
 
-        {/* Winner info */}
-        {winning_company && (
-          <div className="bg-slate-50 rounded-xl p-4">
-            <h4 className="font-medium text-slate-700 mb-2">
-              Awarded To
-            </h4>
+      {/* Tender info grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <InfoItem icon={<FileText size={16} />} label="Reference">
+          {tender.reference_number}
+        </InfoItem>
+        <InfoItem icon={<Building2 size={16} />} label="Procuring Entity">
+          {tender.procuring_entity}
+        </InfoItem>
+        <InfoItem icon={<Calendar size={16} />} label="Deadline">
+          {tender.deadline}
+        </InfoItem>
+        <InfoItem icon={<DollarSign size={16} />} label="Estimated Value">
+          {formatKES(tender.estimated_value)}
+        </InfoItem>
+        {tender.awarded_amount && (
+          <InfoItem icon={<DollarSign size={16} />} label="Awarded Amount">
+            {formatKES(tender.awarded_amount)}
+          </InfoItem>
+        )}
+        <InfoItem icon={<Users size={16} />} label="Bidders">
+          {bids.length} companies
+        </InfoItem>
+      </div>
+
+      {/* Status */}
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-muted-foreground">Status:</span>
+        <StatusBadge status={tender.status} />
+      </div>
+
+      {/* Winner info */}
+      {winning_company && (
+        <Card className="bg-muted/50">
+          <CardContent className="p-4">
+            <h4 className="font-medium mb-2">Awarded To</h4>
             <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
-                <Building2 className="text-blue-600" size={20} />
+              <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                <Building2 className="text-primary" size={20} />
               </div>
               <div>
-                <p className="font-semibold text-slate-900">
-                  {winning_company.name}
-                </p>
-                <p className="text-sm text-slate-500">
+                <p className="font-semibold">{winning_company.name}</p>
+                <p className="text-sm text-muted-foreground">
                   Reg: {winning_company.registration_number}
                 </p>
-                <p className="text-sm text-slate-500">
+                <p className="text-sm text-muted-foreground">
                   {winning_company.address}
                 </p>
               </div>
             </div>
-          </div>
-        )}
+          </CardContent>
+        </Card>
+      )}
 
-        {/* Risk Factors */}
-        {risk.factors.length > 0 && (
-          <div>
-            <h4 className="font-semibold text-slate-900 mb-4 flex items-center gap-2">
-              <ShieldAlert className="text-red-500" size={20} />
-              Why This Tender Is Flagged
-            </h4>
-            <div className="space-y-4">
-              {risk.factors.map((factor, idx) => (
-                <RiskFactorCard key={idx} factor={factor} />
-              ))}
-            </div>
+      {/* Risk Factors */}
+      {risk.factors.length > 0 && (
+        <div>
+          <h4 className="font-semibold mb-4 flex items-center gap-2">
+            <ShieldAlert className="text-red-500" size={20} />
+            Why This Tender Is Flagged
+          </h4>
+          <div className="space-y-3">
+            {risk.factors.map((factor, idx) => (
+              <RiskFactorCard key={idx} factor={factor} />
+            ))}
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Recommendation */}
-        {risk.recommendation && (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+      {/* Recommendation */}
+      {risk.recommendation && (
+        <Card className="border-amber-200 bg-amber-50/50">
+          <CardContent className="p-4">
             <h4 className="font-medium text-amber-800 mb-2 flex items-center gap-2">
               <AlertTriangle size={18} />
               Recommended Actions
             </h4>
-            <p className="text-amber-900 text-sm leading-relaxed">
-              {risk.recommendation.split(" • ").map((rec, idx) => (
-                <span key={idx} className="block">• {rec}</span>
+            <div className="text-amber-900 text-sm leading-relaxed">
+              {risk.recommendation.split(" \u2022 ").map((rec, idx) => (
+                <span key={idx} className="block">{"\u2022"} {rec}</span>
               ))}
-            </p>
-          </div>
-        )}
-      </div>
-    </Modal>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }
 
@@ -182,10 +211,10 @@ function InfoItem({
 }) {
   return (
     <div className="flex items-start gap-2">
-      <div className="text-slate-400 mt-0.5">{icon}</div>
+      <div className="text-muted-foreground mt-0.5">{icon}</div>
       <div>
-        <div className="text-xs text-slate-500">{label}</div>
-        <div className="text-sm font-medium text-slate-900">{children}</div>
+        <div className="text-xs text-muted-foreground">{label}</div>
+        <div className="text-sm font-medium">{children}</div>
       </div>
     </div>
   );
@@ -201,11 +230,11 @@ function RiskFactorCard({ factor }: { factor: RiskFactor }) {
   };
 
   const colors = {
-    CARTEL_PATTERN: "bg-purple-100 text-purple-600 border-purple-200",
-    SHELL_COMPANY: "bg-orange-100 text-orange-600 border-orange-200",
-    CONFLICT_OF_INTEREST: "bg-red-100 text-red-600 border-red-200",
-    PRICE_ANOMALY: "bg-amber-100 text-amber-600 border-amber-200",
-    RUSHED_TIMELINE: "bg-blue-100 text-blue-600 border-blue-200",
+    CARTEL_PATTERN: "bg-purple-50 text-purple-700 border-purple-200",
+    SHELL_COMPANY: "bg-orange-50 text-orange-700 border-orange-200",
+    CONFLICT_OF_INTEREST: "bg-red-50 text-red-700 border-red-200",
+    PRICE_ANOMALY: "bg-amber-50 text-amber-700 border-amber-200",
+    RUSHED_TIMELINE: "bg-blue-50 text-blue-700 border-blue-200",
   };
 
   const labels = {
@@ -217,24 +246,26 @@ function RiskFactorCard({ factor }: { factor: RiskFactor }) {
   };
 
   return (
-    <div className={`rounded-xl border p-4 ${colors[factor.type]}`}>
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5">{icons[factor.type]}</div>
-        <div className="flex-1">
-          <div className="flex items-center justify-between mb-1">
-            <span className="font-semibold">{labels[factor.type]}</span>
-            <span className="text-sm font-bold">{factor.weight} points</span>
-          </div>
-          <p className="text-sm opacity-90 mb-2">{factor.description}</p>
-          {factor.evidence.length > 0 && (
-            <div className="text-xs opacity-75 space-y-0.5">
-              {factor.evidence.filter(e => e).map((ev, idx) => (
-                <p key={idx}>• {ev}</p>
-              ))}
+    <Card className={`${colors[factor.type]}`}>
+      <CardContent className="p-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5">{icons[factor.type]}</div>
+          <div className="flex-1">
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-semibold">{labels[factor.type]}</span>
+              <span className="text-sm font-bold">{factor.weight} pts</span>
             </div>
-          )}
+            <p className="text-sm opacity-90 mb-2">{factor.description}</p>
+            {factor.evidence.length > 0 && (
+              <div className="text-xs opacity-75 space-y-0.5">
+                {factor.evidence.filter(e => e).map((ev, idx) => (
+                  <p key={idx}>{"\u2022"} {ev}</p>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }

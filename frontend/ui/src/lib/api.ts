@@ -8,6 +8,7 @@ import type {
   TenderDetail,
   GraphData,
   CartelsResponse,
+  CommunitiesResponse,
   RiskCategory,
   TenderStatus,
 } from "./types";
@@ -60,6 +61,14 @@ export async function getFullGraph(): Promise<GraphData> {
 
 export async function getCartels(): Promise<CartelsResponse> {
   return fetchApi<CartelsResponse>("/api/graph/cartels");
+}
+
+export async function getCommunities(): Promise<CommunitiesResponse> {
+  return fetchApi<CommunitiesResponse>("/api/graph/communities");
+}
+
+export async function getCommunityGraph(clusterId: string): Promise<GraphData> {
+  return fetchApi<GraphData>(`/api/graph/communities/${clusterId}`);
 }
 
 // Utility functions

@@ -12,7 +12,12 @@ import { TenderCard } from "@/components/TenderCard";
 import { TenderDetailModal } from "@/components/TenderDetailModal";
 import { ShadowGraph } from "@/components/ShadowGraph";
 import { StatCard } from "@/components/ui/StatCard";
-import { Modal } from "@/components/ui/Modal";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Shield,
   AlertTriangle,
@@ -50,13 +55,13 @@ export default function Dashboard() {
   ];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+    <div className="min-h-screen bg-linear-to-br from-slate-50 to-slate-100">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-xl bg-linear-to-br from-blue-600 to-indigo-700 flex items-center justify-center">
                 <Shield className="text-white" size={22} />
               </div>
               <div>
@@ -186,26 +191,28 @@ export default function Dashboard() {
       />
 
       {/* Graph Modal */}
-      <Modal
-        isOpen={showGraph}
-        onClose={() => setShowGraph(false)}
-        title={`Connection Graph: ${detail?.tender.title || ""}`}
-        size="xl"
-      >
-        <div className="h-[600px] p-4">
-          {graphLoading ? (
-            <div className="flex items-center justify-center h-full">
-              <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
-            </div>
-          ) : graph ? (
-            <ShadowGraph data={graph} focusNodeId={selectedTenderId || undefined} />
-          ) : (
-            <div className="flex items-center justify-center h-full text-slate-500">
-              No graph data available
-            </div>
-          )}
-        </div>
-      </Modal>
+      <Dialog open={showGraph} onOpenChange={(open) => !open && setShowGraph(false)}>
+        <DialogContent className="max-w-6xl max-h-[90vh] p-0">
+          <DialogHeader className="px-6 pt-6 pb-0">
+            <DialogTitle>
+              Connection Graph: {detail?.tender.title || ""}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="h-[600px] p-4">
+            {graphLoading ? (
+              <div className="flex items-center justify-center h-full">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+              </div>
+            ) : graph ? (
+              <ShadowGraph data={graph} focusNodeId={selectedTenderId || undefined} />
+            ) : (
+              <div className="flex items-center justify-center h-full text-muted-foreground">
+                No graph data available
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Footer */}
       <footer className="mt-16 border-t border-slate-200 bg-white">

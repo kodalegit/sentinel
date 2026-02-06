@@ -1,8 +1,10 @@
 /**
  * Card component for dashboard stats.
+ * Built on shadcn/ui Card primitive.
  */
 
 import type { ReactNode } from "react";
+import { Card, CardContent } from "@/components/ui/card";
 
 interface StatCardProps {
   title: string;
@@ -19,37 +21,34 @@ export function StatCard({
   variant = "default",
   subtitle,
 }: StatCardProps) {
-  const variants = {
-    default: "bg-white border-slate-200",
-    danger: "bg-red-50 border-red-200",
-    warning: "bg-amber-50 border-amber-200",
-    success: "bg-emerald-50 border-emerald-200",
+  const variantStyles = {
+    default: "border-border",
+    danger: "border-red-200 bg-red-50/50",
+    warning: "border-amber-200 bg-amber-50/50",
+    success: "border-emerald-200 bg-emerald-50/50",
   };
 
   const iconColors = {
-    default: "text-slate-600",
+    default: "text-muted-foreground",
     danger: "text-red-600",
     warning: "text-amber-600",
     success: "text-emerald-600",
   };
 
   return (
-    <div
-      className={`
-        rounded-xl border p-5 shadow-sm
-        ${variants[variant]}
-      `}
-    >
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-sm font-medium text-slate-500">{title}</p>
-          <p className="mt-1 text-2xl font-bold text-slate-900">{value}</p>
-          {subtitle && (
-            <p className="mt-1 text-xs text-slate-500">{subtitle}</p>
-          )}
+    <Card className={`${variantStyles[variant]} shadow-sm`}>
+      <CardContent className="p-5">
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-sm font-medium text-muted-foreground">{title}</p>
+            <p className="mt-1 text-2xl font-bold tracking-tight">{value}</p>
+            {subtitle && (
+              <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
+            )}
+          </div>
+          <div className={`text-2xl ${iconColors[variant]}`}>{icon}</div>
         </div>
-        <div className={`text-2xl ${iconColors[variant]}`}>{icon}</div>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
