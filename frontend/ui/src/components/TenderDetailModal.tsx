@@ -5,7 +5,7 @@
 
 "use client";
 
-import type { TenderDetail, RiskFactor } from "@/lib/types";
+import type { TenderDetail, RiskFactor, RiskFactorType } from "@/lib/types";
 import { formatKES } from "@/lib/api";
 import { RiskBadge, StatusBadge } from "@/components/ui/RiskBadge";
 import {
@@ -14,9 +14,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { VisuallyHidden } from "radix-ui";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   AlertTriangle,
@@ -52,15 +51,20 @@ export function TenderDetailModal({
 }: TenderDetailModalProps) {
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[90vh] p-0">
+      <DialogContent className="max-w-4xl max-h-[90vh] p-0 bg-card/95 border border-border/70">
         {loading ? (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="w-8 h-8 animate-spin text-primary" />
-          </div>
+          <>
+            <VisuallyHidden.Root>
+              <DialogTitle>Loading tender details</DialogTitle>
+            </VisuallyHidden.Root>
+            <div className="flex items-center justify-center py-20">
+              <Loader2 className="w-8 h-8 animate-spin text-primary" />
+            </div>
+          </>
         ) : detail ? (
           <>
             <DialogHeader className="px-6 pt-6 pb-0">
-              <DialogTitle className="text-lg leading-snug">
+              <DialogTitle className="font-display text-xl leading-snug">
                 {detail.tender.title}
               </DialogTitle>
             </DialogHeader>
@@ -72,11 +76,21 @@ export function TenderDetailModal({
               />
             </ScrollArea>
           </>
-        ) : null}
+        ) : (
+          <VisuallyHidden.Root>
+            <DialogTitle>Tender details</DialogTitle>
+          </VisuallyHidden.Root>
+        )}
       </DialogContent>
     </Dialog>
   );
 }
+
+const RISK_SCORE_COLORS = {
+  HIGH: "border-[#c4412f]/30 text-[#c4412f] bg-[#c4412f]/10",
+  MEDIUM: "border-[#b78b43]/30 text-[#b78b43] bg-[#b78b43]/10",
+  LOW: "border-[#1f6f5c]/30 text-[#1f6f5c] bg-[#1f6f5c]/10",
+};
 
 function TenderDetailContent({
   detail,
@@ -91,21 +105,22 @@ function TenderDetailContent({
 
   return (
     <div className="px-6 pb-6 space-y-6">
-      {/* Header with risk score */}
+      {/* Risk score + actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
           <div
             className={`
-              w-16 h-16 rounded-xl flex items-center justify-center text-2xl font-bold
-              ${risk.category === "HIGH" ? "bg-red-100 text-red-600" : ""}
-              ${risk.category === "MEDIUM" ? "bg-amber-100 text-amber-600" : ""}
-              ${risk.category === "LOW" ? "bg-emerald-100 text-emerald-600" : ""}
+              w-16 h-16 rounded-2xl border-2 flex items-center justify-center
+              font-display text-2xl font-bold
+              ${RISK_SCORE_COLORS[risk.category]}
             `}
           >
             {risk.overall}
           </div>
           <div>
-            <div className="text-sm text-muted-foreground">Risk Score</div>
+            <div className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground mb-1">
+              Risk Score
+            </div>
             <RiskBadge category={risk.category} size="lg" />
           </div>
         </div>
@@ -114,82 +129,91 @@ function TenderDetailContent({
           {onOpenCase && (
             <Button
               variant="outline"
+              size="sm"
               onClick={() => onOpenCase(tender.id, tender.title)}
+              className="text-xs"
             >
-              <FolderOpen size={18} />
+              <FolderOpen size={14} />
               Open Case
             </Button>
           )}
-          <Button onClick={onViewGraph}>
-            <Network size={18} />
+          <Button
+            size="sm"
+            onClick={onViewGraph}
+            className="text-xs bg-primary text-primary-foreground hover:bg-primary/90"
+          >
+            <Network size={14} />
             Explore Connections
           </Button>
         </div>
       </div>
 
-      <Separator />
+      {/* Divider */}
+      <div className="border-t border-border/50" />
 
-      {/* Tender info grid */}
+      {/* Info grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        <InfoItem icon={<FileText size={16} />} label="Reference">
-          {tender.reference_number}
+        <InfoItem icon={<FileText size={14} />} label="Reference">
+          <span className="font-mono text-xs">{tender.reference_number}</span>
         </InfoItem>
-        <InfoItem icon={<Building2 size={16} />} label="Procuring Entity">
+        <InfoItem icon={<Building2 size={14} />} label="Procuring Entity">
           {tender.procuring_entity}
         </InfoItem>
-        <InfoItem icon={<Calendar size={16} />} label="Deadline">
+        <InfoItem icon={<Calendar size={14} />} label="Deadline">
           {tender.deadline}
         </InfoItem>
-        <InfoItem icon={<DollarSign size={16} />} label="Estimated Value">
-          {formatKES(tender.estimated_value)}
+        <InfoItem icon={<DollarSign size={14} />} label="Estimated Value">
+          <span className="font-display">{formatKES(tender.estimated_value)}</span>
         </InfoItem>
         {tender.awarded_amount && (
-          <InfoItem icon={<DollarSign size={16} />} label="Awarded Amount">
-            {formatKES(tender.awarded_amount)}
+          <InfoItem icon={<DollarSign size={14} />} label="Awarded Amount">
+            <span className="font-display">{formatKES(tender.awarded_amount)}</span>
           </InfoItem>
         )}
-        <InfoItem icon={<Users size={16} />} label="Bidders">
+        <InfoItem icon={<Users size={14} />} label="Bidders">
           {bids.length} companies
         </InfoItem>
       </div>
 
       {/* Status */}
       <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground">Status:</span>
+        <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+          Status:
+        </span>
         <StatusBadge status={tender.status} />
       </div>
 
-      {/* Winner info */}
+      {/* Winner */}
       {winning_company && (
-        <Card className="bg-muted/50">
-          <CardContent className="p-4">
-            <h4 className="font-medium mb-2">Awarded To</h4>
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                <Building2 className="text-primary" size={20} />
-              </div>
-              <div>
-                <p className="font-semibold">{winning_company.name}</p>
-                <p className="text-sm text-muted-foreground">
-                  Reg: {winning_company.registration_number}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {winning_company.address}
-                </p>
-              </div>
+        <div className="rounded-xl border border-border/50 bg-secondary/60 p-4">
+          <h4 className="text-[11px] uppercase tracking-[0.15em] text-muted-foreground mb-3">
+            Awarded To
+          </h4>
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
+              <Building2 className="text-primary" size={16} />
             </div>
-          </CardContent>
-        </Card>
+            <div>
+              <p className="font-medium text-sm">{winning_company.name}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Reg: {winning_company.registration_number}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {winning_company.address}
+              </p>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Risk Factors */}
       {risk.factors.length > 0 && (
         <div>
-          <h4 className="font-semibold mb-4 flex items-center gap-2">
-            <ShieldAlert className="text-red-500" size={20} />
+          <h4 className="text-sm font-semibold mb-4 flex items-center gap-2">
+            <ShieldAlert className="text-[#c4412f]" size={16} />
             Why This Tender Is Flagged
           </h4>
-          <div className="space-y-3">
+          <div className="space-y-2">
             {risk.factors.map((factor, idx) => (
               <RiskFactorCard key={idx} factor={factor} />
             ))}
@@ -199,19 +223,17 @@ function TenderDetailContent({
 
       {/* Recommendation */}
       {risk.recommendation && (
-        <Card className="border-amber-200 bg-amber-50/50">
-          <CardContent className="p-4">
-            <h4 className="font-medium text-amber-800 mb-2 flex items-center gap-2">
-              <AlertTriangle size={18} />
-              Recommended Actions
-            </h4>
-            <div className="text-amber-900 text-sm leading-relaxed">
-              {risk.recommendation.split(" \u2022 ").map((rec, idx) => (
-                <span key={idx} className="block">{"\u2022"} {rec}</span>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+        <div className="rounded-xl border border-[#b78b43]/20 bg-[#b78b43]/10 p-4">
+          <h4 className="text-sm font-medium text-[#b78b43] mb-2 flex items-center gap-2">
+            <AlertTriangle size={14} />
+            Recommended Actions
+          </h4>
+          <div className="text-[#7c5d3b] text-xs leading-relaxed space-y-1">
+            {risk.recommendation.split(" • ").map((rec, idx) => (
+              <p key={idx}>&bull; {rec}</p>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -227,62 +249,80 @@ function InfoItem({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start gap-2">
+    <div className="flex items-start gap-2.5">
       <div className="text-muted-foreground mt-0.5">{icon}</div>
       <div>
-        <div className="text-xs text-muted-foreground">{label}</div>
-        <div className="text-sm font-medium">{children}</div>
+        <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+          {label}
+        </span>
+        <div className="text-sm font-medium mt-0.5">{children}</div>
       </div>
     </div>
   );
 }
 
+const FACTOR_CONFIG: Record<
+  RiskFactorType,
+  { icon: React.ReactNode; label: string; accent: string; border: string }
+> = {
+  CARTEL_PATTERN: {
+    icon: <Users size={16} />,
+    label: "Cartel Pattern",
+    accent: "text-[#1f4b46]",
+    border: "border-[#1f4b46]/20 bg-[#1f4b46]/10",
+  },
+  SHELL_COMPANY: {
+    icon: <Building2 size={16} />,
+    label: "Shell Company",
+    accent: "text-[#b78b43]",
+    border: "border-[#b78b43]/20 bg-[#b78b43]/10",
+  },
+  CONFLICT_OF_INTEREST: {
+    icon: <UserX size={16} />,
+    label: "Conflict of Interest",
+    accent: "text-[#c4412f]",
+    border: "border-[#c4412f]/20 bg-[#c4412f]/10",
+  },
+  PRICE_ANOMALY: {
+    icon: <DollarSign size={16} />,
+    label: "Price Anomaly",
+    accent: "text-[#7c5d3b]",
+    border: "border-[#7c5d3b]/20 bg-[#7c5d3b]/10",
+  },
+  RUSHED_TIMELINE: {
+    icon: <Clock size={16} />,
+    label: "Rushed Timeline",
+    accent: "text-[#35638c]",
+    border: "border-[#35638c]/20 bg-[#35638c]/10",
+  },
+};
+
 function RiskFactorCard({ factor }: { factor: RiskFactor }) {
-  const icons = {
-    CARTEL_PATTERN: <Users size={20} />,
-    SHELL_COMPANY: <Building2 size={20} />,
-    CONFLICT_OF_INTEREST: <UserX size={20} />,
-    PRICE_ANOMALY: <DollarSign size={20} />,
-    RUSHED_TIMELINE: <Clock size={20} />,
-  };
-
-  const colors = {
-    CARTEL_PATTERN: "bg-purple-50 text-purple-700 border-purple-200",
-    SHELL_COMPANY: "bg-orange-50 text-orange-700 border-orange-200",
-    CONFLICT_OF_INTEREST: "bg-red-50 text-red-700 border-red-200",
-    PRICE_ANOMALY: "bg-amber-50 text-amber-700 border-amber-200",
-    RUSHED_TIMELINE: "bg-blue-50 text-blue-700 border-blue-200",
-  };
-
-  const labels = {
-    CARTEL_PATTERN: "Cartel Pattern",
-    SHELL_COMPANY: "Shell Company",
-    CONFLICT_OF_INTEREST: "Conflict of Interest",
-    PRICE_ANOMALY: "Price Anomaly",
-    RUSHED_TIMELINE: "Rushed Timeline",
-  };
+  const cfg = FACTOR_CONFIG[factor.type];
 
   return (
-    <Card className={`${colors[factor.type]}`}>
-      <CardContent className="p-4">
-        <div className="flex items-start gap-3">
-          <div className="mt-0.5">{icons[factor.type]}</div>
-          <div className="flex-1">
-            <div className="flex items-center justify-between mb-1">
-              <span className="font-semibold">{labels[factor.type]}</span>
-              <span className="text-sm font-bold">{factor.weight} pts</span>
-            </div>
-            <p className="text-sm opacity-90 mb-2">{factor.description}</p>
-            {factor.evidence.length > 0 && (
-              <div className="text-xs opacity-75 space-y-0.5">
-                {factor.evidence.filter(e => e).map((ev, idx) => (
-                  <p key={idx}>{"\u2022"} {ev}</p>
-                ))}
-              </div>
-            )}
+    <div className={`rounded-xl border p-4 ${cfg.border}`}>
+      <div className="flex items-start gap-3">
+        <div className={`mt-0.5 ${cfg.accent}`}>{cfg.icon}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between mb-1">
+            <span className={`text-sm font-semibold ${cfg.accent}`}>
+              {cfg.label}
+            </span>
+            <span className="text-xs font-bold text-muted-foreground tabular-nums">
+              {factor.weight} pts
+            </span>
           </div>
+          <p className="text-xs text-foreground/70 mb-2">{factor.description}</p>
+          {factor.evidence.length > 0 && (
+            <div className="text-[11px] text-muted-foreground space-y-0.5">
+              {factor.evidence.filter(e => e).map((ev, idx) => (
+                <p key={idx}>&bull; {ev}</p>
+              ))}
+            </div>
+          )}
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

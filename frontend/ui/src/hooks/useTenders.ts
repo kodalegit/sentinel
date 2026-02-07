@@ -1,160 +1,133 @@
 /**
- * Custom hooks for data fetching.
+ * Custom hooks for data fetching — powered by TanStack Query.
  */
 
-import { useState, useEffect, useCallback } from "react";
-import type {
-  DashboardStats,
-  TenderWithRisk,
-  TenderDetail,
-  GraphData,
-  RiskCategory,
-} from "@/lib/types";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { RiskCategory, CaseStatus } from "@/lib/types";
 import {
   getDashboardStats,
   getTenders,
   getTenderDetail,
   getTenderGraph,
   getFullGraph,
+  getCases,
+  getCaseStats,
+  getCaseDetail,
+  getCommunities,
+  getCommunityGraph,
 } from "@/lib/api";
 
+// --- Query key factory ---
+
+export const queryKeys = {
+  dashboard: ["dashboard-stats"] as const,
+  tenders: (filter?: RiskCategory) => ["tenders", filter ?? "ALL"] as const,
+  tenderDetail: (id: string) => ["tender-detail", id] as const,
+  tenderGraph: (id: string) => ["tender-graph", id] as const,
+  fullGraph: ["full-graph"] as const,
+  cases: (status?: CaseStatus | "ALL") => ["cases", status ?? "ALL"] as const,
+  caseStats: ["case-stats"] as const,
+  caseDetail: (id: string) => ["case-detail", id] as const,
+  communities: ["communities"] as const,
+  communityGraph: (id: string) => ["community-graph", id] as const,
+};
+
+// --- Tender hooks ---
+
 export function useDashboardStats() {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-
-  useEffect(() => {
-    getDashboardStats()
-      .then(setStats)
-      .catch(setError)
-      .finally(() => setLoading(false));
-  }, []);
-
+  const { data: stats = null, isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.dashboard,
+    queryFn: getDashboardStats,
+  });
   return { stats, loading, error };
 }
 
 export function useTenders(filter?: RiskCategory) {
-  const [tenders, setTenders] = useState<TenderWithRisk[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-
-  useEffect(() => {
-    let isActive = true;
-
-    const loadTenders = async () => {
-      setLoading(true);
-      try {
-        const data = await getTenders({ riskLevel: filter, sortBy: "risk" });
-        if (isActive) {
-          setTenders(data);
-        }
-      } catch (fetchError) {
-        if (isActive) {
-          setError(fetchError as Error);
-        }
-      } finally {
-        if (isActive) {
-          setLoading(false);
-        }
-      }
-    };
-
-    void loadTenders();
-
-    return () => {
-      isActive = false;
-    };
-  }, [filter]);
-
+  const { data: tenders = [], isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.tenders(filter),
+    queryFn: () => getTenders({ riskLevel: filter, sortBy: "risk" }),
+  });
   return { tenders, loading, error };
 }
 
 export function useTenderDetail(tenderId: string | null) {
-  const [detail, setDetail] = useState<TenderDetail | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-
-  useEffect(() => {
-    let isActive = true;
-
-    const resetDetail = () => {
-      setDetail(null);
-      setLoading(false);
-    };
-
-    const loadDetail = async () => {
-      if (!tenderId) {
-        resetDetail();
-        return;
-      }
-
-      setLoading(true);
-      try {
-        const data = await getTenderDetail(tenderId);
-        if (isActive) {
-          setDetail(data);
-        }
-      } catch (fetchError) {
-        if (isActive) {
-          setError(fetchError as Error);
-        }
-      } finally {
-        if (isActive) {
-          setLoading(false);
-        }
-      }
-    };
-
-    void loadDetail();
-
-    return () => {
-      isActive = false;
-    };
-  }, [tenderId]);
-
+  const { data: detail = null, isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.tenderDetail(tenderId!),
+    queryFn: () => getTenderDetail(tenderId!),
+    enabled: !!tenderId,
+  });
   return { detail, loading, error };
 }
 
 export function useTenderGraph(tenderId: string | null) {
-  const [graph, setGraph] = useState<GraphData | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  const queryClient = useQueryClient();
+  const { data: graph = null, isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.tenderGraph(tenderId!),
+    queryFn: () => getTenderGraph(tenderId!),
+    enabled: !!tenderId,
+    staleTime: 5 * 60 * 1000,
+  });
 
-  const fetchGraph = useCallback(async () => {
-    if (!tenderId) {
-      setGraph(null);
-      return;
-    }
+  const refetch = () =>
+    queryClient.invalidateQueries({ queryKey: queryKeys.tenderGraph(tenderId!) });
 
-    setLoading(true);
-    try {
-      const data = await getTenderGraph(tenderId);
-      setGraph(data);
-    } catch (e) {
-      setError(e as Error);
-    } finally {
-      setLoading(false);
-    }
-  }, [tenderId]);
-
-  useEffect(() => {
-    fetchGraph();
-  }, [fetchGraph]);
-
-  return { graph, loading, error, refetch: fetchGraph };
+  return { graph, loading, error, refetch };
 }
 
 export function useFullGraph() {
-  const [graph, setGraph] = useState<GraphData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+  const { data: graph = null, isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.fullGraph,
+    queryFn: getFullGraph,
+    staleTime: 5 * 60 * 1000,
+  });
+  return { graph, loading, error };
+}
 
-  useEffect(() => {
-    getFullGraph()
-      .then(setGraph)
-      .catch(setError)
-      .finally(() => setLoading(false));
-  }, []);
+// --- Case hooks ---
 
+export function useCases(statusFilter?: CaseStatus | "ALL") {
+  const status = statusFilter === "ALL" ? undefined : statusFilter;
+  const { data: cases = [], isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.cases(statusFilter),
+    queryFn: () => getCases(status ? { status } : undefined),
+  });
+  return { cases, loading, error };
+}
+
+export function useCaseStats() {
+  const { data: stats = null, isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.caseStats,
+    queryFn: getCaseStats,
+  });
+  return { stats, loading, error };
+}
+
+export function useCaseDetail(caseId: string | null) {
+  const { data: detail = null, isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.caseDetail(caseId!),
+    queryFn: () => getCaseDetail(caseId!),
+    enabled: !!caseId,
+  });
+  return { detail, loading, error };
+}
+
+// --- Graph community hooks ---
+
+export function useCommunities() {
+  const { data, isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.communities,
+    queryFn: getCommunities,
+    staleTime: 5 * 60 * 1000,
+  });
+  return { clusters: data?.clusters ?? [], loading, error };
+}
+
+export function useCommunityGraph(clusterId: string | null) {
+  const { data: graph = null, isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.communityGraph(clusterId!),
+    queryFn: () => getCommunityGraph(clusterId!),
+    enabled: !!clusterId,
+    staleTime: 5 * 60 * 1000,
+  });
   return { graph, loading, error };
 }

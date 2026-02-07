@@ -160,32 +160,32 @@ export function formatKES(amount: number): string {
 export function getRiskColor(category: RiskCategory): string {
   switch (category) {
     case "HIGH":
-      return "text-red-600";
+      return "text-red-400";
     case "MEDIUM":
-      return "text-amber-500";
+      return "text-amber-400";
     case "LOW":
-      return "text-emerald-600";
+      return "text-emerald-400";
   }
 }
 
 export function getRiskBgColor(category: RiskCategory): string {
   switch (category) {
     case "HIGH":
-      return "bg-red-100";
+      return "bg-red-500/10";
     case "MEDIUM":
-      return "bg-amber-100";
+      return "bg-amber-500/10";
     case "LOW":
-      return "bg-emerald-100";
+      return "bg-emerald-500/10";
   }
 }
 
 export function getRiskBorderColor(category: RiskCategory): string {
   switch (category) {
     case "HIGH":
-      return "border-red-500";
+      return "border-red-500/30";
     case "MEDIUM":
-      return "border-amber-500";
+      return "border-amber-500/30";
     case "LOW":
-      return "border-emerald-500";
+      return "border-emerald-500/30";
   }
 }

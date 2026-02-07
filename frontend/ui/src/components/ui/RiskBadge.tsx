@@ -11,42 +11,53 @@ interface RiskBadgeProps {
   pulse?: boolean;
 }
 
+const RISK_CONFIG = {
+  HIGH: {
+    dot: "bg-[#c4412f]",
+    text: "text-[#c4412f]",
+    bg: "bg-[#c4412f]/10",
+    border: "border-[#c4412f]/20",
+  },
+  MEDIUM: {
+    dot: "bg-[#b78b43]",
+    text: "text-[#b78b43]",
+    bg: "bg-[#b78b43]/10",
+    border: "border-[#b78b43]/20",
+  },
+  LOW: {
+    dot: "bg-[#1f6f5c]",
+    text: "text-[#1f6f5c]",
+    bg: "bg-[#1f6f5c]/10",
+    border: "border-[#1f6f5c]/20",
+  },
+};
+
 export function RiskBadge({
   category,
   score,
   size = "md",
   pulse = false,
 }: RiskBadgeProps) {
-  const colors = {
-    HIGH: "bg-red-100 text-red-700 border-red-300",
-    MEDIUM: "bg-amber-100 text-amber-700 border-amber-300",
-    LOW: "bg-emerald-100 text-emerald-700 border-emerald-300",
-  };
+  const cfg = RISK_CONFIG[category];
 
   const sizes = {
-    sm: "text-xs px-2 py-0.5",
-    md: "text-sm px-2.5 py-1",
-    lg: "text-base px-3 py-1.5",
-  };
-
-  const icons = {
-    HIGH: "🔴",
-    MEDIUM: "🟡",
-    LOW: "🟢",
+    sm: "text-[11px] px-2 py-0.5 gap-1.5",
+    md: "text-[11px] px-3 py-1 gap-1.5",
+    lg: "text-sm px-3.5 py-1.5 gap-2",
   };
 
   return (
     <span
       className={`
-        inline-flex items-center gap-1.5 font-medium rounded-full border
-        ${colors[category]} ${sizes[size]}
-        ${pulse && category === "HIGH" ? "animate-pulse" : ""}
+        inline-flex items-center font-medium rounded-full border
+        ${cfg.bg} ${cfg.border} ${cfg.text} ${sizes[size]}
+        ${pulse && category === "HIGH" ? "animate-pulse-glow" : ""}
       `}
     >
-      <span>{icons[category]}</span>
-      <span>{category}</span>
+      <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot}`} />
+      <span className="uppercase tracking-wider">{category}</span>
       {score !== undefined && (
-        <span className="font-bold">{score}</span>
+        <span className="font-bold tabular-nums">{score}</span>
       )}
     </span>
   );
@@ -56,19 +67,38 @@ interface StatusBadgeProps {
   status: TenderStatus;
 }
 
+const STATUS_CONFIG = {
+  OPEN: {
+    text: "text-[#35638c]",
+    bg: "bg-[#35638c]/10",
+    border: "border-[#35638c]/20",
+  },
+  EVALUATION: {
+    text: "text-[#7c5d3b]",
+    bg: "bg-[#7c5d3b]/10",
+    border: "border-[#7c5d3b]/20",
+  },
+  AWARDED: {
+    text: "text-[#1f4b46]",
+    bg: "bg-[#1f4b46]/10",
+    border: "border-[#1f4b46]/20",
+  },
+  CANCELLED: {
+    text: "text-[#8a8580]",
+    bg: "bg-[#8a8580]/10",
+    border: "border-[#8a8580]/20",
+  },
+};
+
 export function StatusBadge({ status }: StatusBadgeProps) {
-  const colors = {
-    OPEN: "bg-blue-100 text-blue-700",
-    EVALUATION: "bg-purple-100 text-purple-700",
-    AWARDED: "bg-slate-100 text-slate-700",
-    CANCELLED: "bg-gray-100 text-gray-500",
-  };
+  const cfg = STATUS_CONFIG[status];
 
   return (
     <span
       className={`
-        inline-flex items-center text-xs px-2 py-0.5 font-medium rounded
-        ${colors[status]}
+        inline-flex items-center text-[11px] px-2.5 py-0.5 font-medium
+        uppercase tracking-[0.15em] rounded-full border
+        ${cfg.text} ${cfg.bg} ${cfg.border}
       `}
     >
       {status}

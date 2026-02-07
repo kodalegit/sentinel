@@ -6,101 +6,73 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useDashboardStats, useTenders, useTenderDetail, useTenderGraph } from "@/hooks/useTenders";
-import { formatKES, createCase } from "@/lib/api";
+import { useDashboardStats, useTenders } from "@/hooks/useTenders";
+import { formatKES } from "@/lib/api";
 import type { RiskCategory } from "@/lib/types";
 import { TenderCard } from "@/components/TenderCard";
-import { TenderDetailModal } from "@/components/TenderDetailModal";
-import { ShadowGraph } from "@/components/ShadowGraph";
 import { StatCard } from "@/components/ui/StatCard";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Shield,
   AlertTriangle,
   AlertCircle,
-  CheckCircle,
   FileText,
   Clock,
-  TrendingUp,
-  Network,
-  FolderOpen,
-  Loader2,
+  CheckCircle,
 } from "lucide-react";
-import Link from "next/link";
 
 type FilterTab = "ALL" | RiskCategory;
+
+const FILTER_TABS: { key: FilterTab; label: string; dot?: string }[] = [
+  { key: "ALL", label: "All Tenders" },
+  { key: "HIGH", label: "High Risk", dot: "bg-[#c4412f]" },
+  { key: "MEDIUM", label: "Medium Risk", dot: "bg-[#b78b43]" },
+  { key: "LOW", label: "Low Risk", dot: "bg-[#1f6f5c]" },
+];
 
 export default function Dashboard() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<FilterTab>("ALL");
-  const [selectedTenderId, setSelectedTenderId] = useState<string | null>(null);
-  const [showGraph, setShowGraph] = useState(false);
 
   const { stats, loading: statsLoading } = useDashboardStats();
   const { tenders, loading: tendersLoading } = useTenders(
     activeTab === "ALL" ? undefined : activeTab
   );
-  const { detail, loading: detailLoading } = useTenderDetail(selectedTenderId);
-  const { graph, loading: graphLoading } = useTenderGraph(
-    showGraph ? selectedTenderId : null
-  );
-
-  const tabs: { key: FilterTab; label: string; color: string }[] = [
-    { key: "ALL", label: "All Tenders", color: "bg-slate-600" },
-    { key: "HIGH", label: "High Risk", color: "bg-red-600" },
-    { key: "MEDIUM", label: "Medium Risk", color: "bg-amber-500" },
-    { key: "LOW", label: "Low Risk", color: "bg-emerald-600" },
-  ];
 
   return (
-    <div className="min-h-screen bg-linear-to-br from-slate-50 to-slate-100">
-      {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-linear-to-br from-blue-600 to-indigo-700 flex items-center justify-center">
-                <Shield className="text-white" size={22} />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-slate-900">SENTINEL</h1>
-                <p className="text-xs text-slate-500">Public Procurement Guardian</p>
-              </div>
+    <div className="min-h-screen pb-12">
+      {/* Page header */}
+      <header className="border-b border-border/70 bg-card/70 backdrop-blur-sm sticky top-0 z-30">
+        <div className="max-w-7xl mx-auto px-6 lg:px-10">
+          <div className="flex flex-col gap-4 py-6 md:flex-row md:items-end md:justify-between">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.35em] text-muted-foreground">
+                Sentinel Intelligence
+              </p>
+              <h1 className="font-display text-3xl text-foreground">
+                Oversight Dashboard
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground max-w-xl">
+                Monitor procurement risk signals, clustering anomalies, and investigation readiness across the agency portfolio.
+              </p>
             </div>
-
-            <div className="flex items-center gap-2">
-              <Link
-                href="/cases"
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-lg transition-colors"
-              >
-                <FolderOpen size={18} />
-                Cases
-              </Link>
-              <Link
-                href="/graph"
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
-              >
-                <Network size={18} />
-                Shadow Graph
-              </Link>
+            <div className="flex items-center gap-3">
+              <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-secondary/70 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                Live Monitoring
+              </span>
+              <span className="text-xs text-muted-foreground">Updated every hour</span>
             </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Stats */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div className="max-w-7xl mx-auto px-6 lg:px-10 py-8">
+        {/* Stats row */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-10 stagger-children">
           {statsLoading ? (
             Array.from({ length: 4 }).map((_, i) => (
               <div
                 key={i}
-                className="h-28 bg-white rounded-xl border border-slate-200 animate-pulse"
+                className="h-[120px] rounded-2xl border border-border/40 bg-card animate-pulse"
               />
             ))
           ) : stats ? (
@@ -108,26 +80,26 @@ export default function Dashboard() {
               <StatCard
                 title="Total Tenders"
                 value={stats.total_tenders}
-                icon={<FileText />}
+                icon={<FileText size={18} />}
                 subtitle={`${formatKES(stats.total_value)} total value`}
               />
               <StatCard
                 title="High Risk"
                 value={stats.high_risk_count}
-                icon={<AlertTriangle />}
+                icon={<AlertTriangle size={18} />}
                 variant="danger"
                 subtitle={`${stats.flagged_today} new today`}
               />
               <StatCard
                 title="Medium Risk"
                 value={stats.medium_risk_count}
-                icon={<AlertCircle />}
+                icon={<AlertCircle size={18} />}
                 variant="warning"
               />
               <StatCard
                 title="Pending Review"
                 value={stats.pending_review}
-                icon={<Clock />}
+                icon={<Clock size={18} />}
                 subtitle="Open & Evaluation"
               />
             </>
@@ -135,49 +107,70 @@ export default function Dashboard() {
         </div>
 
         {/* Filter tabs */}
-        <div className="flex items-center gap-2 mb-6 overflow-x-auto pb-2">
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`
-                px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all
-                ${
-                  activeTab === tab.key
-                    ? `${tab.color} text-white shadow-lg`
-                    : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
-                }
-              `}
-            >
-              {tab.label}
-              {stats && (
-                <span className="ml-2 opacity-75">
-                  {tab.key === "ALL"
-                    ? stats.total_tenders
-                    : tab.key === "HIGH"
-                    ? stats.high_risk_count
-                    : tab.key === "MEDIUM"
-                    ? stats.medium_risk_count
-                    : stats.low_risk_count}
-                </span>
-              )}
-            </button>
-          ))}
+        <div className="flex items-center gap-2 mb-8 overflow-x-auto pb-1">
+          {FILTER_TABS.map((tab) => {
+            const isActive = activeTab === tab.key;
+            const count =
+              tab.key === "ALL"
+                ? stats?.total_tenders
+                : tab.key === "HIGH"
+                ? stats?.high_risk_count
+                : tab.key === "MEDIUM"
+                ? stats?.medium_risk_count
+                : stats?.low_risk_count;
+
+            return (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`
+                  flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium
+                  whitespace-nowrap transition-all duration-200 border
+                  ${
+                    isActive
+                      ? "bg-primary text-primary-foreground border-primary/40 shadow-sm"
+                      : "border-border/60 text-muted-foreground hover:text-foreground hover:bg-secondary/70"
+                  }
+                `}
+              >
+                {tab.dot && (
+                  <span className={`h-1.5 w-1.5 rounded-full ${tab.dot}`} />
+                )}
+                {tab.label}
+                {count !== undefined && (
+                  <span className="tabular-nums text-xs opacity-70">
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
         {/* Tender list */}
-        <div className="space-y-4">
+        <div className="flex items-end justify-between gap-4 mb-4">
+          <div>
+            <h2 className="text-lg font-semibold text-foreground">Risk-flagged tenders</h2>
+            <p className="text-xs text-muted-foreground">
+              Prioritized by anomaly signals, bid behavior, and entity relationships.
+            </p>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {tendersLoading ? "Loading" : `${tenders.length} results`}
+          </span>
+        </div>
+        <div className="space-y-3">
           {tendersLoading ? (
             Array.from({ length: 5 }).map((_, i) => (
               <div
                 key={i}
-                className="h-40 bg-white rounded-xl border border-slate-200 animate-pulse"
+                className="h-[168px] rounded-2xl border border-border/40 bg-card animate-pulse"
               />
             ))
           ) : tenders.length === 0 ? (
-            <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
-              <CheckCircle className="mx-auto text-emerald-500 mb-4" size={48} />
-              <p className="text-slate-600">
+            <div className="rounded-2xl border border-border/40 bg-card p-16 text-center">
+              <CheckCircle className="mx-auto text-emerald-500/60 mb-4" size={40} />
+              <p className="text-muted-foreground">
                 No tenders found with this filter.
               </p>
             </div>
@@ -186,74 +179,13 @@ export default function Dashboard() {
               <TenderCard
                 key={tender.tender.id}
                 tender={tender}
-                onClick={() => setSelectedTenderId(tender.tender.id)}
+                onClick={() => router.push(`/tenders/${tender.tender.id}`)}
               />
             ))
           )}
         </div>
-      </main>
+      </div>
 
-      {/* Tender Detail Modal */}
-      <TenderDetailModal
-        detail={detail}
-        loading={detailLoading}
-        isOpen={!!selectedTenderId && !showGraph}
-        onClose={() => setSelectedTenderId(null)}
-        onViewGraph={() => setShowGraph(true)}
-        onOpenCase={async (tenderId, tenderTitle) => {
-          try {
-            await createCase({
-              tender_id: tenderId,
-              title: `Investigation: ${tenderTitle}`,
-            });
-            setSelectedTenderId(null);
-            router.push("/cases");
-          } catch {
-            // silent
-          }
-        }}
-      />
-
-      {/* Graph Modal */}
-      <Dialog open={showGraph} onOpenChange={(open) => !open && setShowGraph(false)}>
-        <DialogContent className="max-w-6xl max-h-[90vh] p-0">
-          <DialogHeader className="px-6 pt-6 pb-0">
-            <DialogTitle>
-              Connection Graph: {detail?.tender.title || ""}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="h-[600px] p-4">
-            {graphLoading ? (
-              <div className="flex items-center justify-center h-full">
-                <Loader2 className="w-8 h-8 animate-spin text-primary" />
-              </div>
-            ) : graph ? (
-              <ShadowGraph data={graph} focusNodeId={selectedTenderId || undefined} />
-            ) : (
-              <div className="flex items-center justify-center h-full text-muted-foreground">
-                No graph data available
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Footer */}
-      <footer className="mt-16 border-t border-slate-200 bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-slate-500">
-              Sentinel MVP • AI Hackathon 2026
-            </div>
-            <div className="flex items-center gap-4 text-sm text-slate-500">
-              <span className="flex items-center gap-1">
-                <TrendingUp size={14} />
-                Powered by AI
-              </span>
-            </div>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 }

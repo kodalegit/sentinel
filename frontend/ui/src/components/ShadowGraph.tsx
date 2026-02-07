@@ -1,10 +1,11 @@
 /**
  * Shadow Graph component using React Flow.
+ * Uses barycenter heuristic for edge-crossing minimization.
  */
 
 "use client";
 
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useState, useEffect } from "react";
 import {
   ReactFlow,
   Node,
@@ -20,6 +21,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import type { GraphData, NodeType, RiskCategory } from "@/lib/types";
 import { Building2, User, Briefcase, FileText } from "lucide-react";
+import { useTheme } from "next-themes";
 
 interface ShadowGraphProps {
   data: GraphData;
@@ -27,82 +29,157 @@ interface ShadowGraphProps {
   onNodeClick?: (nodeId: string, nodeType: NodeType) => void;
 }
 
-// Custom node styles
-const nodeStyles = {
-  COMPANY: {
-    background: "linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)",
-    border: "2px solid #1e40af",
-    color: "#ffffff",
-    icon: Building2,
-  },
-  DIRECTOR: {
-    background: "linear-gradient(135deg, #64748b 0%, #475569 100%)",
-    border: "2px solid #334155",
-    color: "#ffffff",
-    icon: User,
-  },
-  OFFICIAL: {
-    background: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)",
-    border: "2px solid #991b1b",
-    color: "#ffffff",
-    icon: Briefcase,
-  },
-  TENDER: {
-    background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
-    border: "2px solid #047857",
-    color: "#ffffff",
-    icon: FileText,
-  },
+const NODE_THEME_LIGHT = {
+  COMPANY: { bg: "#e8f0ed", border: "#1f4b46", color: "#1f4b46" },
+  DIRECTOR: { bg: "#f3ede3", border: "#7c5d3b", color: "#7c5d3b" },
+  OFFICIAL: { bg: "#f6e7e3", border: "#c4412f", color: "#9d2f23" },
+  TENDER: { bg: "#eef2f5", border: "#35638c", color: "#2f4d67" },
 };
 
-const riskColors: Record<RiskCategory, string> = {
-  HIGH: "#ef4444",
-  MEDIUM: "#f59e0b",
-  LOW: "#10b981",
+const NODE_THEME_DARK = {
+  COMPANY: { bg: "#162b28", border: "#3d9e8f", color: "#8fd4c8" },
+  DIRECTOR: { bg: "#2a2218", border: "#c9a35c", color: "#e0c88a" },
+  OFFICIAL: { bg: "#2d1814", border: "#e06050", color: "#f0a090" },
+  TENDER: { bg: "#172430", border: "#5a9ac4", color: "#a0c8e8" },
 };
 
-function layoutNodes(graphData: GraphData): Node[] {
-  // Group nodes by type for layered layout
-  const nodesByType: Record<string, typeof graphData.nodes> = {
-    OFFICIAL: [],
-    TENDER: [],
-    COMPANY: [],
-    DIRECTOR: [],
-  };
+const NODE_META = {
+  COMPANY: { icon: Building2, radius: "10px" },
+  DIRECTOR: { icon: User, radius: "999px" },
+  OFFICIAL: { icon: Briefcase, radius: "999px" },
+  TENDER: { icon: FileText, radius: "12px" },
+};
 
-  graphData.nodes.forEach((node) => {
-    nodesByType[node.type]?.push(node);
+const RISK_COLORS: Record<RiskCategory, string> = {
+  HIGH: "#c4412f",
+  MEDIUM: "#b78b43",
+  LOW: "#1f6f5c",
+};
+
+const LAYER_ORDER: NodeType[] = ["OFFICIAL", "TENDER", "COMPANY", "DIRECTOR"];
+const LAYER_Y_SPACING = 260;
+const X_SPACING = 360;
+
+/**
+ * Build adjacency map for barycenter computation.
+ */
+function buildAdjacency(graphData: GraphData) {
+  const adj: Record<string, Set<string>> = {};
+  for (const n of graphData.nodes) adj[n.id] = new Set();
+  for (const e of graphData.edges) {
+    adj[e.source]?.add(e.target);
+    adj[e.target]?.add(e.source);
+  }
+  return adj;
+}
+
+/**
+ * Barycenter heuristic: order nodes in a layer by the average x-position
+ * of their neighbours in the previously placed layer. Significantly reduces
+ * edge crossings compared to arbitrary ordering.
+ */
+function layoutNodes(graphData: GraphData, focusNodeId?: string, isDark = false): Node[] {
+  const NODE_THEME = isDark ? NODE_THEME_DARK : NODE_THEME_LIGHT;
+  const adj = buildAdjacency(graphData);
+  const nodeTypeById = new Map(
+    graphData.nodes.map((node) => [node.id, node.type] as const)
+  );
+
+  const nodesByType: Record<string, typeof graphData.nodes> = {};
+  for (const t of LAYER_ORDER) nodesByType[t] = [];
+  graphData.nodes.forEach((n) => nodesByType[n.type]?.push(n));
+
+  const positionMap: Record<string, { x: number; y: number }> = {};
+  const layerIndex = Object.fromEntries(
+    LAYER_ORDER.map((type, idx) => [type, idx])
+  ) as Record<NodeType, number>;
+
+  const seedLayers = LAYER_ORDER.map((type) => {
+    const layerNodes = nodesByType[type] || [];
+    return [...layerNodes].sort(
+      (a, b) => (adj[b.id]?.size || 0) - (adj[a.id]?.size || 0)
+    );
   });
 
-  const nodes: Node[] = [];
-  let yOffset = 0;
+  const placeLayer = (nodes: typeof graphData.nodes, y: number) => {
+    const totalWidth = nodes.length * X_SPACING;
+    const startX = -totalWidth / 2 + X_SPACING / 2;
+    nodes.forEach((node, idx) => {
+      positionMap[node.id] = { x: startX + idx * X_SPACING, y };
+    });
+  };
 
-  // Layout each type in rows
-  const typeOrder = ["OFFICIAL", "TENDER", "COMPANY", "DIRECTOR"];
+  seedLayers.forEach((layerNodes, idx) => {
+    placeLayer(layerNodes, idx * LAYER_Y_SPACING);
+  });
 
-  typeOrder.forEach((type) => {
-    const typeNodes = nodesByType[type] || [];
-    const xSpacing = 250;
-    const startX = -(typeNodes.length * xSpacing) / 2 + xSpacing / 2;
+  const sortLayerByNeighbours = (nodes: typeof graphData.nodes, targetLayer: number) => {
+    return [...nodes].sort((a, b) => {
+      const score = (nodeId: string) => {
+        const neighbours = adj[nodeId] || new Set<string>();
+        let sumX = 0;
+        let count = 0;
+        neighbours.forEach((nId) => {
+          const type = nodeTypeById.get(nId);
+          if (type && layerIndex[type] === targetLayer && positionMap[nId]) {
+            sumX += positionMap[nId].x;
+            count++;
+          }
+        });
+        return count > 0 ? sumX / count : 0;
+      };
 
-    typeNodes.forEach((node, idx) => {
-      const style = nodeStyles[node.type as keyof typeof nodeStyles];
-      const Icon = style.icon;
+      return score(a.id) - score(b.id);
+    });
+  };
 
-      // Determine if this is a high-risk tender
+  for (let sweep = 0; sweep < 2; sweep++) {
+    LAYER_ORDER.forEach((type, idx) => {
+      if (idx === 0) return;
+      const layerNodes = nodesByType[type] || [];
+      const ordered = sortLayerByNeighbours(layerNodes, idx - 1);
+      placeLayer(ordered, idx * LAYER_Y_SPACING);
+      nodesByType[type] = ordered;
+    });
+
+    [...LAYER_ORDER].reverse().forEach((type, idx) => {
+      const layerIdx = LAYER_ORDER.length - 1 - idx;
+      if (layerIdx === LAYER_ORDER.length - 1) return;
+      const layerNodes = nodesByType[type] || [];
+      const ordered = sortLayerByNeighbours(layerNodes, layerIdx + 1);
+      placeLayer(ordered, layerIdx * LAYER_Y_SPACING);
+      nodesByType[type] = ordered;
+    });
+  }
+
+  const result: Node[] = [];
+  LAYER_ORDER.forEach((type, layerIdx) => {
+    const layerNodes = nodesByType[type] || [];
+    const y = layerIdx * LAYER_Y_SPACING;
+
+    layerNodes.forEach((node, idx) => {
+      const current = positionMap[node.id];
+      const x = current ? current.x : idx * X_SPACING;
+      positionMap[node.id] = { x, y };
+
+      const theme = NODE_THEME[node.type as keyof typeof NODE_THEME];
+      const meta = NODE_META[node.type as keyof typeof NODE_META];
+      const Icon = meta.icon;
       const isHighRisk = node.risk_level === "HIGH";
       const borderColor = node.risk_level
-        ? riskColors[node.risk_level]
-        : style.border.split(" ")[2];
+        ? RISK_COLORS[node.risk_level]
+        : theme.border;
+      const isFocused = focusNodeId && node.id === focusNodeId;
+      const isDimmed = focusNodeId && node.id !== focusNodeId;
 
-      nodes.push({
+      result.push({
         id: node.id,
-        position: { x: startX + idx * xSpacing, y: yOffset },
+        position: { x, y },
         data: {
           label: (
-            <div className="flex items-center gap-2 px-2">
-              <Icon size={16} />
-              <span className="text-xs font-medium truncate max-w-[120px]">
+            <div className="flex items-center gap-3 px-1">
+              <Icon size={20} strokeWidth={1.5} className="shrink-0" />
+              <span className="text-[14px] font-semibold truncate max-w-[240px] leading-snug">
                 {node.label}
               </span>
             </div>
@@ -112,58 +189,84 @@ function layoutNodes(graphData: GraphData): Node[] {
           riskLevel: node.risk_level,
         },
         style: {
-          background: style.background,
-          border: `2px solid ${borderColor}`,
-          color: style.color,
-          borderRadius: node.type === "TENDER" ? "12px" : node.type === "DIRECTOR" || node.type === "OFFICIAL" ? "50%" : "8px",
-          padding: "8px 12px",
-          fontSize: "12px",
-          boxShadow: isHighRisk
-            ? `0 0 20px ${riskColors.HIGH}40`
-            : "0 4px 12px rgba(0,0,0,0.15)",
-          minWidth: node.type === "DIRECTOR" || node.type === "OFFICIAL" ? "100px" : "auto",
+          background: theme.bg,
+          border: `1.5px solid ${borderColor}`,
+          color: theme.color,
+          borderRadius: meta.radius,
+          padding: "14px 22px",
+          fontSize: "14px",
+          boxShadow: isFocused
+            ? `0 0 0 4px ${borderColor}50`
+            : isHighRisk
+            ? `0 0 16px ${RISK_COLORS.HIGH}35`
+            : "0 4px 16px rgba(31,75,70,0.12)",
           textAlign: "center" as const,
+          opacity: isDimmed ? 0.55 : 1,
         },
         sourcePosition: Position.Bottom,
         targetPosition: Position.Top,
       });
     });
-
-    yOffset += 150;
   });
 
-  return nodes;
+  return result;
 }
 
-function createEdges(graphData: GraphData): Edge[] {
-  return graphData.edges.map((edge) => ({
-    id: edge.id,
-    source: edge.source,
-    target: edge.target,
-    label: edge.label || undefined,
-    style: {
-      stroke: edge.suspicious ? "#ef4444" : "#94a3b8",
-      strokeWidth: edge.suspicious ? 2 : 1,
-      strokeDasharray: edge.suspicious ? "5,5" : undefined,
-    },
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: edge.suspicious ? "#ef4444" : "#94a3b8",
-    },
-    animated: edge.suspicious,
-    labelStyle: {
-      fontSize: 10,
-      fill: "#64748b",
-    },
-    labelBgStyle: {
-      fill: "#ffffff",
-    },
-  }));
+function createEdges(graphData: GraphData, focusNodeId?: string, isDark = false): Edge[] {
+  const normalEdge = isDark ? "#5a5550" : "#b9b2a6";
+  const suspiciousEdge = isDark ? "#e06050" : "#c4412f";
+  const labelFill = isDark ? "#c8c2b8" : "#6b6761";
+  const labelBg = isDark ? "#111a19" : "#fffaf4";
+
+  return graphData.edges.map((edge) => {
+    const isConnected =
+      focusNodeId && (edge.source === focusNodeId || edge.target === focusNodeId);
+    const baseOpacity = focusNodeId ? (isConnected ? 0.9 : 0.18) : 0.55;
+    const suspicious = edge.suspicious;
+
+    return {
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: "smoothstep",
+      label: edge.suspicious ? (edge.label || undefined) : undefined,
+      style: {
+        stroke: suspicious ? suspiciousEdge : normalEdge,
+        strokeWidth: suspicious ? 2 : 1,
+        opacity: suspicious ? Math.max(baseOpacity, 0.7) : baseOpacity,
+      },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: suspicious ? suspiciousEdge : normalEdge,
+        width: 16,
+        height: 16,
+      },
+      animated: !!(edge.suspicious && (!focusNodeId || isConnected)),
+      labelStyle: {
+        fontSize: 11,
+        fill: labelFill,
+        fontWeight: 500,
+      },
+      labelBgStyle: {
+        fill: labelBg,
+        fillOpacity: 0.95,
+      },
+      labelBgPadding: [6, 4] as [number, number],
+      labelBgBorderRadius: 4,
+    };
+  });
 }
 
-export function ShadowGraph({ data, onNodeClick }: ShadowGraphProps) {
-  const initialNodes = useMemo(() => layoutNodes(data), [data]);
-  const initialEdges = useMemo(() => createEdges(data), [data]);
+export function ShadowGraph({ data, onNodeClick, focusNodeId }: ShadowGraphProps) {
+  const { resolvedTheme } = useTheme();
+  const [isDark, setIsDark] = useState(false);
+
+  useEffect(() => {
+    setIsDark(resolvedTheme === "dark");
+  }, [resolvedTheme]);
+
+  const initialNodes = useMemo(() => layoutNodes(data, focusNodeId, isDark), [data, focusNodeId, isDark]);
+  const initialEdges = useMemo(() => createEdges(data, focusNodeId, isDark), [data, focusNodeId, isDark]);
 
   const [nodes, , onNodesChange] = useNodesState(initialNodes);
   const [edges, , onEdgesChange] = useEdgesState(initialEdges);
@@ -177,22 +280,18 @@ export function ShadowGraph({ data, onNodeClick }: ShadowGraphProps) {
     [onNodeClick]
   );
 
+  const nodeTheme = isDark ? NODE_THEME_DARK : NODE_THEME_LIGHT;
+
   const minimapNodeColor = useCallback((node: Node) => {
-    const type = node.data?.nodeType as keyof typeof nodeStyles;
+    const type = node.data?.nodeType as keyof typeof NODE_THEME_LIGHT;
     if (type === "TENDER" && node.data?.riskLevel) {
-      return riskColors[node.data.riskLevel as RiskCategory];
+      return RISK_COLORS[node.data.riskLevel as RiskCategory];
     }
-    return type === "COMPANY"
-      ? "#3b82f6"
-      : type === "DIRECTOR"
-      ? "#64748b"
-      : type === "OFFICIAL"
-      ? "#dc2626"
-      : "#10b981";
-  }, []);
+    return nodeTheme[type]?.border ?? "#64748b";
+  }, [nodeTheme]);
 
   return (
-    <div className="w-full h-full bg-slate-50 rounded-xl overflow-hidden">
+    <div className="w-full h-full rounded-2xl border border-border/60 overflow-hidden bg-card/80 shadow-[0_25px_60px_-45px_rgba(31,75,70,0.4)]">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -200,49 +299,46 @@ export function ShadowGraph({ data, onNodeClick }: ShadowGraphProps) {
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        fitViewOptions={{ padding: 0.25 }}
         attributionPosition="bottom-left"
+        proOptions={{ hideAttribution: true }}
       >
-        <Background color="#cbd5e1" gap={20} size={1} />
-        <Controls className="bg-white rounded-lg shadow-lg" />
+        <Background color={isDark ? "#2a3533" : "#c8bfb4"} gap={48} size={1} />
+        <Controls />
         <MiniMap
           nodeColor={minimapNodeColor}
-          className="bg-white rounded-lg shadow-lg"
-          maskColor="rgba(0,0,0,0.1)"
+          maskColor={isDark ? "rgba(11,17,16,0.7)" : "rgba(246,243,238,0.7)"}
         />
       </ReactFlow>
 
       {/* Legend */}
-      <div className="absolute bottom-4 right-4 bg-white rounded-lg shadow-lg p-3 text-xs">
-        <div className="font-semibold mb-2 text-slate-700">Legend</div>
+      <div className="absolute bottom-4 left-20 rounded-xl border border-border/60 bg-card/95 backdrop-blur-sm p-3.5 text-xs text-muted-foreground shadow-lg z-10">
+        <div className="font-semibold mb-2 text-foreground/80 text-[13px]">Legend</div>
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded bg-blue-500" />
+            <div className="w-2.5 h-2.5 rounded-sm" style={{ background: nodeTheme.COMPANY.border }} />
             <span>Company</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-slate-500" />
+            <div className="w-2.5 h-2.5 rounded-full" style={{ background: nodeTheme.DIRECTOR.border }} />
             <span>Director</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-red-500" />
+            <div className="w-2.5 h-2.5 rounded-full" style={{ background: nodeTheme.OFFICIAL.border }} />
             <span>Official</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-lg bg-emerald-500" />
+            <div className="w-2.5 h-2.5 rounded" style={{ background: nodeTheme.TENDER.border }} />
             <span>Tender</span>
           </div>
-          <hr className="my-2" />
+          <div className="my-1.5 border-t border-border/40" />
           <div className="flex items-center gap-2">
-            <div className="w-6 h-0.5 bg-slate-400" />
+            <div className="w-5 h-px" style={{ background: isDark ? "#5a5550" : "#b9b2a6" }} />
             <span>Connection</span>
           </div>
           <div className="flex items-center gap-2">
-            <div
-              className="w-6 h-0.5 bg-red-500"
-              style={{ backgroundImage: "repeating-linear-gradient(90deg, #ef4444, #ef4444 3px, transparent 3px, transparent 6px)" }}
-            />
-            <span className="text-red-600">Suspicious</span>
+            <div className="w-5 h-[2px] rounded-full" style={{ background: isDark ? "#e06050" : "#c4412f" }} />
+            <span style={{ color: isDark ? "#e06050" : "#c4412f" }}>Suspicious</span>
           </div>
         </div>
       </div>
