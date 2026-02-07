@@ -30,6 +30,7 @@ import {
   DollarSign,
   UserX,
   Loader2,
+  FolderOpen,
 } from "lucide-react";
 
 interface TenderDetailModalProps {
@@ -38,6 +39,7 @@ interface TenderDetailModalProps {
   isOpen: boolean;
   onClose: () => void;
   onViewGraph: () => void;
+  onOpenCase?: (tenderId: string, tenderTitle: string) => void;
 }
 
 export function TenderDetailModal({
@@ -46,6 +48,7 @@ export function TenderDetailModal({
   isOpen,
   onClose,
   onViewGraph,
+  onOpenCase,
 }: TenderDetailModalProps) {
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -65,6 +68,7 @@ export function TenderDetailModal({
               <TenderDetailContent
                 detail={detail}
                 onViewGraph={onViewGraph}
+                onOpenCase={onOpenCase}
               />
             </ScrollArea>
           </>
@@ -77,9 +81,11 @@ export function TenderDetailModal({
 function TenderDetailContent({
   detail,
   onViewGraph,
+  onOpenCase,
 }: {
   detail: TenderDetail;
   onViewGraph: () => void;
+  onOpenCase?: (tenderId: string, tenderTitle: string) => void;
 }) {
   const { tender, risk, bids, winning_company } = detail;
 
@@ -104,10 +110,21 @@ function TenderDetailContent({
           </div>
         </div>
 
-        <Button onClick={onViewGraph}>
-          <Network size={18} />
-          Explore Connections
-        </Button>
+        <div className="flex gap-2">
+          {onOpenCase && (
+            <Button
+              variant="outline"
+              onClick={() => onOpenCase(tender.id, tender.title)}
+            >
+              <FolderOpen size={18} />
+              Open Case
+            </Button>
+          )}
+          <Button onClick={onViewGraph}>
+            <Network size={18} />
+            Explore Connections
+          </Button>
+        </div>
       </div>
 
       <Separator />

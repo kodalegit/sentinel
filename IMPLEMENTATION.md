@@ -1,6 +1,6 @@
 # Project Sentinel - Implementation Documentation
 
-Sentinel is an AI-powered public procurement oversight system that transforms opaque tender data into actionable intelligence through **hybrid risk scoring** (rules + ML), **graph analytics**, and **LLM-powered explainability**.
+Sentinel is an AI-powered public procurement oversight system that transforms opaque tender data into actionable intelligence through **hybrid risk scoring** (rules + ML), **graph analytics**, **LLM-powered explainability**, and **case management workflows**.
 
 ---
 
@@ -13,7 +13,8 @@ Sentinel provides a **proactive prevention layer** for government auditors and c
 - **Hybrid Risk Scoring**: 5 rule-based checks fused with Isolation Forest anomaly detection (60/40 weighting).
 - **Shadow Graph Visualization**: Revealing hidden connections between companies, directors, and officials with community detection (Louvain).
 - **Grounded AI Explanations**: LangGraph agent with evidence packs ensures every explanation cites real data — never hallucinated.
-- **PostgreSQL Persistence**: Production-grade async database with Alembic migrations.
+- **Case Management**: Full investigation workflow — open cases from flagged tenders, add typed notes, transition through status stages, record decisions.
+- **PostgreSQL Persistence**: Production-grade async database with Alembic migrations and audit trail.
 
 ---
 
@@ -25,34 +26,40 @@ graph TB
         Dashboard["Dashboard Page"]
         Modal["Tender Detail Dialog"]
         GraphExplorer["Graph Explorer (React Flow)"]
+        CaseMgmt["Case Management Page"]
     end
 
     subgraph Backend["Backend (FastAPI)"]
-        API["REST API"]
+        API["REST API (~20 endpoints)"]
         HybridScorer["Hybrid Risk Scorer"]
         RuleEngine["Rule Engine (5 rules)"]
         MLEngine["Isolation Forest"]
         GraphBuilder["Graph Builder (NetworkX)"]
         Communities["Community Detection (Louvain)"]
         Agent["LangGraph Investigation Agent"]
+        CaseAPI["Case Management CRUD"]
     end
 
     subgraph Database["PostgreSQL 16"]
-        Tables["Tenders, Bids, Companies, Directors, Officials, Risk Assessments"]
+        CoreTables["Tenders, Bids, Companies, Directors, Officials"]
+        RiskTables["Risk Assessments (versioned)"]
+        CaseTables["Cases, Case Notes, Audit Log"]
     end
 
     Dashboard --> API
     Modal --> API
     GraphExplorer --> API
+    CaseMgmt --> API
     API --> HybridScorer
     API --> GraphBuilder
     API --> Agent
+    API --> CaseAPI
     HybridScorer --> RuleEngine
     HybridScorer --> MLEngine
     GraphBuilder --> Communities
-    Agent --> API
-    HybridScorer --> Database
-    GraphBuilder --> Database
+    CaseAPI --> CaseTables
+    HybridScorer --> RiskTables
+    GraphBuilder --> CoreTables
 ```
 
 ---
@@ -61,18 +68,25 @@ graph TB
 
 ### **Tech Stack**
 
-- **Frontend**: Next.js 16 (TypeScript), TailwindCSS v4, shadcn/ui, React Flow (v12)
-- **Backend**: FastAPI (Python 3.12), async SQLAlchemy + asyncpg, NetworkX, scikit-learn, LangChain v1 + LangGraph
-- **Database**: PostgreSQL 16 with Alembic migrations
-- **ML**: Isolation Forest (12 engineered features), StandardScaler normalization
-- **LLM**: Provider-agnostic via `init_chat_model` (OpenAI, Anthropic, Ollama, etc.)
+| Layer      | Technology                                           | Rationale                                           |
+| ---------- | ---------------------------------------------------- | --------------------------------------------------- |
+| Frontend   | Next.js 16 + TypeScript + TailwindCSS v4 + shadcn/ui | SSR, type safety, accessible component library      |
+| Graph Viz  | React Flow v12                                       | Controlled layouts, performance at MVP scale        |
+| Backend    | FastAPI + Python 3.12                                | Async, type hints, ML ecosystem                     |
+| Database   | PostgreSQL 16 + async SQLAlchemy + Alembic           | ACID, JSON support, migration management            |
+| Graph      | NetworkX                                             | Simplicity at MVP scale, clear Neo4j migration path |
+| ML         | scikit-learn (Isolation Forest)                      | Production-ready, interpretable                     |
+| LLM        | LangChain v1 + LangGraph (`init_chat_model`)         | Provider-agnostic: OpenAI, Anthropic, Ollama        |
+| Deployment | Docker Compose + Railway                             | Hackathon-friendly, scales to K8s                   |
 
-### **Design Decisions**
+### **Key Design Decisions**
 
 1. **Hybrid Intelligence**: Rules provide interpretable baselines; ML catches novel patterns. 60/40 fusion ensures explainability is never sacrificed.
-2. **Advisory Role**: Sentinel is a **decision-support tool**, not a judge. Language like "elevated risk" and "warrants review" respects legal constraints.
+2. **Advisory Role**: Sentinel is a **decision-support tool**, not a judge. Language like "elevated risk" and "warrants review" respects legal and institutional constraints.
 3. **Evidence Packs**: Structured context bundles (tender summary, risk factors, graph paths, metrics) ground LLM output and prevent hallucination.
-4. **Provider-Agnostic LLM**: `init_chat_model` supports OpenAI, Anthropic, Google, Ollama — swap via environment variables.
+4. **Provider-Agnostic LLM**: `init_chat_model` supports OpenAI, Anthropic, Google, Ollama — swap via environment variables. Falls back to template explanations without an API key.
+5. **Cluster-First Graph UX**: Community sidebar replaces "spaghetti" full-graph view. Click a cluster to load its subgraph with shared-attribute indicators.
+6. **Case Workflow**: Status machine (OPEN → INVESTIGATING → ESCALATED → RESOLVED/DISMISSED) with typed notes (OBSERVATION, EVIDENCE, DECISION, ACTION) and audit logging.
 
 ---
 
@@ -115,41 +129,71 @@ graph TB
 
 ---
 
-## 6. Implementation Status
+## 6. Case Management
 
-### **Backend**
+### Investigation Workflow
+
+```
+OPEN ──▶ INVESTIGATING ──▶ ESCALATED ──▶ RESOLVED
+  │            │
+  │            └──▶ RESOLVED
+  │            └──▶ DISMISSED
+  └──▶ DISMISSED
+```
+
+### Features
+
+- **Open Case** directly from any tender's detail view (priority auto-inherited from risk score)
+- **Typed Notes**: OBSERVATION, EVIDENCE, DECISION, ACTION — timestamped with author attribution
+- **Status Transitions**: Controlled state machine with valid next-states per current status
+- **Case Stats**: Dashboard with counts per status (open, investigating, escalated, resolved, dismissed)
+- **Audit Trail**: Every case creation and status change logged to `audit_log` table
+
+### Database Tables
+
+- `cases`: id, tender_id, title, status, priority, assigned_to, created_by, summary, decision, timestamps
+- `case_notes`: id, case_id, author, content, note_type, created_at
+
+---
+
+## 7. Implementation Status
+
+### **Backend** (`backend/`)
 
 - [x] PostgreSQL schema with async SQLAlchemy ORM (`db/models.py`, `db/config.py`)
 - [x] Alembic migrations (`alembic/`)
 - [x] Async CRUD repository (`db/repository.py`)
 - [x] Database seeding from synthetic data (`db/seed.py`)
 - [x] Pydantic ↔ SQLAlchemy mappers (`db/mappers.py`)
-- [x] Rule-based risk engine (`risk/engine.py`)
+- [x] Rule-based risk engine — 5 rules (`risk/engine.py`)
 - [x] Feature engineering — 12 features (`ml/features.py`)
 - [x] Isolation Forest anomaly detector (`ml/anomaly_detector.py`)
-- [x] Hybrid risk scorer (`ml/hybrid_scorer.py`)
+- [x] Hybrid risk scorer — 60/40 fusion (`ml/hybrid_scorer.py`)
 - [x] Community detection with Louvain (`graph/communities.py`)
-- [x] LangGraph investigation agent (`intelligence/agent.py`)
+- [x] LangGraph investigation agent with `init_chat_model` (`intelligence/agent.py`)
 - [x] Evidence pack builder (`intelligence/evidence.py`)
-- [x] REST API with 14 endpoints (`main.py`)
+- [x] Case management — CRUD, notes, status transitions, stats (`main.py`, `db/repository.py`)
+- [x] Audit trail logging (`db/repository.py`)
+- [x] REST API with ~20 endpoints (`main.py`)
 
-### **Frontend**
+### **Frontend** (`frontend/ui/`)
 
-- [x] shadcn/ui component library (Card, Dialog, Button, Badge, etc.)
-- [x] Dashboard with stat cards and risk-filtered tender list
-- [x] Tender detail dialog with risk factor breakdown
+- [x] shadcn/ui component library (Card, Dialog, Button, Badge, Separator, ScrollArea)
+- [x] Dashboard (`/`) with stat cards, risk-filtered tender list, nav to Cases + Graph
+- [x] Tender detail dialog with risk factor breakdown + "Open Case" button
 - [x] Interactive Shadow Graph with React Flow
-- [x] Graph explorer page
+- [x] Graph explorer (`/graph`) with cluster-first sidebar + community subgraphs
+- [x] Case management page (`/cases`) with status tabs, case detail dialog, notes, status transitions
 
 ### **Infrastructure**
 
 - [x] Docker Compose (PostgreSQL + backend + frontend)
-- [x] Railway deployment configs
-- [x] Dockerfiles for backend and frontend
+- [x] Dockerfiles for backend (uv + Python 3.12) and frontend (Next.js standalone)
+- [x] Railway deployment configs (`railway.toml`)
 
 ---
 
-## 7. How to Run
+## 8. How to Run
 
 ### **Option A: Docker Compose (recommended)**
 
@@ -198,34 +242,56 @@ Without an LLM key, the system falls back to structured template explanations.
 
 ---
 
-## 8. API Reference
+## 9. API Reference
 
-| Endpoint                            | Method | Description                               |
-| ----------------------------------- | ------ | ----------------------------------------- |
-| `/api/stats`                        | GET    | Dashboard statistics                      |
-| `/api/tenders`                      | GET    | Risk-scored tender list (filterable)      |
-| `/api/tenders/{id}`                 | GET    | Full risk breakdown + bidder list         |
-| `/api/tenders/{id}/graph`           | GET    | Tender subgraph (k-hop)                   |
-| `/api/tenders/{id}/evidence`        | GET    | Structured evidence pack                  |
-| `/api/tenders/{id}/explain`         | GET    | AI-generated risk explanation             |
-| `/api/graph/explore`                | GET    | Full shadow graph                         |
-| `/api/graph/cartels`                | GET    | Detected cartel clusters                  |
-| `/api/graph/communities`            | GET    | Louvain communities with suspicion scores |
-| `/api/graph/communities/{id}`       | GET    | Community subgraph                        |
-| `/api/graph/path?source=X&target=Y` | GET    | Shortest path between entities            |
-| `/api/graph/entity/{id}`            | GET    | Entity neighborhood (k-hop)               |
-| `/api/companies/{id}`               | GET    | Company details + directors               |
+| Endpoint                            | Method | Description                                |
+| ----------------------------------- | ------ | ------------------------------------------ |
+| `/api/stats`                        | GET    | Dashboard statistics                       |
+| `/api/tenders`                      | GET    | Risk-scored tender list (filterable)       |
+| `/api/tenders/{id}`                 | GET    | Full risk breakdown + bidder list          |
+| `/api/tenders/{id}/graph`           | GET    | Tender subgraph (k-hop)                    |
+| `/api/tenders/{id}/evidence`        | GET    | Structured evidence pack                   |
+| `/api/tenders/{id}/explain`         | GET    | AI-generated risk explanation              |
+| `/api/tenders/{id}/cases`           | GET    | Cases associated with a tender             |
+| `/api/graph/explore`                | GET    | Full shadow graph                          |
+| `/api/graph/cartels`                | GET    | Detected cartel clusters                   |
+| `/api/graph/communities`            | GET    | Louvain communities with suspicion scores  |
+| `/api/graph/communities/{id}`       | GET    | Community subgraph                         |
+| `/api/graph/path?source=X&target=Y` | GET    | Shortest path between entities             |
+| `/api/graph/entity/{id}`            | GET    | Entity neighborhood (k-hop)                |
+| `/api/companies/{id}`               | GET    | Company details + directors                |
+| `/api/cases`                        | GET    | List cases (filterable by status/priority) |
+| `/api/cases`                        | POST   | Create investigation case for a tender     |
+| `/api/cases/stats`                  | GET    | Case status breakdown counts               |
+| `/api/cases/{id}`                   | GET    | Case detail with notes                     |
+| `/api/cases/{id}`                   | PATCH  | Update case status/priority/decision       |
+| `/api/cases/{id}/notes`             | POST   | Add typed investigation note               |
 
 ---
 
-## 9. Demo Flow (The Auditor's Journey)
+## 10. Demo Flow (The Auditor's Journey)
 
-1. **Discover**: Open dashboard. High-risk tenders pulse with red indicators.
-2. **Audit**: Click **Supply of Pharmaceutical Products** (risk score: 61).
-3. **Understand**: Read 3 risk factors — conflict of interest, price anomaly (80% above estimate), ML anomaly (score: 100/100).
-4. **Trace**: Click "Explore Connections" to see the path between HealthFirst Medical and the procurement officer.
-5. **Investigate**: Hit `/api/tenders/{id}/explain` for an AI-generated audit brief.
-6. **Cluster**: Visit `/api/graph/communities` to see the Wanjiku Construction cartel (suspicion: 85/100).
+### Scenario A: Cartel Detection
+
+1. **Discover**: Open dashboard → filter by HIGH risk.
+2. **Cluster**: Navigate to Shadow Graph (`/graph`) → sidebar shows "Wanjiku Construction" cluster (suspicion: 85).
+3. **Investigate**: Click cluster → subgraph reveals 5 companies sharing phones, directors, and addresses.
+4. **Case**: Return to dashboard → click tender → "Open Case" → auto-creates investigation with HIGH priority.
+5. **Document**: Add EVIDENCE note: "5 companies share Industrial Area address, phone rotation detected."
+
+### Scenario B: Shell Company + Rushed Timeline
+
+1. **Dashboard**: HIGH risk tender — Enterprise IT Modernization.
+2. **Detail**: Click → Shell Company (20pts) + Rushed Timeline (10pts) + ML anomaly.
+3. **Explain**: Hit `/api/tenders/{id}/explain` → AI brief: "FastTrack Solutions registered 4 days before deadline."
+4. **Action**: Open case → transition to INVESTIGATING → add DECISION note: "Freeze payment pending verification."
+
+### Scenario C: Conflict of Interest
+
+1. **Dashboard**: Supply of Pharmaceutical Products (risk score: 61).
+2. **Detail**: Conflict of Interest (30pts) — director is sibling of procurement officer.
+3. **Trace**: "Explore Connections" → graph highlights Director → Official path.
+4. **Case**: Open case → ESCALATED → add ACTION note: "Refer to internal audit committee."
 
 ---
 

@@ -162,3 +162,53 @@ export interface CommunitiesResponse {
   clusters: CommunityCluster[];
   total: number;
 }
+
+// Case Management
+export type CaseStatus =
+  | "OPEN"
+  | "INVESTIGATING"
+  | "ESCALATED"
+  | "RESOLVED"
+  | "DISMISSED";
+
+export type NoteType = "OBSERVATION" | "EVIDENCE" | "DECISION" | "ACTION";
+
+export interface CaseNote {
+  id: string;
+  case_id: string;
+  author: string;
+  content: string;
+  note_type: NoteType;
+  created_at: string;
+}
+
+export interface Case {
+  id: string;
+  tender_id: string;
+  title: string;
+  status: CaseStatus;
+  priority: RiskCategory;
+  assigned_to: string | null;
+  created_by: string;
+  summary: string | null;
+  decision: string | null;
+  created_at: string;
+  updated_at: string;
+  notes: CaseNote[];
+}
+
+export interface CaseWithTender {
+  case: Case;
+  tender_title: string;
+  risk_score: number;
+  risk_category: RiskCategory;
+}
+
+export interface CaseStats {
+  total: number;
+  open: number;
+  investigating: number;
+  escalated: number;
+  resolved: number;
+  dismissed: number;
+}

@@ -9,6 +9,8 @@ import type {
   GraphData,
   CartelsResponse,
   CommunitiesResponse,
+  CaseWithTender,
+  CaseStats,
   RiskCategory,
   TenderStatus,
 } from "./types";
@@ -69,6 +71,76 @@ export async function getCommunities(): Promise<CommunitiesResponse> {
 
 export async function getCommunityGraph(clusterId: string): Promise<GraphData> {
   return fetchApi<GraphData>(`/api/graph/communities/${clusterId}`);
+}
+
+// --- Case Management ---
+
+export async function getCases(options?: {
+  status?: string;
+  priority?: string;
+}): Promise<CaseWithTender[]> {
+  const params = new URLSearchParams();
+  if (options?.status) params.set("status", options.status);
+  if (options?.priority) params.set("priority", options.priority);
+  const qs = params.toString();
+  return fetchApi<CaseWithTender[]>(`/api/cases${qs ? `?${qs}` : ""}`);
+}
+
+export async function getCaseStats(): Promise<CaseStats> {
+  return fetchApi<CaseStats>("/api/cases/stats");
+}
+
+export async function getCaseDetail(caseId: string): Promise<CaseWithTender> {
+  return fetchApi<CaseWithTender>(`/api/cases/${caseId}`);
+}
+
+export async function createCase(data: {
+  tender_id: string;
+  title: string;
+  priority?: string;
+  assigned_to?: string;
+  summary?: string;
+  created_by?: string;
+}): Promise<CaseWithTender> {
+  const response = await fetch(`${API_BASE}/api/cases`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  return response.json();
+}
+
+export async function updateCase(
+  caseId: string,
+  data: {
+    status?: string;
+    priority?: string;
+    assigned_to?: string;
+    summary?: string;
+    decision?: string;
+  }
+): Promise<CaseWithTender> {
+  const response = await fetch(`${API_BASE}/api/cases/${caseId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  return response.json();
+}
+
+export async function addCaseNote(
+  caseId: string,
+  data: { content: string; author?: string; note_type?: string }
+): Promise<unknown> {
+  const response = await fetch(`${API_BASE}/api/cases/${caseId}/notes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  return response.json();
 }
 
 // Utility functions

@@ -8,8 +8,18 @@ from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import (
-    String, Text, Integer, Float, Boolean, Date, DateTime,
-    ForeignKey, UniqueConstraint, CheckConstraint, Index, JSON
+    String,
+    Text,
+    Integer,
+    Float,
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    UniqueConstraint,
+    CheckConstraint,
+    Index,
+    JSON,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -23,12 +33,17 @@ def gen_uuid():
 
 # --- Core Entities ---
 
+
 class CompanyDB(Base):
     __tablename__ = "companies"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    registration_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    registration_number: Mapped[str] = mapped_column(
+        String(50), unique=True, nullable=False
+    )
     registration_date: Mapped[date] = mapped_column(Date, nullable=False)
     address: Mapped[str] = mapped_column(Text, nullable=False)
     phone: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -38,13 +53,17 @@ class CompanyDB(Base):
         secondary="company_directors", back_populates="companies"
     )
     bids: Mapped[list["BidDB"]] = relationship(back_populates="company")
-    won_tenders: Mapped[list["TenderDB"]] = relationship(back_populates="winning_company")
+    won_tenders: Mapped[list["TenderDB"]] = relationship(
+        back_populates="winning_company"
+    )
 
 
 class DirectorDB(Base):
     __tablename__ = "directors"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     national_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -58,35 +77,51 @@ class CompanyDirectorDB(Base):
     __tablename__ = "company_directors"
 
     company_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), primary_key=True
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        primary_key=True,
     )
     director_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("directors.id", ondelete="CASCADE"), primary_key=True
+        UUID(as_uuid=True),
+        ForeignKey("directors.id", ondelete="CASCADE"),
+        primary_key=True,
     )
 
 
 class OfficialDB(Base):
     __tablename__ = "officials"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     department: Mapped[str] = mapped_column(String(255), nullable=False)
     position: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    related_persons: Mapped[list["OfficialRelationshipDB"]] = relationship(back_populates="official")
-    tenders: Mapped[list["TenderDB"]] = relationship(back_populates="procurement_officer")
+    related_persons: Mapped[list["OfficialRelationshipDB"]] = relationship(
+        back_populates="official"
+    )
+    tenders: Mapped[list["TenderDB"]] = relationship(
+        back_populates="procurement_officer"
+    )
 
 
 class OfficialRelationshipDB(Base):
     __tablename__ = "official_relationships"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
     official_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("officials.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("officials.id", ondelete="CASCADE"),
+        nullable=False,
     )
     person_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("directors.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("directors.id", ondelete="CASCADE"),
+        nullable=False,
     )
     relationship_type: Mapped[str] = mapped_column(String(50), nullable=False)
 
@@ -101,8 +136,12 @@ class OfficialRelationshipDB(Base):
 class TenderDB(Base):
     __tablename__ = "tenders"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
-    reference_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    reference_number: Mapped[str] = mapped_column(
+        String(50), unique=True, nullable=False
+    )
     title: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     procuring_entity: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -119,12 +158,20 @@ class TenderDB(Base):
         UUID(as_uuid=True), ForeignKey("officials.id"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
 
-    winning_company: Mapped[Optional["CompanyDB"]] = relationship(back_populates="won_tenders")
-    procurement_officer: Mapped[Optional["OfficialDB"]] = relationship(back_populates="tenders")
+    winning_company: Mapped[Optional["CompanyDB"]] = relationship(
+        back_populates="won_tenders"
+    )
+    procurement_officer: Mapped[Optional["OfficialDB"]] = relationship(
+        back_populates="tenders"
+    )
     bids: Mapped[list["BidDB"]] = relationship(back_populates="tender")
-    risk_assessments: Mapped[list["RiskAssessmentDB"]] = relationship(back_populates="tender")
+    risk_assessments: Mapped[list["RiskAssessmentDB"]] = relationship(
+        back_populates="tender"
+    )
 
     __table_args__ = (
         CheckConstraint("estimated_value >= 0", name="ck_positive_estimated_value"),
@@ -136,12 +183,16 @@ class TenderDB(Base):
 class BidDB(Base):
     __tablename__ = "bids"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
     tender_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenders.id", ondelete="CASCADE"), nullable=False
     )
     company_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
     )
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     submission_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
@@ -159,10 +210,13 @@ class BidDB(Base):
 
 # --- Risk Assessment ---
 
+
 class RiskAssessmentDB(Base):
     __tablename__ = "risk_assessments"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
     tender_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenders.id", ondelete="CASCADE"), nullable=False
     )
@@ -179,21 +233,101 @@ class RiskAssessmentDB(Base):
     tender: Mapped["TenderDB"] = relationship(back_populates="risk_assessments")
 
     __table_args__ = (
-        CheckConstraint("overall_score >= 0 AND overall_score <= 100", name="ck_score_range"),
+        CheckConstraint(
+            "overall_score >= 0 AND overall_score <= 100", name="ck_score_range"
+        ),
         Index("ix_risk_tender", "tender_id"),
     )
 
 
 # --- Audit Trail ---
 
+# --- Case Management ---
+
+
+class CaseDB(Base):
+    __tablename__ = "cases"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    tender_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenders.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEN")
+    priority: Mapped[str] = mapped_column(String(10), nullable=False, default="MEDIUM")
+    assigned_to: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_by: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="system"
+    )
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    decision: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    tender: Mapped["TenderDB"] = relationship()
+    notes: Mapped[list["CaseNoteDB"]] = relationship(
+        back_populates="case", order_by="CaseNoteDB.created_at.desc()"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('OPEN', 'INVESTIGATING', 'ESCALATED', 'RESOLVED', 'DISMISSED')",
+            name="ck_case_status",
+        ),
+        CheckConstraint(
+            "priority IN ('HIGH', 'MEDIUM', 'LOW')",
+            name="ck_case_priority",
+        ),
+        Index("ix_cases_status", "status"),
+        Index("ix_cases_tender", "tender_id"),
+    )
+
+
+class CaseNoteDB(Base):
+    __tablename__ = "case_notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    author: Mapped[str] = mapped_column(String(255), nullable=False, default="auditor")
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    note_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="OBSERVATION"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    case: Mapped["CaseDB"] = relationship(back_populates="notes")
+
+    __table_args__ = (
+        CheckConstraint(
+            "note_type IN ('OBSERVATION', 'EVIDENCE', 'DECISION', 'ACTION')",
+            name="ck_note_type",
+        ),
+        Index("ix_notes_case", "case_id"),
+    )
+
+
 class AuditLogDB(Base):
     __tablename__ = "audit_log"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=gen_uuid)
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     action: Mapped[str] = mapped_column(String(50), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    entity_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    entity_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

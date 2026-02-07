@@ -5,8 +5,9 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useDashboardStats, useTenders, useTenderDetail, useTenderGraph } from "@/hooks/useTenders";
-import { formatKES } from "@/lib/api";
+import { formatKES, createCase } from "@/lib/api";
 import type { RiskCategory } from "@/lib/types";
 import { TenderCard } from "@/components/TenderCard";
 import { TenderDetailModal } from "@/components/TenderDetailModal";
@@ -27,6 +28,7 @@ import {
   Clock,
   TrendingUp,
   Network,
+  FolderOpen,
   Loader2,
 } from "lucide-react";
 import Link from "next/link";
@@ -34,6 +36,7 @@ import Link from "next/link";
 type FilterTab = "ALL" | RiskCategory;
 
 export default function Dashboard() {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<FilterTab>("ALL");
   const [selectedTenderId, setSelectedTenderId] = useState<string | null>(null);
   const [showGraph, setShowGraph] = useState(false);
@@ -70,13 +73,22 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <Link
-              href="/graph"
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
-            >
-              <Network size={18} />
-              Explore Shadow Graph
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link
+                href="/cases"
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-50 rounded-lg transition-colors"
+              >
+                <FolderOpen size={18} />
+                Cases
+              </Link>
+              <Link
+                href="/graph"
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
+              >
+                <Network size={18} />
+                Shadow Graph
+              </Link>
+            </div>
           </div>
         </div>
       </header>
@@ -188,6 +200,18 @@ export default function Dashboard() {
         isOpen={!!selectedTenderId && !showGraph}
         onClose={() => setSelectedTenderId(null)}
         onViewGraph={() => setShowGraph(true)}
+        onOpenCase={async (tenderId, tenderTitle) => {
+          try {
+            await createCase({
+              tender_id: tenderId,
+              title: `Investigation: ${tenderTitle}`,
+            });
+            setSelectedTenderId(null);
+            router.push("/cases");
+          } catch {
+            // silent
+          }
+        }}
       />
 
       {/* Graph Modal */}

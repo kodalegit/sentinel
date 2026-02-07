@@ -12,12 +12,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db.models import (
-    CompanyDB, DirectorDB, OfficialDB, OfficialRelationshipDB,
-    TenderDB, BidDB, RiskAssessmentDB, CompanyDirectorDB, AuditLogDB,
+    CompanyDB,
+    DirectorDB,
+    OfficialDB,
+    OfficialRelationshipDB,
+    TenderDB,
+    BidDB,
+    RiskAssessmentDB,
+    CompanyDirectorDB,
+    AuditLogDB,
+    CaseDB,
+    CaseNoteDB,
 )
 
 
 # --- Company ---
+
 
 async def get_companies(db: AsyncSession) -> list[CompanyDB]:
     result = await db.execute(
@@ -37,6 +47,7 @@ async def get_company(db: AsyncSession, company_id: uuid.UUID) -> CompanyDB | No
 
 # --- Director ---
 
+
 async def get_directors(db: AsyncSession) -> list[DirectorDB]:
     result = await db.execute(
         select(DirectorDB).options(selectinload(DirectorDB.companies))
@@ -46,6 +57,7 @@ async def get_directors(db: AsyncSession) -> list[DirectorDB]:
 
 # --- Official ---
 
+
 async def get_officials(db: AsyncSession) -> list[OfficialDB]:
     result = await db.execute(
         select(OfficialDB).options(selectinload(OfficialDB.related_persons))
@@ -54,6 +66,7 @@ async def get_officials(db: AsyncSession) -> list[OfficialDB]:
 
 
 # --- Tender ---
+
 
 async def get_tenders(
     db: AsyncSession,
@@ -79,7 +92,9 @@ async def get_tender(db: AsyncSession, tender_id: uuid.UUID) -> TenderDB | None:
         .options(
             selectinload(TenderDB.bids).selectinload(BidDB.company),
             selectinload(TenderDB.winning_company).selectinload(CompanyDB.directors),
-            selectinload(TenderDB.procurement_officer).selectinload(OfficialDB.related_persons),
+            selectinload(TenderDB.procurement_officer).selectinload(
+                OfficialDB.related_persons
+            ),
             selectinload(TenderDB.risk_assessments),
         )
         .where(TenderDB.id == tender_id)
@@ -89,7 +104,10 @@ async def get_tender(db: AsyncSession, tender_id: uuid.UUID) -> TenderDB | None:
 
 # --- Bid ---
 
-async def get_bids(db: AsyncSession, tender_id: Optional[uuid.UUID] = None) -> list[BidDB]:
+
+async def get_bids(
+    db: AsyncSession, tender_id: Optional[uuid.UUID] = None
+) -> list[BidDB]:
     query = select(BidDB)
     if tender_id:
         query = query.where(BidDB.tender_id == tender_id)
@@ -103,6 +121,7 @@ async def get_all_bids(db: AsyncSession) -> list[BidDB]:
 
 
 # --- Risk Assessment ---
+
 
 async def get_latest_risk_assessment(
     db: AsyncSession, tender_id: uuid.UUID
@@ -170,6 +189,7 @@ async def upsert_risk_assessment(
 
 # --- Dashboard Stats ---
 
+
 async def get_dashboard_stats(db: AsyncSession) -> dict:
     """Compute dashboard statistics from the database."""
     tender_count = await db.execute(select(func.count(TenderDB.id)))
@@ -204,7 +224,148 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
     }
 
 
+# --- Case Management ---
+
+
+async def get_cases(
+    db: AsyncSession,
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+) -> list[CaseDB]:
+    query = (
+        select(CaseDB)
+        .options(
+            selectinload(CaseDB.notes),
+            selectinload(CaseDB.tender),
+        )
+        .order_by(CaseDB.created_at.desc())
+    )
+    if status:
+        query = query.where(CaseDB.status == status)
+    if priority:
+        query = query.where(CaseDB.priority == priority)
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
+async def get_case(db: AsyncSession, case_id: uuid.UUID) -> CaseDB | None:
+    result = await db.execute(
+        select(CaseDB)
+        .options(
+            selectinload(CaseDB.notes),
+            selectinload(CaseDB.tender),
+        )
+        .where(CaseDB.id == case_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_cases_for_tender(db: AsyncSession, tender_id: uuid.UUID) -> list[CaseDB]:
+    result = await db.execute(
+        select(CaseDB)
+        .options(selectinload(CaseDB.notes))
+        .where(CaseDB.tender_id == tender_id)
+        .order_by(CaseDB.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def create_case(
+    db: AsyncSession,
+    tender_id: uuid.UUID,
+    title: str,
+    priority: str = "MEDIUM",
+    assigned_to: str | None = None,
+    created_by: str = "auditor",
+    summary: str | None = None,
+) -> CaseDB:
+    case = CaseDB(
+        tender_id=tender_id,
+        title=title,
+        priority=priority,
+        assigned_to=assigned_to,
+        created_by=created_by,
+        summary=summary,
+    )
+    db.add(case)
+    await db.flush()
+    await db.refresh(case, attribute_names=["notes", "tender"])
+    return case
+
+
+async def update_case(
+    db: AsyncSession,
+    case_id: uuid.UUID,
+    **kwargs,
+) -> CaseDB | None:
+    case = await get_case(db, case_id)
+    if not case:
+        return None
+    for key, value in kwargs.items():
+        if value is not None and hasattr(case, key):
+            setattr(case, key, value)
+    await db.flush()
+    await db.refresh(case, attribute_names=["notes", "tender"])
+    return case
+
+
+async def add_case_note(
+    db: AsyncSession,
+    case_id: uuid.UUID,
+    content: str,
+    author: str = "auditor",
+    note_type: str = "OBSERVATION",
+) -> CaseNoteDB:
+    note = CaseNoteDB(
+        case_id=case_id,
+        content=content,
+        author=author,
+        note_type=note_type,
+    )
+    db.add(note)
+    await db.flush()
+    return note
+
+
+async def get_case_stats(db: AsyncSession) -> dict:
+    """Get case management statistics."""
+    total = (await db.execute(select(func.count(CaseDB.id)))).scalar_one()
+    open_count = (
+        await db.execute(select(func.count(CaseDB.id)).where(CaseDB.status == "OPEN"))
+    ).scalar_one()
+    investigating = (
+        await db.execute(
+            select(func.count(CaseDB.id)).where(CaseDB.status == "INVESTIGATING")
+        )
+    ).scalar_one()
+    escalated = (
+        await db.execute(
+            select(func.count(CaseDB.id)).where(CaseDB.status == "ESCALATED")
+        )
+    ).scalar_one()
+    resolved = (
+        await db.execute(
+            select(func.count(CaseDB.id)).where(CaseDB.status == "RESOLVED")
+        )
+    ).scalar_one()
+    dismissed = (
+        await db.execute(
+            select(func.count(CaseDB.id)).where(CaseDB.status == "DISMISSED")
+        )
+    ).scalar_one()
+
+    return {
+        "total": total,
+        "open": open_count,
+        "investigating": investigating,
+        "escalated": escalated,
+        "resolved": resolved,
+        "dismissed": dismissed,
+    }
+
+
 # --- Audit Log ---
+
 
 async def create_audit_log(
     db: AsyncSession,

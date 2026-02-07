@@ -68,7 +68,9 @@ class PublicOfficial(BaseModel):
     name: str
     department: str
     position: str
-    related_persons: dict[str, RelationshipType] = Field(default_factory=dict)  # person_id -> relationship
+    related_persons: dict[str, RelationshipType] = Field(
+        default_factory=dict
+    )  # person_id -> relationship
 
 
 class Company(BaseModel):
@@ -124,6 +126,7 @@ class RiskScore(BaseModel):
 
 class TenderWithRisk(BaseModel):
     """Tender with computed risk score for API responses."""
+
     tender: Tender
     risk: RiskScore
     bidder_count: int = 0
@@ -131,6 +134,7 @@ class TenderWithRisk(BaseModel):
 
 class TenderDetail(BaseModel):
     """Full tender details including bids and risk breakdown."""
+
     tender: Tender
     risk: RiskScore
     bids: list[Bid] = Field(default_factory=list)
@@ -158,6 +162,78 @@ class GraphEdge(BaseModel):
 class GraphData(BaseModel):
     nodes: list[GraphNode]
     edges: list[GraphEdge]
+
+
+# Case Management
+class CaseStatus(str, Enum):
+    OPEN = "OPEN"
+    INVESTIGATING = "INVESTIGATING"
+    ESCALATED = "ESCALATED"
+    RESOLVED = "RESOLVED"
+    DISMISSED = "DISMISSED"
+
+
+class NoteType(str, Enum):
+    OBSERVATION = "OBSERVATION"
+    EVIDENCE = "EVIDENCE"
+    DECISION = "DECISION"
+    ACTION = "ACTION"
+
+
+class CaseNote(BaseModel):
+    id: str
+    case_id: str
+    author: str
+    content: str
+    note_type: NoteType
+    created_at: datetime
+
+
+class Case(BaseModel):
+    id: str
+    tender_id: str
+    title: str
+    status: CaseStatus
+    priority: RiskCategory
+    assigned_to: Optional[str] = None
+    created_by: str
+    summary: Optional[str] = None
+    decision: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    notes: list[CaseNote] = Field(default_factory=list)
+
+
+class CaseWithTender(BaseModel):
+    """Case with associated tender info for list views."""
+
+    case: Case
+    tender_title: str
+    risk_score: int
+    risk_category: RiskCategory
+
+
+class CaseCreate(BaseModel):
+    tender_id: str
+    title: str
+    priority: Optional[RiskCategory] = None
+    assigned_to: Optional[str] = None
+    summary: Optional[str] = None
+    created_by: str = "auditor"
+
+
+class CaseUpdate(BaseModel):
+    status: Optional[CaseStatus] = None
+    priority: Optional[RiskCategory] = None
+    assigned_to: Optional[str] = None
+    summary: Optional[str] = None
+    decision: Optional[str] = None
+
+
+class CaseNoteCreate(BaseModel):
+    content: str
+    author: str = "auditor"
+    note_type: NoteType = NoteType.OBSERVATION
 
 
 # Dashboard Stats
