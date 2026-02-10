@@ -2,36 +2,16 @@
 Sentinel API - FastAPI backend for public procurement oversight.
 """
 
-from fastapi import FastAPI, HTTPException, Query, Depends
+import uuid
+
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from typing import Optional
-import networkx as nx
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import (
-    Tender,
-    Company,
-    Director,
-    PublicOfficial,
-    Bid,
-    RiskScore,
-    RiskCategory,
-    TenderStatus,
-    TenderWithRisk,
-    TenderDetail,
-    GraphData,
-    DashboardStats,
-    Case,
-    CaseNote,
-    CaseStatus,
-    CaseWithTender,
-    CaseCreate,
-    CaseUpdate,
-    CaseNoteCreate,
-    NoteType,
-)
-from db.config import get_db, async_session, engine
+from config import settings
+from models import Bid, RiskScore
+from state import AppState
+from db.config import async_session
 from db import repository as repo
 from db.mappers import (
     company_to_pydantic,
@@ -39,31 +19,15 @@ from db.mappers import (
     official_to_pydantic,
     tender_to_pydantic,
     bid_to_pydantic,
-    risk_assessment_to_pydantic,
     risk_factors_to_json,
 )
-from graph.builder import (
-    build_procurement_graph,
-    get_tender_subgraph,
-    graph_to_frontend_format,
-    find_cartel_clusters,
-)
-from graph.communities import (
-    detect_communities,
-    get_cluster_subgraph,
-    find_shortest_path,
-    Cluster,
-)
-from risk.engine import compute_all_risk_scores
+from graph.builder import build_procurement_graph
 from ml.hybrid_scorer import HybridRiskScorer
-from intelligence.evidence import build_evidence_pack
-from intelligence.agent import get_agent
-
-
-# Cached data loaded from PostgreSQL on startup
-DATA_STORE: dict = {}
-GRAPH: nx.Graph | None = None
-RISK_SCORES: dict[str, RiskScore] = {}
+from routes.stats import router as stats_router
+from routes.tenders import router as tenders_router
+from routes.tenders_graph import router as tenders_graph_router
+from routes.graph import router as graph_router
+from routes.cases import router as cases_router
 
 
 async def load_data_from_db():
@@ -100,8 +64,6 @@ async def persist_risk_scores(risk_scores: dict[str, RiskScore]):
     async with async_session() as db:
         async with db.begin():
             for tender_id, risk in risk_scores.items():
-                import uuid
-
                 await repo.upsert_risk_assessment(
                     db=db,
                     tender_id=uuid.UUID(tender_id),
@@ -116,44 +78,55 @@ async def persist_risk_scores(risk_scores: dict[str, RiskScore]):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize data on startup."""
-    global DATA_STORE, GRAPH, RISK_SCORES
-
     # Load data from PostgreSQL
-    DATA_STORE = await load_data_from_db()
+    data = await load_data_from_db()
 
     # Build the shadow graph
-    GRAPH = build_procurement_graph(
-        tenders=DATA_STORE["tenders"],
-        companies=DATA_STORE["companies"],
-        directors=DATA_STORE["directors"],
-        officials=DATA_STORE["officials"],
-        bids=DATA_STORE["bids"],
+    graph = build_procurement_graph(
+        tenders=data["tenders"],
+        companies=data["companies"],
+        directors=data["directors"],
+        officials=data["officials"],
+        bids=data["bids"],
     )
 
     # Compute hybrid risk scores (rules + Isolation Forest)
     scorer = HybridRiskScorer()
-    RISK_SCORES = scorer.score_all(
-        tenders=DATA_STORE["tenders"],
-        companies=DATA_STORE["companies"],
-        directors=DATA_STORE["directors"],
-        officials=DATA_STORE["officials"],
-        bids=DATA_STORE["bids"],
-        graph=GRAPH,
+    risk_scores = scorer.score_all(
+        tenders=data["tenders"],
+        companies=data["companies"],
+        directors=data["directors"],
+        officials=data["officials"],
+        bids=data["bids"],
+        graph=graph,
     )
 
     # Update graph with risk levels
-    for tender_id, risk in RISK_SCORES.items():
-        if tender_id in GRAPH:
-            GRAPH.nodes[tender_id]["risk_level"] = risk.category.value
+    for tender_id, risk in risk_scores.items():
+        if tender_id in graph:
+            graph.nodes[tender_id]["risk_level"] = risk.category.value
 
     # Persist risk scores to DB
-    await persist_risk_scores(RISK_SCORES)
+    await persist_risk_scores(risk_scores)
 
-    print(f"Loaded {len(DATA_STORE['tenders'])} tenders from PostgreSQL")
-    print(
-        f"Built graph with {GRAPH.number_of_nodes()} nodes and {GRAPH.number_of_edges()} edges"
+    # Store typed state on the app
+    app.state.app_state = AppState(
+        tenders=data["tenders"],
+        companies=data["companies"],
+        directors=data["directors"],
+        officials=data["officials"],
+        bids=data["bids"],
+        bids_by_tender=data["bids_by_tender"],
+        graph=graph,
+        risk_scores=risk_scores,
     )
-    print(f"Computed and persisted {len(RISK_SCORES)} risk scores")
+
+    s = app.state.app_state
+    print(f"Loaded {len(s.tenders)} tenders from PostgreSQL")
+    print(
+        f"Built graph with {s.graph.number_of_nodes()} nodes and {s.graph.number_of_edges()} edges"
+    )
+    print(f"Computed and persisted {len(s.risk_scores)} risk scores")
 
     yield
 
@@ -170,489 +143,24 @@ app = FastAPI(
 # Configure CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register routers
+app.include_router(stats_router)
+app.include_router(tenders_router)
+app.include_router(tenders_graph_router)
+app.include_router(graph_router)
+app.include_router(cases_router)
 
 
 @app.get("/")
 def root():
     """Health check endpoint."""
     return {"name": "Sentinel API", "status": "operational", "version": "0.2.0"}
-
-
-@app.get("/api/stats", response_model=DashboardStats)
-def get_dashboard_stats():
-    """Get dashboard statistics."""
-    tenders = DATA_STORE["tenders"]
-
-    high_risk = sum(1 for r in RISK_SCORES.values() if r.category == RiskCategory.HIGH)
-    medium_risk = sum(
-        1 for r in RISK_SCORES.values() if r.category == RiskCategory.MEDIUM
-    )
-    low_risk = sum(1 for r in RISK_SCORES.values() if r.category == RiskCategory.LOW)
-
-    pending = sum(
-        1
-        for t in tenders.values()
-        if t.status in [TenderStatus.OPEN, TenderStatus.EVALUATION]
-    )
-
-    total_value = sum(t.estimated_value for t in tenders.values())
-    flagged_today = high_risk
-
-    return DashboardStats(
-        total_tenders=len(tenders),
-        high_risk_count=high_risk,
-        medium_risk_count=medium_risk,
-        low_risk_count=low_risk,
-        pending_review=pending,
-        total_value=total_value,
-        flagged_today=flagged_today,
-    )
-
-
-@app.get("/api/tenders", response_model=list[TenderWithRisk])
-def get_tenders(
-    risk_level: Optional[RiskCategory] = Query(
-        None, description="Filter by risk level"
-    ),
-    status: Optional[TenderStatus] = Query(None, description="Filter by tender status"),
-    sort_by: str = Query("risk", description="Sort by: risk, value, date"),
-    limit: int = Query(50, ge=1, le=100),
-):
-    """Get list of tenders with risk scores."""
-    tenders = DATA_STORE["tenders"]
-    bids_by_tender = DATA_STORE["bids_by_tender"]
-
-    results = []
-    for tender_id, tender in tenders.items():
-        risk = RISK_SCORES.get(
-            tender_id, RiskScore(overall=0, category=RiskCategory.LOW)
-        )
-
-        if risk_level and risk.category != risk_level:
-            continue
-        if status and tender.status != status:
-            continue
-
-        bidder_count = len(bids_by_tender.get(tender_id, []))
-
-        results.append(
-            TenderWithRisk(tender=tender, risk=risk, bidder_count=bidder_count)
-        )
-
-    if sort_by == "risk":
-        results.sort(key=lambda x: x.risk.overall, reverse=True)
-    elif sort_by == "value":
-        results.sort(key=lambda x: x.tender.estimated_value, reverse=True)
-    elif sort_by == "date":
-        results.sort(key=lambda x: x.tender.published_date, reverse=True)
-
-    return results[:limit]
-
-
-@app.get("/api/tenders/{tender_id}", response_model=TenderDetail)
-def get_tender_detail(tender_id: str):
-    """Get detailed tender information with full risk breakdown."""
-    tenders = DATA_STORE["tenders"]
-    companies = DATA_STORE["companies"]
-    bids_by_tender = DATA_STORE["bids_by_tender"]
-
-    if tender_id not in tenders:
-        raise HTTPException(status_code=404, detail="Tender not found")
-
-    tender = tenders[tender_id]
-    risk = RISK_SCORES.get(tender_id, RiskScore(overall=0, category=RiskCategory.LOW))
-    tender_bids = bids_by_tender.get(tender_id, [])
-
-    winning_company = None
-    if tender.awarded_to and tender.awarded_to in companies:
-        winning_company = companies[tender.awarded_to]
-
-    return TenderDetail(
-        tender=tender, risk=risk, bids=tender_bids, winning_company=winning_company
-    )
-
-
-@app.get("/api/tenders/{tender_id}/graph", response_model=GraphData)
-def get_tender_graph(tender_id: str, depth: int = Query(2, ge=1, le=3)):
-    """Get subgraph of entities connected to a specific tender."""
-    if tender_id not in DATA_STORE["tenders"]:
-        raise HTTPException(status_code=404, detail="Tender not found")
-
-    subgraph = get_tender_subgraph(GRAPH, tender_id, depth=depth)
-    return graph_to_frontend_format(subgraph)
-
-
-@app.get("/api/graph/explore", response_model=GraphData)
-def get_full_graph():
-    """Get the full shadow graph for exploration."""
-    return graph_to_frontend_format(GRAPH)
-
-
-@app.get("/api/graph/cartels")
-def get_cartel_clusters():
-    """Get detected cartel clusters (legacy endpoint)."""
-    clusters = find_cartel_clusters(GRAPH, DATA_STORE["bids"])
-    companies = DATA_STORE["companies"]
-
-    result = []
-    for cluster in clusters:
-        result.append(
-            {
-                "company_ids": list(cluster),
-                "company_names": [
-                    companies[cid].name for cid in cluster if cid in companies
-                ],
-                "size": len(cluster),
-            }
-        )
-
-    return {"cartels": result, "total": len(clusters)}
-
-
-@app.get("/api/graph/communities")
-def get_communities():
-    """Get detected bidding communities with suspicion scores."""
-    clusters = detect_communities(GRAPH, DATA_STORE["bids"], DATA_STORE["companies"])
-    return {
-        "clusters": [
-            {
-                "id": c.id,
-                "company_ids": c.company_ids,
-                "company_names": c.company_names,
-                "size": c.size,
-                "suspicion_score": round(c.suspicion_score, 1),
-                "shared_attributes": c.shared_attributes,
-                "co_bid_count": c.co_bid_count,
-                "win_pattern": c.win_pattern,
-            }
-            for c in clusters
-        ],
-        "total": len(clusters),
-    }
-
-
-@app.get("/api/graph/communities/{cluster_id}", response_model=GraphData)
-def get_community_graph(
-    cluster_id: str,
-    include_tenders: bool = Query(True),
-    include_officials: bool = Query(True),
-):
-    """Get the subgraph for a specific community cluster."""
-    clusters = detect_communities(GRAPH, DATA_STORE["bids"], DATA_STORE["companies"])
-    cluster = next((c for c in clusters if c.id == cluster_id), None)
-    if not cluster:
-        raise HTTPException(status_code=404, detail="Cluster not found")
-
-    subgraph = get_cluster_subgraph(
-        GRAPH, cluster.company_ids, include_tenders, include_officials
-    )
-    return graph_to_frontend_format(subgraph)
-
-
-@app.get("/api/graph/path")
-def get_path(
-    source: str = Query(..., description="Source entity ID"),
-    target: str = Query(..., description="Target entity ID"),
-):
-    """Find shortest path between two entities in the graph."""
-    result = find_shortest_path(GRAPH, source, target)
-    if result is None:
-        raise HTTPException(status_code=404, detail="No path found between entities")
-    return result
-
-
-@app.get("/api/graph/entity/{entity_id}", response_model=GraphData)
-def get_entity_neighborhood(
-    entity_id: str,
-    depth: int = Query(2, ge=1, le=3),
-):
-    """Get k-hop neighborhood around any entity."""
-    if entity_id not in GRAPH:
-        raise HTTPException(status_code=404, detail="Entity not found in graph")
-
-    subgraph = get_tender_subgraph(GRAPH, entity_id, depth=depth)
-    return graph_to_frontend_format(subgraph)
-
-
-@app.get("/api/companies/{company_id}")
-def get_company(company_id: str):
-    """Get company details."""
-    companies = DATA_STORE["companies"]
-    directors = DATA_STORE["directors"]
-
-    if company_id not in companies:
-        raise HTTPException(status_code=404, detail="Company not found")
-
-    company = companies[company_id]
-    company_directors = [
-        directors[did] for did in company.director_ids if did in directors
-    ]
-
-    return {"company": company, "directors": company_directors}
-
-
-@app.get("/api/tenders/{tender_id}/evidence")
-def get_evidence_pack(tender_id: str):
-    """Get structured evidence pack for a tender."""
-    tenders = DATA_STORE["tenders"]
-    companies = DATA_STORE["companies"]
-    bids_by_tender = DATA_STORE["bids_by_tender"]
-
-    if tender_id not in tenders:
-        raise HTTPException(status_code=404, detail="Tender not found")
-
-    tender = tenders[tender_id]
-    risk = RISK_SCORES.get(tender_id, RiskScore(overall=0, category=RiskCategory.LOW))
-    tender_bids = bids_by_tender.get(tender_id, [])
-
-    pack = build_evidence_pack(tender, risk, tender_bids, companies, GRAPH)
-    return pack.to_dict()
-
-
-@app.get("/api/tenders/{tender_id}/explain")
-async def explain_tender_risk(tender_id: str):
-    """Get AI-generated explanation for a tender's risk score."""
-    tenders = DATA_STORE["tenders"]
-    companies = DATA_STORE["companies"]
-    bids_by_tender = DATA_STORE["bids_by_tender"]
-
-    if tender_id not in tenders:
-        raise HTTPException(status_code=404, detail="Tender not found")
-
-    tender = tenders[tender_id]
-    risk = RISK_SCORES.get(tender_id, RiskScore(overall=0, category=RiskCategory.LOW))
-    tender_bids = bids_by_tender.get(tender_id, [])
-
-    pack = build_evidence_pack(tender, risk, tender_bids, companies, GRAPH)
-    agent = get_agent()
-    result = await agent.explain(pack)
-    return result
-
-
-# --- Case Management Endpoints ---
-
-
-def _case_db_to_pydantic(case_db) -> Case:
-    """Convert CaseDB to Pydantic Case model."""
-    return Case(
-        id=str(case_db.id),
-        tender_id=str(case_db.tender_id),
-        title=case_db.title,
-        status=CaseStatus(case_db.status),
-        priority=RiskCategory(case_db.priority),
-        assigned_to=case_db.assigned_to,
-        created_by=case_db.created_by,
-        summary=case_db.summary,
-        decision=case_db.decision,
-        created_at=case_db.created_at,
-        updated_at=case_db.updated_at,
-        notes=[
-            CaseNote(
-                id=str(n.id),
-                case_id=str(n.case_id),
-                author=n.author,
-                content=n.content,
-                note_type=NoteType(n.note_type),
-                created_at=n.created_at,
-            )
-            for n in (case_db.notes or [])
-        ],
-    )
-
-
-@app.get("/api/cases", response_model=list[CaseWithTender])
-async def list_cases(
-    status: Optional[CaseStatus] = Query(None),
-    priority: Optional[RiskCategory] = Query(None),
-    db: AsyncSession = Depends(get_db),
-):
-    """List all investigation cases with tender context."""
-    cases_db = await repo.get_cases(
-        db,
-        status=status.value if status else None,
-        priority=priority.value if priority else None,
-    )
-    results = []
-    for c in cases_db:
-        case = _case_db_to_pydantic(c)
-        tender_id = str(c.tender_id)
-        risk = RISK_SCORES.get(
-            tender_id, RiskScore(overall=0, category=RiskCategory.LOW)
-        )
-        tender_title = c.tender.title if c.tender else "Unknown"
-        results.append(
-            CaseWithTender(
-                case=case,
-                tender_title=tender_title,
-                risk_score=risk.overall,
-                risk_category=risk.category,
-            )
-        )
-    return results
-
-
-@app.get("/api/cases/stats")
-async def get_case_stats(db: AsyncSession = Depends(get_db)):
-    """Get case management statistics."""
-    return await repo.get_case_stats(db)
-
-
-@app.get("/api/cases/{case_id}", response_model=CaseWithTender)
-async def get_case_detail(case_id: str, db: AsyncSession = Depends(get_db)):
-    """Get full case detail including notes."""
-    import uuid as _uuid
-
-    case_db = await repo.get_case(db, _uuid.UUID(case_id))
-    if not case_db:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    case = _case_db_to_pydantic(case_db)
-    tender_id = str(case_db.tender_id)
-    risk = RISK_SCORES.get(tender_id, RiskScore(overall=0, category=RiskCategory.LOW))
-    tender_title = case_db.tender.title if case_db.tender else "Unknown"
-
-    return CaseWithTender(
-        case=case,
-        tender_title=tender_title,
-        risk_score=risk.overall,
-        risk_category=risk.category,
-    )
-
-
-@app.post("/api/cases", response_model=CaseWithTender, status_code=201)
-async def create_case(body: CaseCreate, db: AsyncSession = Depends(get_db)):
-    """Open a new investigation case for a tender."""
-    import uuid as _uuid
-
-    tender_id = body.tender_id
-    if tender_id not in DATA_STORE["tenders"]:
-        raise HTTPException(status_code=404, detail="Tender not found")
-
-    # Auto-set priority from risk score if not provided
-    risk = RISK_SCORES.get(tender_id, RiskScore(overall=0, category=RiskCategory.LOW))
-    priority = body.priority.value if body.priority else risk.category.value
-
-    case_db = await repo.create_case(
-        db=db,
-        tender_id=_uuid.UUID(tender_id),
-        title=body.title,
-        priority=priority,
-        assigned_to=body.assigned_to,
-        created_by=body.created_by,
-        summary=body.summary,
-    )
-    await db.commit()
-    await db.refresh(case_db, attribute_names=["notes", "tender"])
-
-    # Audit log
-    await repo.create_audit_log(
-        db=db,
-        action="CASE_CREATED",
-        entity_type="case",
-        entity_id=case_db.id,
-        details={"tender_id": tender_id},
-    )
-    await db.commit()
-
-    case = _case_db_to_pydantic(case_db)
-    tender_title = DATA_STORE["tenders"][tender_id].title
-
-    return CaseWithTender(
-        case=case,
-        tender_title=tender_title,
-        risk_score=risk.overall,
-        risk_category=risk.category,
-    )
-
-
-@app.patch("/api/cases/{case_id}", response_model=CaseWithTender)
-async def update_case(
-    case_id: str, body: CaseUpdate, db: AsyncSession = Depends(get_db)
-):
-    """Update case status, priority, assignment, or decision."""
-    import uuid as _uuid
-
-    update_fields = body.model_dump(exclude_none=True)
-    if not update_fields:
-        raise HTTPException(status_code=400, detail="No fields to update")
-
-    # Convert enums to string values for DB
-    if "status" in update_fields:
-        update_fields["status"] = update_fields["status"].value
-    if "priority" in update_fields:
-        update_fields["priority"] = update_fields["priority"].value
-
-    case_db = await repo.update_case(db, _uuid.UUID(case_id), **update_fields)
-    if not case_db:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    await db.commit()
-    await db.refresh(case_db, attribute_names=["notes", "tender"])
-
-    await repo.create_audit_log(
-        db=db,
-        action="CASE_UPDATED",
-        entity_type="case",
-        entity_id=case_db.id,
-        details=update_fields,
-    )
-    await db.commit()
-
-    case = _case_db_to_pydantic(case_db)
-    tender_id = str(case_db.tender_id)
-    risk = RISK_SCORES.get(tender_id, RiskScore(overall=0, category=RiskCategory.LOW))
-    tender_title = case_db.tender.title if case_db.tender else "Unknown"
-
-    return CaseWithTender(
-        case=case,
-        tender_title=tender_title,
-        risk_score=risk.overall,
-        risk_category=risk.category,
-    )
-
-
-@app.post("/api/cases/{case_id}/notes", status_code=201)
-async def add_note(
-    case_id: str, body: CaseNoteCreate, db: AsyncSession = Depends(get_db)
-):
-    """Add a note to an existing case."""
-    import uuid as _uuid
-
-    case_db = await repo.get_case(db, _uuid.UUID(case_id))
-    if not case_db:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    note_db = await repo.add_case_note(
-        db=db,
-        case_id=_uuid.UUID(case_id),
-        content=body.content,
-        author=body.author,
-        note_type=body.note_type.value,
-    )
-    await db.commit()
-
-    return {
-        "id": str(note_db.id),
-        "case_id": str(note_db.case_id),
-        "author": note_db.author,
-        "content": note_db.content,
-        "note_type": note_db.note_type,
-        "created_at": note_db.created_at.isoformat(),
-    }
-
-
-@app.get("/api/tenders/{tender_id}/cases", response_model=list[Case])
-async def get_tender_cases(tender_id: str, db: AsyncSession = Depends(get_db)):
-    """Get all cases associated with a tender."""
-    import uuid as _uuid
-
-    cases_db = await repo.get_cases_for_tender(db, _uuid.UUID(tender_id))
-    return [_case_db_to_pydantic(c) for c in cases_db]
 
 
 if __name__ == "__main__":

@@ -6,21 +6,14 @@ Uses LangChain v1 init_chat_model for provider-agnostic model initialization.
 Supports OpenAI, Anthropic, Google, and local models (e.g. Ollama) via config.
 """
 
-import os
 from typing import TypedDict, Optional
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END
 
+from config import settings
 from intelligence.evidence import EvidencePack
-
-# Model config from environment - supports "provider:model" format
-# Examples: "openai:gpt-4o-mini", "anthropic:claude-3-haiku-20240307", "ollama:llama3"
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
-LLM_BASE_URL = os.getenv("LLM_BASE_URL")  # For local/proxy models
 
 
 SYSTEM_PROMPT = """You are a senior procurement auditor assistant for Kenya's government agencies.
@@ -133,12 +126,12 @@ class InvestigationAgent:
         """
         try:
             kwargs = {
-                "model": LLM_MODEL,
-                "model_provider": LLM_PROVIDER,
-                "temperature": LLM_TEMPERATURE,
+                "model": settings.llm_model,
+                "model_provider": settings.llm_provider,
+                "temperature": settings.llm_temperature,
             }
-            if LLM_BASE_URL:
-                kwargs["base_url"] = LLM_BASE_URL
+            if settings.llm_base_url:
+                kwargs["base_url"] = settings.llm_base_url
             self.llm = init_chat_model(**kwargs)
         except Exception:
             # No valid credentials or provider — LLM stays None, template fallback used
