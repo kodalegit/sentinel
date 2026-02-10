@@ -1,13 +1,9 @@
-import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
-from dotenv import load_dotenv
 
 from alembic import context
-
-load_dotenv()
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -18,14 +14,14 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-from db.config import SYNC_DATABASE_URL
+from config import settings
 from db.models import *  # noqa: F401, F403 - import all models for autogenerate
 from db.config import Base
 
 target_metadata = Base.metadata
 
 # Override sqlalchemy.url from environment
-config.set_main_option("sqlalchemy.url", SYNC_DATABASE_URL)
+config.set_main_option("sqlalchemy.url", settings.sync_database_url)
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
