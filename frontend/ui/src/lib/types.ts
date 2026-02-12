@@ -10,7 +10,8 @@ export type RiskFactorType =
   | "SHELL_COMPANY"
   | "CONFLICT_OF_INTEREST"
   | "PRICE_ANOMALY"
-  | "RUSHED_TIMELINE";
+  | "RUSHED_TIMELINE"
+  | "ML_ANOMALY";
 export type NodeType = "COMPANY" | "DIRECTOR" | "OFFICIAL" | "TENDER";
 export type EdgeType =
   | "DIRECTOR_OF"

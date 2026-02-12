@@ -75,6 +75,12 @@ const FACTOR_CONFIG: Record<
     accent: "text-[#35638c]",
     border: "border-[#35638c]/20 bg-[#35638c]/10",
   },
+  ML_ANOMALY: {
+    icon: <ShieldAlert size={16} />,
+    label: "ML Anomaly",
+    accent: "text-[#6b4bbd]",
+    border: "border-[#6b4bbd]/20 bg-[#6b4bbd]/10",
+  },
 };
 
 export default function TenderDetailPage({
@@ -392,7 +398,12 @@ function MetaItem({
 }
 
 function RiskFactorCard({ factor }: { factor: RiskFactor }) {
-  const cfg = FACTOR_CONFIG[factor.type];
+  const cfg = FACTOR_CONFIG[factor.type] ?? {
+    icon: <AlertTriangle size={16} />,
+    label: factor.type,
+    accent: "text-muted-foreground",
+    border: "border-border/60 bg-card",
+  };
 
   return (
     <div className={`rounded-xl border p-4 ${cfg.border}`}>
