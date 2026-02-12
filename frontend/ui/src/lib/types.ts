@@ -127,18 +127,6 @@ export interface DashboardStats {
   flagged_today: number;
 }
 
-// Cartel response
-export interface CartelCluster {
-  company_ids: string[];
-  company_names: string[];
-  size: number;
-}
-
-export interface CartelsResponse {
-  cartels: CartelCluster[];
-  total: number;
-}
-
 // Community detection
 export interface CommunityCluster {
   id: string;

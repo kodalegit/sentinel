@@ -17,7 +17,7 @@ from models import (
     RiskCategory,
 )
 from risk.engine import compute_risk_score
-from graph.builder import find_cartel_clusters
+from graph.communities import detect_communities, get_cartel_sets, Cluster
 from ml.features import extract_tender_features
 from ml.anomaly_detector import AnomalyDetector
 
@@ -40,9 +40,16 @@ class HybridRiskScorer:
         companies: dict[str, Company],
         bids: list[Bid],
         graph: nx.Graph,
+        bids_by_tender: dict[str, list[Bid]] | None = None,
     ):
         """Train the Isolation Forest on current data."""
-        features_df = extract_tender_features(tenders, companies, bids, graph)
+        features_df = extract_tender_features(
+            tenders,
+            companies,
+            bids,
+            graph,
+            bids_by_tender=bids_by_tender,
+        )
         self.detector.fit(features_df)
         self.detector.save("default")
 
@@ -54,30 +61,41 @@ class HybridRiskScorer:
         officials: dict[str, PublicOfficial],
         bids: list[Bid],
         graph: nx.Graph,
+        communities: list[Cluster] | None = None,
+        bids_by_tender: dict[str, list[Bid]] | None = None,
     ) -> dict[str, RiskScore]:
         """
         Compute hybrid risk scores for all tenders.
         Falls back to rules-only if ML model is not fitted.
         """
+        # Build lookup structures
+        if bids_by_tender is None:
+            bids_by_tender = {}
+            for b in bids:
+                bids_by_tender.setdefault(b.tender_id, []).append(b)
+
         # Extract features and score with ML
-        features_df = extract_tender_features(tenders, companies, bids, graph)
+        features_df = extract_tender_features(
+            tenders,
+            companies,
+            bids,
+            graph,
+            bids_by_tender=bids_by_tender,
+        )
         ml_scores = None
 
         if not self.detector.is_fitted:
             loaded = self.detector.load("default")
             if not loaded:
-                self.fit(tenders, companies, bids, graph)
+                self.fit(tenders, companies, bids, graph, bids_by_tender=bids_by_tender)
 
         if self.detector.is_fitted:
             ml_scores = self.detector.score(features_df)
 
-        # Build lookup structures
-        bids_by_tender: dict[str, list[Bid]] = {}
-        for b in bids:
-            bids_by_tender.setdefault(b.tender_id, []).append(b)
-
-        # Pre-compute cartel clusters once
-        cartel_clusters = find_cartel_clusters(graph, bids)
+        # Use Louvain communities for cartel detection (unified algorithm)
+        if communities is None:
+            communities = detect_communities(graph, bids, companies)
+        cartel_clusters = get_cartel_sets(communities)
 
         results = {}
         for tid, tender in tenders.items():
@@ -112,17 +130,18 @@ class HybridRiskScorer:
             # Add ML factor if significant
             factors = list(rule_risk.factors)
             if ml_anomaly_score >= 50:
+                # SHAP values are signed: format with direction indicator
                 top_features = ", ".join(
-                    f"{k} ({v:.0%})" for k, v in list(ml_importance.items())[:3]
+                    f"{k} ({v:+.3f})" for k, v in list(ml_importance.items())[:3]
                 )
                 factors.append(
                     RiskFactor(
-                        type=RiskFactorType.PRICE_ANOMALY,
+                        type=RiskFactorType.ML_ANOMALY,
                         description=f"ML anomaly detection flagged this tender (score: {ml_anomaly_score:.0f}/100). Top signals: {top_features}",
                         weight=int(ml_anomaly_score * ML_WEIGHT * 0.4),
                         evidence=[
                             f"Isolation Forest anomaly score: {ml_anomaly_score:.1f}/100",
-                            f"Top contributing features: {top_features}",
+                            f"Top contributing features (SHAP): {top_features}",
                         ],
                         related_entity_ids=[],
                     )

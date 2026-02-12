@@ -22,6 +22,7 @@ from db.mappers import (
     risk_factors_to_json,
 )
 from graph.builder import build_procurement_graph
+from graph.communities import detect_communities
 from ml.hybrid_scorer import HybridRiskScorer
 from routes.stats import router as stats_router
 from routes.tenders import router as tenders_router
@@ -90,6 +91,9 @@ async def lifespan(app: FastAPI):
         bids=data["bids"],
     )
 
+    # Detect communities once (Louvain) — cached for routes and rule engine
+    communities = detect_communities(graph, data["bids"], data["companies"])
+
     # Compute hybrid risk scores (rules + Isolation Forest)
     scorer = HybridRiskScorer()
     risk_scores = scorer.score_all(
@@ -99,6 +103,8 @@ async def lifespan(app: FastAPI):
         officials=data["officials"],
         bids=data["bids"],
         graph=graph,
+        communities=communities,
+        bids_by_tender=data["bids_by_tender"],
     )
 
     # Update graph with risk levels
@@ -119,6 +125,7 @@ async def lifespan(app: FastAPI):
         bids_by_tender=data["bids_by_tender"],
         graph=graph,
         risk_scores=risk_scores,
+        communities=communities,
     )
 
     s = app.state.app_state
@@ -126,6 +133,7 @@ async def lifespan(app: FastAPI):
     print(
         f"Built graph with {s.graph.number_of_nodes()} nodes and {s.graph.number_of_edges()} edges"
     )
+    print(f"Detected {len(s.communities)} bidding communities")
     print(f"Computed and persisted {len(s.risk_scores)} risk scores")
 
     yield

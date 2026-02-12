@@ -7,7 +7,6 @@ import type {
   TenderWithRisk,
   TenderDetail,
   GraphData,
-  CartelsResponse,
   CommunitiesResponse,
   CaseWithTender,
   CaseStats,
@@ -52,17 +51,13 @@ export async function getTenderDetail(tenderId: string): Promise<TenderDetail> {
 
 export async function getTenderGraph(
   tenderId: string,
-  depth: number = 2
+  depth: number = 2,
 ): Promise<GraphData> {
   return fetchApi<GraphData>(`/api/tenders/${tenderId}/graph?depth=${depth}`);
 }
 
 export async function getFullGraph(): Promise<GraphData> {
   return fetchApi<GraphData>("/api/graph/explore");
-}
-
-export async function getCartels(): Promise<CartelsResponse> {
-  return fetchApi<CartelsResponse>("/api/graph/cartels");
 }
 
 export async function getCommunities(): Promise<CommunitiesResponse> {
@@ -119,7 +114,7 @@ export async function updateCase(
     assigned_to?: string;
     summary?: string;
     decision?: string;
-  }
+  },
 ): Promise<CaseWithTender> {
   const response = await fetch(`${API_BASE}/api/cases/${caseId}`, {
     method: "PATCH",
@@ -132,7 +127,7 @@ export async function updateCase(
 
 export async function addCaseNote(
   caseId: string,
-  data: { content: string; author?: string; note_type?: string }
+  data: { content: string; author?: string; note_type?: string },
 ): Promise<unknown> {
   const response = await fetch(`${API_BASE}/api/cases/${caseId}/notes`, {
     method: "POST",

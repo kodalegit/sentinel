@@ -12,20 +12,45 @@ from collections import defaultdict
 from models import Tender, Company, Bid, TenderStatus
 
 
+def _precompute_official_distances(graph: nx.Graph) -> dict[str, int]:
+    """
+    Pre-compute shortest distance from every node to the nearest OFFICIAL node.
+    Uses multi-source BFS from all officials — O(V + E) total.
+    """
+    officials = [
+        n for n, attrs in graph.nodes(data=True) if attrs.get("type") == "OFFICIAL"
+    ]
+    if not officials:
+        return {}
+
+    # Reverse lookup: BFS from all officials simultaneously
+    distances: dict[str, int] = {}
+    for src in officials:
+        for node, dist in nx.single_source_shortest_path_length(graph, src).items():
+            if node not in distances or dist < distances[node]:
+                distances[node] = dist
+    return distances
+
+
 def extract_tender_features(
     tenders: dict[str, Tender],
     companies: dict[str, Company],
     bids: list[Bid],
     graph: nx.Graph,
+    bids_by_tender: dict[str, list[Bid]] | None = None,
 ) -> pd.DataFrame:
     """
     Extract numerical features for each tender.
     Returns a DataFrame indexed by tender_id.
+
+    All features are category-agnostic (ratios / natural units) so a single
+    Isolation Forest works across procurement domains.
     """
-    # Pre-compute aggregates
-    bids_by_tender = defaultdict(list)
-    for b in bids:
-        bids_by_tender[b.tender_id].append(b)
+    # Use pre-computed bids_by_tender if provided, otherwise build it
+    if bids_by_tender is None:
+        bids_by_tender = defaultdict(list)
+        for b in bids:
+            bids_by_tender[b.tender_id].append(b)
 
     # Category-level stats for z-scores
     category_values = defaultdict(list)
@@ -50,16 +75,18 @@ def extract_tender_features(
         if t.awarded_to:
             company_wins[t.awarded_to] += 1
 
+    # Pre-compute official distances once (multi-source BFS)
+    official_dist = _precompute_official_distances(graph)
+
     rows = []
     for tid, tender in tenders.items():
         tender_bids = bids_by_tender.get(tid, [])
         bid_amounts = [b.amount for b in tender_bids]
+        est = tender.estimated_value
 
         # Price features
         price_ratio = (
-            tender.awarded_amount / tender.estimated_value
-            if tender.awarded_amount and tender.estimated_value > 0
-            else 0.0
+            tender.awarded_amount / est if tender.awarded_amount and est > 0 else 0.0
         )
 
         stats = category_stats.get(tender.category, {"mean": 0, "std": 1})
@@ -72,12 +99,18 @@ def extract_tender_features(
         # Timeline features
         pub = tender.published_date
         dl = tender.deadline
-        timeline_days = (dl - pub).days if isinstance(pub, date) and isinstance(dl, date) else 30
+        timeline_days = (
+            (dl - pub).days if isinstance(pub, date) and isinstance(dl, date) else 30
+        )
 
-        # Competition features
+        # Competition features (ratios of estimated_value — category-agnostic)
         bidder_count = len(tender_bids)
-        bid_spread = max(bid_amounts) - min(bid_amounts) if len(bid_amounts) >= 2 else 0.0
-        winner_margin = 0.0
+        raw_spread = (
+            max(bid_amounts) - min(bid_amounts) if len(bid_amounts) >= 2 else 0.0
+        )
+        bid_spread_ratio = raw_spread / est if est > 0 else 0.0
+
+        winner_margin_ratio = 0.0
         if tender.awarded_to and len(bid_amounts) >= 2:
             winning_bid = next(
                 (b.amount for b in tender_bids if b.company_id == tender.awarded_to),
@@ -86,7 +119,9 @@ def extract_tender_features(
             if winning_bid is not None:
                 other_bids = sorted([a for a in bid_amounts if a != winning_bid])
                 if other_bids:
-                    winner_margin = other_bids[0] - winning_bid
+                    winner_margin_ratio = (
+                        (other_bids[0] - winning_bid) / est if est > 0 else 0.0
+                    )
 
         # Vendor maturity
         company_age_days = 0
@@ -109,36 +144,38 @@ def extract_tender_features(
             cid = tender.awarded_to
             graph_degree = graph.degree(cid)
             suspicious_edges = sum(
-                1 for _, _, d in graph.edges(cid, data=True)
+                1
+                for _, _, d in graph.edges(cid, data=True)
                 if d.get("suspicious", False)
             )
-            # Shortest path to any official
-            for node, attrs in graph.nodes(data=True):
-                if attrs.get("type") == "OFFICIAL":
-                    try:
-                        dist = nx.shortest_path_length(graph, cid, node)
-                        official_distance = min(official_distance, dist)
-                    except nx.NetworkXNoPath:
-                        pass
-            # Community size (neighbors within 2 hops)
+            # Look up pre-computed official distance
+            official_distance = official_dist.get(cid, 99)
+            # Community size: count only COMPANY nodes within 2 hops
             if cid in graph:
-                community_size = len(set(nx.single_source_shortest_path_length(graph, cid, cutoff=2)))
+                neighbors_2hop = nx.single_source_shortest_path_length(
+                    graph, cid, cutoff=2
+                )
+                community_size = sum(
+                    1 for n in neighbors_2hop if graph.nodes[n].get("type") == "COMPANY"
+                )
 
-        rows.append({
-            "tender_id": tid,
-            "price_ratio": price_ratio,
-            "price_zscore": price_zscore,
-            "timeline_days": timeline_days,
-            "bidder_count": bidder_count,
-            "bid_spread": bid_spread,
-            "winner_margin": winner_margin,
-            "company_age_days": company_age_days,
-            "win_rate": win_rate,
-            "graph_degree": graph_degree,
-            "suspicious_edges": suspicious_edges,
-            "official_distance": min(official_distance, 10),
-            "community_size": community_size,
-        })
+        rows.append(
+            {
+                "tender_id": tid,
+                "price_ratio": price_ratio,
+                "price_zscore": price_zscore,
+                "timeline_days": timeline_days,
+                "bidder_count": bidder_count,
+                "bid_spread_ratio": bid_spread_ratio,
+                "winner_margin_ratio": winner_margin_ratio,
+                "company_age_days": company_age_days,
+                "win_rate": win_rate,
+                "graph_degree": graph_degree,
+                "suspicious_edges": suspicious_edges,
+                "official_distance": min(official_distance, 10),
+                "community_size": community_size,
+            }
+        )
 
     df = pd.DataFrame(rows).set_index("tender_id")
     return df
@@ -149,8 +186,8 @@ FEATURE_COLUMNS = [
     "price_zscore",
     "timeline_days",
     "bidder_count",
-    "bid_spread",
-    "winner_margin",
+    "bid_spread_ratio",
+    "winner_margin_ratio",
     "company_age_days",
     "win_rate",
     "graph_degree",

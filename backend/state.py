@@ -16,6 +16,7 @@ from models import (
     Bid,
     RiskScore,
 )
+from graph.communities import Cluster
 
 
 @dataclass
@@ -30,6 +31,7 @@ class AppState:
     bids_by_tender: dict[str, list[Bid]] = field(default_factory=dict)
     graph: nx.Graph = field(default_factory=nx.Graph)
     risk_scores: dict[str, RiskScore] = field(default_factory=dict)
+    communities: list[Cluster] = field(default_factory=list)
 
 
 def get_state(request: Request) -> AppState:

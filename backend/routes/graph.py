@@ -7,10 +7,8 @@ from state import State
 from graph.builder import (
     get_tender_subgraph,
     graph_to_frontend_format,
-    find_cartel_clusters,
 )
 from graph.communities import (
-    detect_communities,
     get_cluster_subgraph,
     find_shortest_path,
 )
@@ -24,32 +22,9 @@ def get_full_graph(state: State):
     return graph_to_frontend_format(state.graph)
 
 
-@router.get("/cartels")
-def get_cartel_clusters(state: State):
-    """Get detected cartel clusters (legacy endpoint)."""
-    clusters = find_cartel_clusters(state.graph, state.bids)
-
-    result = []
-    for cluster in clusters:
-        result.append(
-            {
-                "company_ids": list(cluster),
-                "company_names": [
-                    state.companies[cid].name
-                    for cid in cluster
-                    if cid in state.companies
-                ],
-                "size": len(cluster),
-            }
-        )
-
-    return {"cartels": result, "total": len(clusters)}
-
-
 @router.get("/communities")
 def get_communities(state: State):
-    """Get detected bidding communities with suspicion scores."""
-    clusters = detect_communities(state.graph, state.bids, state.companies)
+    """Get detected bidding communities with suspicion scores (cached at startup)."""
     return {
         "clusters": [
             {
@@ -62,9 +37,9 @@ def get_communities(state: State):
                 "co_bid_count": c.co_bid_count,
                 "win_pattern": c.win_pattern,
             }
-            for c in clusters
+            for c in state.communities
         ],
-        "total": len(clusters),
+        "total": len(state.communities),
     }
 
 
@@ -76,8 +51,7 @@ def get_community_graph(
     include_officials: bool = Query(True),
 ):
     """Get the subgraph for a specific community cluster."""
-    clusters = detect_communities(state.graph, state.bids, state.companies)
-    cluster = next((c for c in clusters if c.id == cluster_id), None)
+    cluster = next((c for c in state.communities if c.id == cluster_id), None)
     if not cluster:
         raise HTTPException(status_code=404, detail="Cluster not found")
 

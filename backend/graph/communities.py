@@ -13,6 +13,7 @@ from models import Bid, Company
 @dataclass
 class Cluster:
     """A detected community of related companies."""
+
     id: str
     company_ids: list[str]
     company_names: list[str]
@@ -55,9 +56,7 @@ def detect_communities(
             continue
 
         company_ids = list(community)
-        company_names = [
-            companies[cid].name for cid in company_ids if cid in companies
-        ]
+        company_names = [companies[cid].name for cid in company_ids if cid in companies]
 
         shared = _find_shared_attributes(G, company_ids, companies)
         co_bids = _count_co_bids(bids, set(company_ids))
@@ -66,18 +65,28 @@ def detect_communities(
             shared, co_bids, wins, len(company_ids), G, company_ids
         )
 
-        clusters.append(Cluster(
-            id=f"cluster-{idx}",
-            company_ids=company_ids,
-            company_names=company_names,
-            size=len(company_ids),
-            suspicion_score=score,
-            shared_attributes=shared,
-            co_bid_count=co_bids,
-            win_pattern=wins,
-        ))
+        clusters.append(
+            Cluster(
+                id=f"cluster-{idx}",
+                company_ids=company_ids,
+                company_names=company_names,
+                size=len(company_ids),
+                suspicion_score=score,
+                shared_attributes=shared,
+                co_bid_count=co_bids,
+                win_pattern=wins,
+            )
+        )
 
     return sorted(clusters, key=lambda c: c.suspicion_score, reverse=True)
+
+
+def get_cartel_sets(clusters: list[Cluster]) -> list[set[str]]:
+    """
+    Extract company ID sets from Louvain clusters for the rule engine's cartel check.
+    Returns list of sets, each containing company IDs in a community.
+    """
+    return [set(c.company_ids) for c in clusters]
 
 
 def get_cluster_subgraph(
@@ -129,21 +138,25 @@ def find_shortest_path(
     path_nodes = []
     for nid in path:
         attrs = G.nodes[nid]
-        path_nodes.append({
-            "id": nid,
-            "type": attrs.get("type", "UNKNOWN"),
-            "label": attrs.get("label", nid),
-        })
+        path_nodes.append(
+            {
+                "id": nid,
+                "type": attrs.get("type", "UNKNOWN"),
+                "label": attrs.get("label", nid),
+            }
+        )
 
     path_edges = []
     for i in range(len(path) - 1):
         edge_data = G.edges[path[i], path[i + 1]]
-        path_edges.append({
-            "source": path[i],
-            "target": path[i + 1],
-            "relationship": edge_data.get("relationship", "UNKNOWN"),
-            "suspicious": edge_data.get("suspicious", False),
-        })
+        path_edges.append(
+            {
+                "source": path[i],
+                "target": path[i + 1],
+                "relationship": edge_data.get("relationship", "UNKNOWN"),
+                "suspicious": edge_data.get("suspicious", False),
+            }
+        )
 
     return {
         "nodes": path_nodes,
@@ -153,6 +166,7 @@ def find_shortest_path(
 
 
 # --- Private helpers ---
+
 
 def _build_co_bidding_graph(bids: list[Bid]) -> nx.Graph:
     """Build a weighted graph of companies that bid on the same tenders."""
@@ -165,7 +179,7 @@ def _build_co_bidding_graph(bids: list[Bid]) -> nx.Graph:
     for bidders in tender_bidders.values():
         bidder_list = sorted(bidders)
         for i, c1 in enumerate(bidder_list):
-            for c2 in bidder_list[i + 1:]:
+            for c2 in bidder_list[i + 1 :]:
                 co_bid_counts[(c1, c2)] += 1
 
     for (c1, c2), count in co_bid_counts.items():

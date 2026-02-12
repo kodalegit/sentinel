@@ -29,6 +29,7 @@ class RiskFactorType(str, Enum):
     CONFLICT_OF_INTEREST = "CONFLICT_OF_INTEREST"
     PRICE_ANOMALY = "PRICE_ANOMALY"
     RUSHED_TIMELINE = "RUSHED_TIMELINE"
+    ML_ANOMALY = "ML_ANOMALY"
 
 
 class NodeType(str, Enum):
