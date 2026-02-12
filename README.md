@@ -132,12 +132,16 @@ docker compose up
 
 ```bash
 cd backend
-uv sync --dev
+uv sync --dev --prerelease=allow
 source .venv/bin/activate
 python -m alembic upgrade head
 python seed.py
 uvicorn main:app --reload
 ```
+
+In dev, use `uv run --prerelease=allow fastapi dev main.py` to run the app.
+
+Note: The backend currently depends on `shap==0.50.0`, which pulls prerelease builds of `numba/llvmlite` for Python 3.12. If you're using `uv`, include `--prerelease=allow` when syncing/running.
 
 **Frontend:**
 
@@ -146,6 +150,23 @@ cd frontend/ui
 pnpm install
 pnpm dev
 ```
+
+### **LLM Configuration (optional)**
+
+Set in `.env` to enable AI-powered explanations:
+
+```bash
+LLM_MODEL=gpt-5-mini
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+
+# Or use Ollama for local models:
+LLM_MODEL=llama3
+LLM_PROVIDER=ollama
+LLM_BASE_URL=http://localhost:11434/v1
+```
+
+Without an LLM key, the system falls back to structured template explanations.
 
 ---
 
