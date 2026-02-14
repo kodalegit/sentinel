@@ -5,15 +5,21 @@ Creates realistic Kenyan procurement data with embedded fraud patterns.
 
 from datetime import date, datetime, timedelta
 from models import (
-    Tender, Company, Director, PublicOfficial, Bid,
-    TenderStatus, RelationshipType
+    Tender,
+    Company,
+    Director,
+    PublicOfficial,
+    Bid,
+    TenderStatus,
+    RelationshipType,
 )
+from connectors.normalize import compute_company_quality_flags
 
 
 def generate_synthetic_data() -> dict:
     """
     Generate a complete synthetic dataset with embedded fraud patterns.
-    
+
     Patterns included:
     1. Wanjiku Construction Cartel - 4 companies that bid together, rotating wins
     2. Shell Company Scheme - FastTrack Solutions registered 4 days before winning
@@ -21,33 +27,48 @@ def generate_synthetic_data() -> dict:
     4. Price Inflation - Medical supplies at 180% market rate
     5. Rushed Timeline - IT tender with 5-day window
     """
-    
+
     # Directors
     directors = [
         # Cartel directors (some overlap)
-        Director(id="dir-001", name="Peter Wanjiku Kamau", company_ids=["comp-001", "comp-002"]),
+        Director(
+            id="dir-001",
+            name="Peter Wanjiku Kamau",
+            company_ids=["comp-001", "comp-002"],
+        ),
         Director(id="dir-002", name="Grace Njeri Wanjiku", company_ids=["comp-001"]),
-        Director(id="dir-003", name="Samuel Ochieng Otieno", company_ids=["comp-002", "comp-003"]),
+        Director(
+            id="dir-003",
+            name="Samuel Ochieng Otieno",
+            company_ids=["comp-002", "comp-003"],
+        ),
         Director(id="dir-004", name="Mary Akinyi Ouma", company_ids=["comp-003"]),
         Director(id="dir-005", name="David Kipchoge Ruto", company_ids=["comp-004"]),
-        Director(id="dir-006", name="Elizabeth Wambui Kariuki", company_ids=["comp-004"]),
-        
+        Director(
+            id="dir-006", name="Elizabeth Wambui Kariuki", company_ids=["comp-004"]
+        ),
         # Shell company director
-        Director(id="dir-007", name="Michael Otieno Odhiambo", company_ids=["comp-005"]),
-        
+        Director(
+            id="dir-007", name="Michael Otieno Odhiambo", company_ids=["comp-005"]
+        ),
         # Conflict of interest director (brother of official)
         Director(id="dir-008", name="John Kamau Mwangi", company_ids=["comp-006"]),
         Director(id="dir-009", name="Anne Wanjiru Mwangi", company_ids=["comp-006"]),
-        
         # Clean companies directors
         Director(id="dir-010", name="Francis Mutua Kilonzo", company_ids=["comp-007"]),
-        Director(id="dir-011", name="Catherine Nyambura Gitau", company_ids=["comp-008"]),
-        Director(id="dir-012", name="Patrick Kiprotich Korir", company_ids=["comp-009"]),
+        Director(
+            id="dir-011", name="Catherine Nyambura Gitau", company_ids=["comp-008"]
+        ),
+        Director(
+            id="dir-012", name="Patrick Kiprotich Korir", company_ids=["comp-009"]
+        ),
         Director(id="dir-013", name="Susan Adhiambo Achieng", company_ids=["comp-010"]),
         Director(id="dir-014", name="Joseph Mwenda Nthiga", company_ids=["comp-011"]),
-        Director(id="dir-015", name="Margaret Wairimu Ndung'u", company_ids=["comp-012"]),
+        Director(
+            id="dir-015", name="Margaret Wairimu Ndung'u", company_ids=["comp-012"]
+        ),
     ]
-    
+
     # Public Officials
     officials = [
         PublicOfficial(
@@ -55,38 +76,38 @@ def generate_synthetic_data() -> dict:
             name="James Mwangi Kamau",  # Brother of dir-008
             department="Kenya Medical Supplies Authority",
             position="Chief Procurement Officer",
-            related_persons={"dir-008": RelationshipType.SIBLING}
+            related_persons={"dir-008": RelationshipType.SIBLING},
         ),
         PublicOfficial(
             id="off-002",
             name="Alice Chebet Kiptoo",
             department="Kenya Rural Roads Authority",
             position="Procurement Manager",
-            related_persons={}
+            related_persons={},
         ),
         PublicOfficial(
             id="off-003",
             name="Robert Omondi Onyango",
             department="Ministry of Health",
             position="Senior Procurement Officer",
-            related_persons={}
+            related_persons={},
         ),
         PublicOfficial(
             id="off-004",
             name="Janet Wangui Muturi",
             department="Kenya Power and Lighting Company",
             position="Head of Procurement",
-            related_persons={}
+            related_persons={},
         ),
         PublicOfficial(
             id="off-005",
             name="Daniel Rotich Kibet",
             department="Nakuru County Government",
             position="County Procurement Director",
-            related_persons={}
+            related_persons={},
         ),
     ]
-    
+
     # Companies
     companies = [
         # Cartel companies (share address variations)
@@ -97,7 +118,14 @@ def generate_synthetic_data() -> dict:
             registration_date=date(2019, 3, 15),
             address="Plot 45, Industrial Area, Nairobi",
             phone="+254 20 555 0001",
-            director_ids=["dir-001", "dir-002"]
+            director_ids=["dir-001", "dir-002"],
+            supplier_type="Local Company",
+            brs_number="PVT/2019/045678",
+            contact_email="info@wanjikuconstruction.co.ke",
+            physical_address="Plot 45, Industrial Area, Nairobi",
+            postal_address="P.O. Box 45678",
+            postal_code="00100",
+            source_system="synthetic",
         ),
         Company(
             id="comp-002",
@@ -106,7 +134,14 @@ def generate_synthetic_data() -> dict:
             registration_date=date(2018, 7, 22),
             address="Plot 45A, Industrial Area, Nairobi",  # Same plot
             phone="+254 20 555 0002",
-            director_ids=["dir-001", "dir-003"]  # Peter Wanjiku is in both
+            director_ids=["dir-001", "dir-003"],  # Peter Wanjiku is in both
+            supplier_type="Local Company",
+            brs_number="PVT/2018/034521",
+            contact_email="mwamba.dev@gmail.com",
+            physical_address="Plot 45A, Industrial Area, Nairobi",
+            postal_address="P.O. Box 34521",
+            postal_code="00100",
+            source_system="synthetic",
         ),
         Company(
             id="comp-003",
@@ -115,7 +150,14 @@ def generate_synthetic_data() -> dict:
             registration_date=date(2020, 1, 10),
             address="Plot 47, Industrial Area, Nairobi",  # Adjacent plot
             phone="+254 20 555 0003",
-            director_ids=["dir-003", "dir-004"]  # Samuel Ochieng is in both
+            director_ids=["dir-003", "dir-004"],  # Samuel Ochieng is in both
+            supplier_type="Local Company",
+            brs_number="PVT/2020/067890",
+            contact_email="safari.contractors@gmail.com",
+            physical_address="Plot 47, Industrial Area, Nairobi",
+            postal_address="P.O. Box 67890",
+            postal_code="00100",
+            source_system="synthetic",
         ),
         Company(
             id="comp-004",
@@ -124,10 +166,16 @@ def generate_synthetic_data() -> dict:
             registration_date=date(2017, 11, 5),
             address="Plot 45B, Industrial Area, Nairobi",  # Same plot variation
             phone="+254 20 555 0001",  # Same phone as Wanjiku!
-            director_ids=["dir-005", "dir-006"]
+            director_ids=["dir-005", "dir-006"],
+            supplier_type="Local Company",
+            brs_number="PVT/2017/012345",
+            contact_email="eastlands.builders@gmail.com",
+            physical_address="Plot 45B, Industrial Area, Nairobi",
+            postal_address="P.O. Box 12345",
+            postal_code="00100",
+            source_system="synthetic",
         ),
-        
-        # Shell company (registered very recently)
+        # Shell company (registered very recently, vague/placeholder data)
         Company(
             id="comp-005",
             name="FastTrack Solutions Ltd",
@@ -135,9 +183,15 @@ def generate_synthetic_data() -> dict:
             registration_date=date(2026, 1, 11),  # Just 4 days before tender win
             address="Virtual Office, Westlands, Nairobi",
             phone="+254 700 123 456",
-            director_ids=["dir-007"]
+            director_ids=["dir-007"],
+            supplier_type="Local Company",
+            brs_number="PVT-FTSLXYZ",
+            contact_email="fasttracksolns@gmail.com",
+            physical_address="ALONG WAIYAKI WAY",  # Vague address like real e-GP data
+            postal_address="PO Box 123",  # Placeholder like real e-GP data
+            postal_code="00100",
+            source_system="synthetic",
         ),
-        
         # Conflict of interest company
         Company(
             id="comp-006",
@@ -146,9 +200,18 @@ def generate_synthetic_data() -> dict:
             registration_date=date(2021, 5, 18),
             address="Likoni Road, Industrial Area, Nairobi",
             phone="+254 20 444 5678",
-            director_ids=["dir-008", "dir-009"]  # John Mwangi is brother of KEMSA officer
+            director_ids=[
+                "dir-008",
+                "dir-009",
+            ],  # John Mwangi is brother of KEMSA officer
+            supplier_type="Local Company",
+            brs_number="PVT/2021/078901",
+            contact_email="procurement@healthfirst.co.ke",
+            physical_address="Likoni Road, Industrial Area, Nairobi",
+            postal_address="P.O. Box 78901",
+            postal_code="00200",
+            source_system="synthetic",
         ),
-        
         # Clean companies
         Company(
             id="comp-007",
@@ -157,7 +220,14 @@ def generate_synthetic_data() -> dict:
             registration_date=date(2015, 8, 12),
             address="Mombasa Road, Nairobi",
             phone="+254 20 333 4567",
-            director_ids=["dir-010"]
+            director_ids=["dir-010"],
+            supplier_type="Sole Proprietorship/Business Names",
+            brs_number="BN/2015/023456",
+            contact_email="kilonzo.supplies@yahoo.com",
+            physical_address="Sameer Business Park, Mombasa Road",
+            postal_address="P.O. Box 23456",
+            postal_code="00100",
+            source_system="synthetic",
         ),
         Company(
             id="comp-008",
@@ -166,7 +236,14 @@ def generate_synthetic_data() -> dict:
             registration_date=date(2016, 2, 28),
             address="Upper Hill, Nairobi",
             phone="+254 20 222 3456",
-            director_ids=["dir-011"]
+            director_ids=["dir-011"],
+            supplier_type="Local Company",
+            brs_number="PVT/2016/034567",
+            contact_email="info@gitaumedical.co.ke",
+            physical_address="Britam Tower, 3rd Floor, Upper Hill",
+            postal_address="P.O. Box 34567",
+            postal_code="00200",
+            source_system="synthetic",
         ),
         Company(
             id="comp-009",
@@ -175,7 +252,14 @@ def generate_synthetic_data() -> dict:
             registration_date=date(2014, 6, 15),
             address="Eldoret Town, Uasin Gishu",
             phone="+254 53 206 1234",
-            director_ids=["dir-012"]
+            director_ids=["dir-012"],
+            supplier_type="Local Company",
+            brs_number="PVT/2014/045678",
+            contact_email="korir.roads@gmail.com",
+            physical_address="Plot 12, Uganda Road, Eldoret",
+            postal_address="P.O. Box 4567",
+            postal_code="30100",
+            source_system="synthetic",
         ),
         Company(
             id="comp-010",
@@ -184,7 +268,14 @@ def generate_synthetic_data() -> dict:
             registration_date=date(2019, 9, 3),
             address="Kisumu CBD, Kisumu",
             phone="+254 57 202 5678",
-            director_ids=["dir-013"]
+            director_ids=["dir-013"],
+            supplier_type="Local Company",
+            brs_number="PVT/2019/056789",
+            contact_email="info@achiengit.co.ke",
+            physical_address="Alpha House, Room 204, Oginga Odinga Street, Kisumu",
+            postal_address="P.O. Box 5678",
+            postal_code="40100",
+            source_system="synthetic",
         ),
         Company(
             id="comp-011",
@@ -193,7 +284,14 @@ def generate_synthetic_data() -> dict:
             registration_date=date(2018, 4, 20),
             address="Meru Town, Meru",
             phone="+254 64 203 1234",
-            director_ids=["dir-014"]
+            director_ids=["dir-014"],
+            supplier_type="Local Company",
+            brs_number="PVT/2018/067890",
+            contact_email="nthiga.security@gmail.com",
+            physical_address="Meru Town, Meru County",
+            postal_address="P.O. Box 1234",
+            postal_code="60200",
+            source_system="synthetic",
         ),
         Company(
             id="comp-012",
@@ -202,10 +300,33 @@ def generate_synthetic_data() -> dict:
             registration_date=date(2012, 11, 8),
             address="Thika Road, Nairobi",
             phone="+254 20 876 5432",
-            director_ids=["dir-015"]
+            director_ids=["dir-015"],
+            supplier_type="Local Company",
+            brs_number="PVT/2012/078901",
+            contact_email="orders@ndungupharm.co.ke",
+            physical_address="Garden City Mall, Block B, Thika Road",
+            postal_address="P.O. Box 78901",
+            postal_code="00100",
+            source_system="synthetic",
         ),
     ]
-    
+
+    # Compute data quality flags for all companies
+    _director_map = {d.id: d for d in directors}
+    for c in companies:
+        dir_list = [
+            _director_map[did] for did in c.director_ids if did in _director_map
+        ]
+        c.data_quality_flags = compute_company_quality_flags(
+            name=c.name,
+            physical_address=c.physical_address,
+            postal_address=c.postal_address,
+            contact_email=c.contact_email,
+            brs_number=c.brs_number,
+            directors=dir_list,
+            ownership=None,
+        )
+
     # Tenders
     tenders = [
         # HIGH RISK: Cartel tender #1 - Road construction with cartel bidding
@@ -222,9 +343,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.AWARDED,
             awarded_to="comp-001",  # Wanjiku Construction
             awarded_amount=445_000_000,
-            procurement_officer_id="off-002"
+            procurement_officer_id="off-002",
         ),
-        
         # HIGH RISK: Shell company tender
         Tender(
             id="tender-002",
@@ -239,9 +359,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.AWARDED,
             awarded_to="comp-005",  # FastTrack - shell company
             awarded_amount=78_000_000,
-            procurement_officer_id="off-004"
+            procurement_officer_id="off-004",
         ),
-        
         # HIGH RISK: Conflict of interest tender
         Tender(
             id="tender-003",
@@ -256,9 +375,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.AWARDED,
             awarded_to="comp-006",  # HealthFirst - director is brother of procurement officer
             awarded_amount=118_500_000,
-            procurement_officer_id="off-001"  # James Mwangi - brother of John Mwangi
+            procurement_officer_id="off-001",  # James Mwangi - brother of John Mwangi
         ),
-        
         # MEDIUM RISK: Cartel tender #2 - Different winner from same cartel
         Tender(
             id="tender-004",
@@ -273,9 +391,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.AWARDED,
             awarded_to="comp-003",  # Safari Contractors - cartel member
             awarded_amount=82_000_000,
-            procurement_officer_id="off-005"
+            procurement_officer_id="off-005",
         ),
-        
         # HIGH RISK: Price anomaly tender
         Tender(
             id="tender-005",
@@ -290,9 +407,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.AWARDED,
             awarded_to="comp-006",  # HealthFirst again - price inflated
             awarded_amount=81_000_000,  # 180% of estimate!
-            procurement_officer_id="off-003"
+            procurement_officer_id="off-003",
         ),
-        
         # LOW RISK: Clean tender
         Tender(
             id="tender-006",
@@ -307,9 +423,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.AWARDED,
             awarded_to="comp-007",  # Kilonzo Office Supplies - clean
             awarded_amount=8_200_000,
-            procurement_officer_id="off-003"
+            procurement_officer_id="off-003",
         ),
-        
         # LOW RISK: Clean tender
         Tender(
             id="tender-007",
@@ -324,9 +439,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.AWARDED,
             awarded_to="comp-009",  # Korir Road Construction - clean, local
             awarded_amount=24_500_000,
-            procurement_officer_id="off-002"
+            procurement_officer_id="off-002",
         ),
-        
         # MEDIUM RISK: Cartel tender #3
         Tender(
             id="tender-008",
@@ -341,9 +455,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.EVALUATION,
             awarded_to=None,
             awarded_amount=None,
-            procurement_officer_id="off-002"
+            procurement_officer_id="off-002",
         ),
-        
         # LOW RISK: Pending tender
         Tender(
             id="tender-009",
@@ -358,9 +471,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.OPEN,
             awarded_to=None,
             awarded_amount=None,
-            procurement_officer_id=None
+            procurement_officer_id=None,
         ),
-        
         # LOW RISK: Clean medical tender
         Tender(
             id="tender-010",
@@ -375,9 +487,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.AWARDED,
             awarded_to="comp-012",  # Ndung'u Pharmaceuticals - clean, established
             awarded_amount=27_200_000,
-            procurement_officer_id="off-001"
+            procurement_officer_id="off-001",
         ),
-        
         # MEDIUM RISK: Another cartel tender
         Tender(
             id="tender-011",
@@ -392,9 +503,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.AWARDED,
             awarded_to="comp-002",  # Mwamba Developers - cartel member
             awarded_amount=175_000_000,
-            procurement_officer_id="off-005"
+            procurement_officer_id="off-005",
         ),
-        
         # LOW RISK: Security services
         Tender(
             id="tender-012",
@@ -409,9 +519,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.OPEN,
             awarded_to=None,
             awarded_amount=None,
-            procurement_officer_id="off-003"
+            procurement_officer_id="off-003",
         ),
-        
         # LOW RISK: IT services
         Tender(
             id="tender-013",
@@ -426,9 +535,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.OPEN,
             awarded_to=None,
             awarded_amount=None,
-            procurement_officer_id="off-004"
+            procurement_officer_id="off-004",
         ),
-        
         # MEDIUM RISK: Rushed timeline
         Tender(
             id="tender-014",
@@ -443,9 +551,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.EVALUATION,
             awarded_to=None,
             awarded_amount=None,
-            procurement_officer_id="off-001"
+            procurement_officer_id="off-001",
         ),
-        
         # MEDIUM RISK: Cartel tender #4
         Tender(
             id="tender-015",
@@ -460,9 +567,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.AWARDED,
             awarded_to="comp-004",  # Eastlands Builders - cartel member
             awarded_amount=93_000_000,
-            procurement_officer_id="off-002"
+            procurement_officer_id="off-002",
         ),
-        
         # LOW RISK: Clean office tender
         Tender(
             id="tender-016",
@@ -477,9 +583,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.OPEN,
             awarded_to=None,
             awarded_amount=None,
-            procurement_officer_id=None
+            procurement_officer_id=None,
         ),
-        
         # LOW RISK: Medical equipment
         Tender(
             id="tender-017",
@@ -494,9 +599,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.AWARDED,
             awarded_to="comp-008",  # Gitau Medical - clean, specialized
             awarded_amount=148_000_000,
-            procurement_officer_id="off-003"
+            procurement_officer_id="off-003",
         ),
-        
         # CANCELLED tender
         Tender(
             id="tender-018",
@@ -511,9 +615,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.CANCELLED,
             awarded_to=None,
             awarded_amount=None,
-            procurement_officer_id="off-005"
+            procurement_officer_id="off-005",
         ),
-        
         # LOW RISK: Road maintenance
         Tender(
             id="tender-019",
@@ -528,9 +631,8 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.EVALUATION,
             awarded_to=None,
             awarded_amount=None,
-            procurement_officer_id="off-002"
+            procurement_officer_id="off-002",
         ),
-        
         # LOW RISK: Clean tender
         Tender(
             id="tender-020",
@@ -545,80 +647,328 @@ def generate_synthetic_data() -> dict:
             status=TenderStatus.OPEN,
             awarded_to=None,
             awarded_amount=None,
-            procurement_officer_id="off-004"
+            procurement_officer_id="off-004",
         ),
     ]
-    
+
     # Bids
     bids = [
         # Tender 001 - Cartel bidding pattern (all 4 cartel members bid)
-        Bid(id="bid-001", tender_id="tender-001", company_id="comp-001", amount=445_000_000, submission_date=datetime(2026, 1, 16, 14, 30)),
-        Bid(id="bid-002", tender_id="tender-001", company_id="comp-002", amount=448_000_000, submission_date=datetime(2026, 1, 16, 14, 45)),
-        Bid(id="bid-003", tender_id="tender-001", company_id="comp-003", amount=452_000_000, submission_date=datetime(2026, 1, 16, 15, 00)),
-        Bid(id="bid-004", tender_id="tender-001", company_id="comp-004", amount=455_000_000, submission_date=datetime(2026, 1, 16, 15, 15)),
-        Bid(id="bid-005", tender_id="tender-001", company_id="comp-009", amount=460_000_000, submission_date=datetime(2026, 1, 15, 10, 00)),
-        
+        Bid(
+            id="bid-001",
+            tender_id="tender-001",
+            company_id="comp-001",
+            amount=445_000_000,
+            submission_date=datetime(2026, 1, 16, 14, 30),
+        ),
+        Bid(
+            id="bid-002",
+            tender_id="tender-001",
+            company_id="comp-002",
+            amount=448_000_000,
+            submission_date=datetime(2026, 1, 16, 14, 45),
+        ),
+        Bid(
+            id="bid-003",
+            tender_id="tender-001",
+            company_id="comp-003",
+            amount=452_000_000,
+            submission_date=datetime(2026, 1, 16, 15, 00),
+        ),
+        Bid(
+            id="bid-004",
+            tender_id="tender-001",
+            company_id="comp-004",
+            amount=455_000_000,
+            submission_date=datetime(2026, 1, 16, 15, 15),
+        ),
+        Bid(
+            id="bid-005",
+            tender_id="tender-001",
+            company_id="comp-009",
+            amount=460_000_000,
+            submission_date=datetime(2026, 1, 15, 10, 00),
+        ),
         # Tender 002 - Shell company wins (only bidder with capacity)
-        Bid(id="bid-006", tender_id="tender-002", company_id="comp-005", amount=78_000_000, submission_date=datetime(2026, 1, 15, 11, 55)),  # Last minute
-        Bid(id="bid-007", tender_id="tender-002", company_id="comp-010", amount=82_000_000, submission_date=datetime(2026, 1, 14, 9, 00)),
-        
+        Bid(
+            id="bid-006",
+            tender_id="tender-002",
+            company_id="comp-005",
+            amount=78_000_000,
+            submission_date=datetime(2026, 1, 15, 11, 55),
+        ),  # Last minute
+        Bid(
+            id="bid-007",
+            tender_id="tender-002",
+            company_id="comp-010",
+            amount=82_000_000,
+            submission_date=datetime(2026, 1, 14, 9, 00),
+        ),
         # Tender 003 - Conflict of interest
-        Bid(id="bid-008", tender_id="tender-003", company_id="comp-006", amount=118_500_000, submission_date=datetime(2026, 1, 19, 10, 00)),
-        Bid(id="bid-009", tender_id="tender-003", company_id="comp-008", amount=125_000_000, submission_date=datetime(2026, 1, 18, 14, 00)),
-        Bid(id="bid-010", tender_id="tender-003", company_id="comp-012", amount=122_000_000, submission_date=datetime(2026, 1, 18, 16, 30)),
-        
+        Bid(
+            id="bid-008",
+            tender_id="tender-003",
+            company_id="comp-006",
+            amount=118_500_000,
+            submission_date=datetime(2026, 1, 19, 10, 00),
+        ),
+        Bid(
+            id="bid-009",
+            tender_id="tender-003",
+            company_id="comp-008",
+            amount=125_000_000,
+            submission_date=datetime(2026, 1, 18, 14, 00),
+        ),
+        Bid(
+            id="bid-010",
+            tender_id="tender-003",
+            company_id="comp-012",
+            amount=122_000_000,
+            submission_date=datetime(2026, 1, 18, 16, 30),
+        ),
         # Tender 004 - Cartel pattern continues
-        Bid(id="bid-011", tender_id="tender-004", company_id="comp-001", amount=84_000_000, submission_date=datetime(2026, 1, 17, 9, 00)),
-        Bid(id="bid-012", tender_id="tender-004", company_id="comp-002", amount=85_000_000, submission_date=datetime(2026, 1, 17, 9, 30)),
-        Bid(id="bid-013", tender_id="tender-004", company_id="comp-003", amount=82_000_000, submission_date=datetime(2026, 1, 17, 10, 00)),  # Winner
-        Bid(id="bid-014", tender_id="tender-004", company_id="comp-004", amount=86_000_000, submission_date=datetime(2026, 1, 17, 10, 30)),
-        
+        Bid(
+            id="bid-011",
+            tender_id="tender-004",
+            company_id="comp-001",
+            amount=84_000_000,
+            submission_date=datetime(2026, 1, 17, 9, 00),
+        ),
+        Bid(
+            id="bid-012",
+            tender_id="tender-004",
+            company_id="comp-002",
+            amount=85_000_000,
+            submission_date=datetime(2026, 1, 17, 9, 30),
+        ),
+        Bid(
+            id="bid-013",
+            tender_id="tender-004",
+            company_id="comp-003",
+            amount=82_000_000,
+            submission_date=datetime(2026, 1, 17, 10, 00),
+        ),  # Winner
+        Bid(
+            id="bid-014",
+            tender_id="tender-004",
+            company_id="comp-004",
+            amount=86_000_000,
+            submission_date=datetime(2026, 1, 17, 10, 30),
+        ),
         # Tender 005 - Price inflation (HealthFirst wins at inflated price)
-        Bid(id="bid-015", tender_id="tender-005", company_id="comp-006", amount=81_000_000, submission_date=datetime(2026, 1, 22, 11, 00)),  # 180% of estimate
-        Bid(id="bid-016", tender_id="tender-005", company_id="comp-012", amount=48_000_000, submission_date=datetime(2026, 1, 21, 14, 00)),  # Reasonable
-        
+        Bid(
+            id="bid-015",
+            tender_id="tender-005",
+            company_id="comp-006",
+            amount=81_000_000,
+            submission_date=datetime(2026, 1, 22, 11, 00),
+        ),  # 180% of estimate
+        Bid(
+            id="bid-016",
+            tender_id="tender-005",
+            company_id="comp-012",
+            amount=48_000_000,
+            submission_date=datetime(2026, 1, 21, 14, 00),
+        ),  # Reasonable
         # Tender 006 - Clean tender
-        Bid(id="bid-017", tender_id="tender-006", company_id="comp-007", amount=8_200_000, submission_date=datetime(2026, 1, 24, 10, 00)),
-        Bid(id="bid-018", tender_id="tender-006", company_id="comp-010", amount=8_800_000, submission_date=datetime(2026, 1, 23, 15, 00)),
-        
+        Bid(
+            id="bid-017",
+            tender_id="tender-006",
+            company_id="comp-007",
+            amount=8_200_000,
+            submission_date=datetime(2026, 1, 24, 10, 00),
+        ),
+        Bid(
+            id="bid-018",
+            tender_id="tender-006",
+            company_id="comp-010",
+            amount=8_800_000,
+            submission_date=datetime(2026, 1, 23, 15, 00),
+        ),
         # Tender 007 - Clean local tender
-        Bid(id="bid-019", tender_id="tender-007", company_id="comp-009", amount=24_500_000, submission_date=datetime(2026, 1, 26, 11, 00)),
-        
+        Bid(
+            id="bid-019",
+            tender_id="tender-007",
+            company_id="comp-009",
+            amount=24_500_000,
+            submission_date=datetime(2026, 1, 26, 11, 00),
+        ),
         # Tender 008 - Evaluation phase (cartel bidding again)
-        Bid(id="bid-020", tender_id="tender-008", company_id="comp-001", amount=318_000_000, submission_date=datetime(2026, 1, 21, 14, 00)),
-        Bid(id="bid-021", tender_id="tender-008", company_id="comp-002", amount=315_000_000, submission_date=datetime(2026, 1, 21, 14, 30)),
-        Bid(id="bid-022", tender_id="tender-008", company_id="comp-003", amount=322_000_000, submission_date=datetime(2026, 1, 21, 15, 00)),
-        Bid(id="bid-023", tender_id="tender-008", company_id="comp-004", amount=325_000_000, submission_date=datetime(2026, 1, 21, 15, 30)),
-        
+        Bid(
+            id="bid-020",
+            tender_id="tender-008",
+            company_id="comp-001",
+            amount=318_000_000,
+            submission_date=datetime(2026, 1, 21, 14, 00),
+        ),
+        Bid(
+            id="bid-021",
+            tender_id="tender-008",
+            company_id="comp-002",
+            amount=315_000_000,
+            submission_date=datetime(2026, 1, 21, 14, 30),
+        ),
+        Bid(
+            id="bid-022",
+            tender_id="tender-008",
+            company_id="comp-003",
+            amount=322_000_000,
+            submission_date=datetime(2026, 1, 21, 15, 00),
+        ),
+        Bid(
+            id="bid-023",
+            tender_id="tender-008",
+            company_id="comp-004",
+            amount=325_000_000,
+            submission_date=datetime(2026, 1, 21, 15, 30),
+        ),
         # Tender 010 - Clean pharmaceutical
-        Bid(id="bid-024", tender_id="tender-010", company_id="comp-012", amount=27_200_000, submission_date=datetime(2026, 1, 29, 10, 00)),
-        Bid(id="bid-025", tender_id="tender-010", company_id="comp-006", amount=29_000_000, submission_date=datetime(2026, 1, 29, 11, 00)),
-        
+        Bid(
+            id="bid-024",
+            tender_id="tender-010",
+            company_id="comp-012",
+            amount=27_200_000,
+            submission_date=datetime(2026, 1, 29, 10, 00),
+        ),
+        Bid(
+            id="bid-025",
+            tender_id="tender-010",
+            company_id="comp-006",
+            amount=29_000_000,
+            submission_date=datetime(2026, 1, 29, 11, 00),
+        ),
         # Tender 011 - Cartel building tender
-        Bid(id="bid-026", tender_id="tender-011", company_id="comp-001", amount=178_000_000, submission_date=datetime(2026, 1, 22, 9, 00)),
-        Bid(id="bid-027", tender_id="tender-011", company_id="comp-002", amount=175_000_000, submission_date=datetime(2026, 1, 22, 9, 30)),  # Winner
-        Bid(id="bid-028", tender_id="tender-011", company_id="comp-003", amount=182_000_000, submission_date=datetime(2026, 1, 22, 10, 00)),
-        Bid(id="bid-029", tender_id="tender-011", company_id="comp-004", amount=185_000_000, submission_date=datetime(2026, 1, 22, 10, 30)),
-        
+        Bid(
+            id="bid-026",
+            tender_id="tender-011",
+            company_id="comp-001",
+            amount=178_000_000,
+            submission_date=datetime(2026, 1, 22, 9, 00),
+        ),
+        Bid(
+            id="bid-027",
+            tender_id="tender-011",
+            company_id="comp-002",
+            amount=175_000_000,
+            submission_date=datetime(2026, 1, 22, 9, 30),
+        ),  # Winner
+        Bid(
+            id="bid-028",
+            tender_id="tender-011",
+            company_id="comp-003",
+            amount=182_000_000,
+            submission_date=datetime(2026, 1, 22, 10, 00),
+        ),
+        Bid(
+            id="bid-029",
+            tender_id="tender-011",
+            company_id="comp-004",
+            amount=185_000_000,
+            submission_date=datetime(2026, 1, 22, 10, 30),
+        ),
         # Tender 014 - Emergency procurement (rushed)
-        Bid(id="bid-030", tender_id="tender-014", company_id="comp-006", amount=54_000_000, submission_date=datetime(2026, 1, 18, 11, 00)),
-        Bid(id="bid-031", tender_id="tender-014", company_id="comp-012", amount=52_000_000, submission_date=datetime(2026, 1, 17, 16, 00)),
-        
+        Bid(
+            id="bid-030",
+            tender_id="tender-014",
+            company_id="comp-006",
+            amount=54_000_000,
+            submission_date=datetime(2026, 1, 18, 11, 00),
+        ),
+        Bid(
+            id="bid-031",
+            tender_id="tender-014",
+            company_id="comp-012",
+            amount=52_000_000,
+            submission_date=datetime(2026, 1, 17, 16, 00),
+        ),
         # Tender 015 - Cartel road tender
-        Bid(id="bid-032", tender_id="tender-015", company_id="comp-001", amount=94_000_000, submission_date=datetime(2026, 1, 19, 10, 00)),
-        Bid(id="bid-033", tender_id="tender-015", company_id="comp-002", amount=96_000_000, submission_date=datetime(2026, 1, 19, 10, 30)),
-        Bid(id="bid-034", tender_id="tender-015", company_id="comp-003", amount=97_000_000, submission_date=datetime(2026, 1, 19, 11, 00)),
-        Bid(id="bid-035", tender_id="tender-015", company_id="comp-004", amount=93_000_000, submission_date=datetime(2026, 1, 19, 11, 30)),  # Winner
-        
+        Bid(
+            id="bid-032",
+            tender_id="tender-015",
+            company_id="comp-001",
+            amount=94_000_000,
+            submission_date=datetime(2026, 1, 19, 10, 00),
+        ),
+        Bid(
+            id="bid-033",
+            tender_id="tender-015",
+            company_id="comp-002",
+            amount=96_000_000,
+            submission_date=datetime(2026, 1, 19, 10, 30),
+        ),
+        Bid(
+            id="bid-034",
+            tender_id="tender-015",
+            company_id="comp-003",
+            amount=97_000_000,
+            submission_date=datetime(2026, 1, 19, 11, 00),
+        ),
+        Bid(
+            id="bid-035",
+            tender_id="tender-015",
+            company_id="comp-004",
+            amount=93_000_000,
+            submission_date=datetime(2026, 1, 19, 11, 30),
+        ),  # Winner
         # Tender 017 - Clean medical equipment
-        Bid(id="bid-036", tender_id="tender-017", company_id="comp-008", amount=148_000_000, submission_date=datetime(2026, 1, 26, 14, 00)),
-        Bid(id="bid-037", tender_id="tender-017", company_id="comp-006", amount=155_000_000, submission_date=datetime(2026, 1, 26, 15, 00)),
-        
+        Bid(
+            id="bid-036",
+            tender_id="tender-017",
+            company_id="comp-008",
+            amount=148_000_000,
+            submission_date=datetime(2026, 1, 26, 14, 00),
+        ),
+        Bid(
+            id="bid-037",
+            tender_id="tender-017",
+            company_id="comp-006",
+            amount=155_000_000,
+            submission_date=datetime(2026, 1, 26, 15, 00),
+        ),
         # Tender 019 - Evaluation phase
-        Bid(id="bid-038", tender_id="tender-019", company_id="comp-009", amount=63_000_000, submission_date=datetime(2026, 2, 2, 10, 00)),
-        Bid(id="bid-039", tender_id="tender-019", company_id="comp-001", amount=64_000_000, submission_date=datetime(2026, 2, 2, 11, 00)),
+        Bid(
+            id="bid-038",
+            tender_id="tender-019",
+            company_id="comp-009",
+            amount=63_000_000,
+            submission_date=datetime(2026, 2, 2, 10, 00),
+        ),
+        Bid(
+            id="bid-039",
+            tender_id="tender-019",
+            company_id="comp-001",
+            amount=64_000_000,
+            submission_date=datetime(2026, 2, 2, 11, 00),
+        ),
     ]
-    
+
+    # Enrich tenders with Kenya-specific fields
+    _category_map = {
+        "Road Construction": ("Works", "Open Tender", "State Corporation"),
+        "Building Construction": ("Works", "Open Tender", "County Government"),
+        "Information Technology": (
+            "Goods",
+            "Request for Quotation",
+            "State Corporation",
+        ),
+        "Medical Supplies": ("Goods", "Open Tender", "National Government"),
+        "Office Supplies": ("Goods", "Request for Quotation", "National Government"),
+        "Security Services": (
+            "Non Consultancy Services",
+            "Open Tender",
+            "National Government",
+        ),
+    }
+    for t in tenders:
+        cat_info = _category_map.get(
+            t.category, ("Goods", "Open Tender", "National Government")
+        )
+        t.procurement_category = cat_info[0]
+        t.procurement_method = cat_info[1]
+        t.pe_type = cat_info[2]
+        t.currency = "KES"
+        t.source_system = "synthetic"
+
     return {
         "directors": directors,
         "officials": officials,
@@ -632,7 +982,7 @@ def generate_synthetic_data() -> dict:
 def get_data_store():
     """Returns data organized for efficient lookup."""
     data = generate_synthetic_data()
-    
+
     return {
         "directors": {d.id: d for d in data["directors"]},
         "officials": {o.id: o for o in data["officials"]},

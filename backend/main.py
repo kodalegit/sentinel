@@ -29,6 +29,7 @@ from routes.tenders import router as tenders_router
 from routes.tenders_graph import router as tenders_graph_router
 from routes.graph import router as graph_router
 from routes.cases import router as cases_router
+from routes.ingest import router as ingest_router
 
 
 async def load_data_from_db():
@@ -163,6 +164,7 @@ app.include_router(tenders_router)
 app.include_router(tenders_graph_router)
 app.include_router(graph_router)
 app.include_router(cases_router)
+app.include_router(ingest_router)
 
 
 @app.get("/")

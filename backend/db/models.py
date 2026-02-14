@@ -44,10 +44,27 @@ class CompanyDB(Base):
     registration_number: Mapped[str] = mapped_column(
         String(50), unique=True, nullable=False
     )
-    registration_date: Mapped[date] = mapped_column(Date, nullable=False)
-    address: Mapped[str] = mapped_column(Text, nullable=False)
-    phone: Mapped[str] = mapped_column(String(50), nullable=False)
+    registration_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Kenya-specific fields
+    supplier_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    brs_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    egp_registration_number: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )
+    contact_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    physical_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    postal_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    postal_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
+    # Provenance
+    source_system: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    source_record_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    ingested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    data_quality_flags: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     directors: Mapped[list["DirectorDB"]] = relationship(
         secondary="company_directors", back_populates="companies"
@@ -56,6 +73,10 @@ class CompanyDB(Base):
     won_tenders: Mapped[list["TenderDB"]] = relationship(
         back_populates="winning_company"
     )
+    ownership_records: Mapped[list["OwnershipDB"]] = relationship(
+        back_populates="company"
+    )
+    contracts: Mapped[list["ContractDB"]] = relationship(back_populates="supplier")
 
 
 class DirectorDB(Base):
@@ -140,16 +161,16 @@ class TenderDB(Base):
         UUID(as_uuid=True), primary_key=True, default=gen_uuid
     )
     reference_number: Mapped[str] = mapped_column(
-        String(50), unique=True, nullable=False
+        String(100), unique=True, nullable=False
     )
     title: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     procuring_entity: Mapped[str] = mapped_column(String(255), nullable=False)
     category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    estimated_value: Mapped[float] = mapped_column(Float, nullable=False)
+    estimated_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     awarded_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    published_date: Mapped[date] = mapped_column(Date, nullable=False)
-    deadline: Mapped[date] = mapped_column(Date, nullable=False)
+    published_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    deadline: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEN")
     awarded_to: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True
@@ -162,6 +183,24 @@ class TenderDB(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
+    # Kenya-specific fields
+    procurement_method: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )
+    procurement_category: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )
+    pe_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="KES")
+    ocds_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    buyer_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    # Provenance
+    source_system: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    source_record_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    ingested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    data_quality_flags: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
     winning_company: Mapped[Optional["CompanyDB"]] = relationship(
         back_populates="won_tenders"
     )
@@ -172,11 +211,12 @@ class TenderDB(Base):
     risk_assessments: Mapped[list["RiskAssessmentDB"]] = relationship(
         back_populates="tender"
     )
+    contracts: Mapped[list["ContractDB"]] = relationship(back_populates="tender")
 
     __table_args__ = (
-        CheckConstraint("estimated_value >= 0", name="ck_positive_estimated_value"),
         Index("ix_tenders_status", "status"),
         Index("ix_tenders_category", "category"),
+        Index("ix_tenders_source", "source_system"),
     )
 
 
@@ -311,6 +351,90 @@ class CaseNoteDB(Base):
             name="ck_note_type",
         ),
         Index("ix_notes_case", "case_id"),
+    )
+
+
+class ContractDB(Base):
+    __tablename__ = "contracts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    tender_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenders.id", ondelete="SET NULL"), nullable=True
+    )
+    company_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    contract_number: Mapped[str] = mapped_column(
+        String(100), unique=True, nullable=False
+    )
+    title: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    contract_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="KES")
+    start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    effective_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    date_signed: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    procurement_method: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )
+    procurement_category: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )
+
+    # AGPO fields
+    agpo_group: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    reservation_group: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    is_agpo_reserved: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+
+    # Procuring entity details
+    pe_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    pe_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # Provenance
+    source_system: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    source_record_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    ingested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    data_quality_flags: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    tender: Mapped[Optional["TenderDB"]] = relationship(back_populates="contracts")
+    supplier: Mapped[Optional["CompanyDB"]] = relationship(back_populates="contracts")
+
+    __table_args__ = (
+        Index("ix_contracts_tender", "tender_id"),
+        Index("ix_contracts_company", "company_id"),
+        Index("ix_contracts_source", "source_system"),
+    )
+
+
+class OwnershipDB(Base):
+    __tablename__ = "ownership_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    owner_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    nationality: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    postal_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    company: Mapped["CompanyDB"] = relationship(back_populates="ownership_records")
+
+    __table_args__ = (
+        Index("ix_ownership_company", "company_id"),
+        Index("ix_ownership_name", "owner_name"),
     )
 
 

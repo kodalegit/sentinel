@@ -23,6 +23,20 @@ class TenderStatus(str, Enum):
     CANCELLED = "CANCELLED"
 
 
+class AddressQuality(str, Enum):
+    SPECIFIC = "SPECIFIC"
+    VAGUE = "VAGUE"
+    PLACEHOLDER = "PLACEHOLDER"
+    UNKNOWN = "UNKNOWN"
+
+
+class SourceSystem(str, Enum):
+    PPIP = "ppip"
+    EGP = "egp"
+    MANUAL = "manual"
+    SYNTHETIC = "synthetic"
+
+
 class RiskFactorType(str, Enum):
     CARTEL_PATTERN = "CARTEL_PATTERN"
     SHELL_COMPANY = "SHELL_COMPANY"
@@ -78,10 +92,24 @@ class Company(BaseModel):
     id: str
     name: str
     registration_number: str
-    registration_date: date
-    address: str
-    phone: str
+    registration_date: Optional[date] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
     director_ids: list[str] = Field(default_factory=list)
+
+    # Kenya-specific fields
+    supplier_type: Optional[str] = None
+    brs_number: Optional[str] = None
+    egp_registration_number: Optional[str] = None
+    contact_email: Optional[str] = None
+    physical_address: Optional[str] = None
+    postal_address: Optional[str] = None
+    postal_code: Optional[str] = None
+
+    # Provenance
+    source_system: Optional[str] = None
+    source_record_id: Optional[str] = None
+    data_quality_flags: Optional[dict] = None
 
 
 class Bid(BaseModel):
@@ -97,16 +125,29 @@ class Tender(BaseModel):
     id: str
     reference_number: str
     title: str
-    description: str
+    description: Optional[str] = None
     procuring_entity: str
-    category: str
-    estimated_value: float  # KES
-    published_date: date
-    deadline: date
-    status: TenderStatus
+    category: Optional[str] = None
+    estimated_value: Optional[float] = None  # KES
+    published_date: Optional[date] = None
+    deadline: Optional[date] = None
+    status: TenderStatus = TenderStatus.OPEN
     awarded_to: Optional[str] = None  # company_id
     awarded_amount: Optional[float] = None
     procurement_officer_id: Optional[str] = None
+
+    # Kenya-specific fields
+    procurement_method: Optional[str] = None
+    procurement_category: Optional[str] = None
+    pe_type: Optional[str] = None
+    currency: str = "KES"
+    ocds_id: Optional[str] = None
+    buyer_id: Optional[str] = None
+
+    # Provenance
+    source_system: Optional[str] = None
+    source_record_id: Optional[str] = None
+    data_quality_flags: Optional[dict] = None
 
 
 # Risk Assessment Models
@@ -235,6 +276,40 @@ class CaseNoteCreate(BaseModel):
     content: str
     author: str = "auditor"
     note_type: NoteType = NoteType.OBSERVATION
+
+
+# Contract model (Kenya e-GP)
+class Contract(BaseModel):
+    id: str
+    tender_id: Optional[str] = None
+    company_id: Optional[str] = None
+    contract_number: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    contract_amount: Optional[float] = None
+    currency: str = "KES"
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    effective_date: Optional[date] = None
+    status: Optional[str] = None
+    procurement_method: Optional[str] = None
+    procurement_category: Optional[str] = None
+    agpo_group: Optional[str] = None
+    reservation_group: Optional[str] = None
+    is_agpo_reserved: Optional[bool] = None
+    pe_name: Optional[str] = None
+    pe_type: Optional[str] = None
+    source_system: Optional[str] = None
+    source_record_id: Optional[str] = None
+
+
+# Ownership model (Kenya e-GP)
+class Ownership(BaseModel):
+    id: str
+    company_id: str
+    owner_name: str
+    nationality: Optional[str] = None
+    postal_address: Optional[str] = None
 
 
 # Dashboard Stats

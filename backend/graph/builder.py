@@ -3,6 +3,8 @@ Graph builder using NetworkX.
 Constructs the Shadow Graph from procurement data for relationship analysis.
 """
 
+import re
+
 import networkx as nx
 from models import (
     Tender,
@@ -16,7 +18,9 @@ from models import (
     NodeType,
     EdgeType,
     RiskCategory,
+    AddressQuality,
 )
+from connectors.normalize import classify_address
 
 
 def build_procurement_graph(
@@ -42,9 +46,16 @@ def build_procurement_graph(
             company.id,
             type=NodeType.COMPANY.value,
             label=company.name,
-            address=company.address,
+            address=company.address or company.physical_address,
             phone=company.phone,
-            registration_date=company.registration_date.isoformat(),
+            registration_date=(
+                company.registration_date.isoformat()
+                if company.registration_date
+                else None
+            ),
+            contact_email=company.contact_email,
+            supplier_type=company.supplier_type,
+            source_system=company.source_system,
         )
 
     # Add director nodes
@@ -93,7 +104,7 @@ def build_procurement_graph(
             label=tender.title[:50] + "..." if len(tender.title) > 50 else tender.title,
             full_title=tender.title,
             procuring_entity=tender.procuring_entity,
-            value=tender.estimated_value,
+            value=tender.estimated_value or 0,
             status=tender.status.value,
             risk_level=(
                 risk_level.value if isinstance(risk_level, RiskCategory) else risk_level
@@ -129,21 +140,45 @@ def build_procurement_graph(
     # Detect and add SHARES_PHONE edges
     _add_shared_phone_edges(G, companies)
 
+    # Detect and add SHARES_EMAIL edges
+    _add_shared_email_edges(G, companies)
+
     return G
 
 
 def _add_shared_address_edges(G: nx.Graph, companies: dict[str, Company]):
-    """Add edges between companies that share similar addresses."""
+    """Add edges between companies that share similar addresses.
+    Excludes placeholder addresses (e.g., 'PO Box 123') which are common
+    defaults in Kenya's e-GP system and would create false connections."""
     company_list = list(companies.values())
 
     for i, comp1 in enumerate(company_list):
+        addr1 = comp1.physical_address or comp1.address
+        if not addr1:
+            continue
+        q1 = classify_address(addr1)
+        if q1 == AddressQuality.PLACEHOLDER:
+            continue
+
         for comp2 in company_list[i + 1 :]:
-            if _addresses_similar(comp1.address, comp2.address):
+            addr2 = comp2.physical_address or comp2.address
+            if not addr2:
+                continue
+            q2 = classify_address(addr2)
+            if q2 == AddressQuality.PLACEHOLDER:
+                continue
+
+            if _addresses_similar(addr1, addr2):
+                # Lower confidence if either address is vague
+                confidence = "high"
+                if q1 == AddressQuality.VAGUE or q2 == AddressQuality.VAGUE:
+                    confidence = "low"
                 G.add_edge(
                     comp1.id,
                     comp2.id,
                     relationship=EdgeType.SHARES_ADDRESS.value,
                     suspicious=True,
+                    confidence=confidence,
                 )
 
 
@@ -152,8 +187,14 @@ def _add_shared_phone_edges(G: nx.Graph, companies: dict[str, Company]):
     company_list = list(companies.values())
 
     for i, comp1 in enumerate(company_list):
+        p1 = _normalize_phone(comp1.phone)
+        if not p1:
+            continue
         for comp2 in company_list[i + 1 :]:
-            if _normalize_phone(comp1.phone) == _normalize_phone(comp2.phone):
+            p2 = _normalize_phone(comp2.phone)
+            if not p2:
+                continue
+            if p1 == p2:
                 G.add_edge(
                     comp1.id,
                     comp2.id,
@@ -162,30 +203,102 @@ def _add_shared_phone_edges(G: nx.Graph, companies: dict[str, Company]):
                 )
 
 
+def _add_shared_email_edges(G: nx.Graph, companies: dict[str, Company]):
+    """Add edges between companies that share the same contact email."""
+    company_list = list(companies.values())
+
+    for i, comp1 in enumerate(company_list):
+        e1 = comp1.contact_email
+        if not e1:
+            continue
+        for comp2 in company_list[i + 1 :]:
+            e2 = comp2.contact_email
+            if not e2:
+                continue
+            if e1.strip().lower() == e2.strip().lower():
+                G.add_edge(
+                    comp1.id,
+                    comp2.id,
+                    relationship=EdgeType.SHARES_ADDRESS.value,
+                    suspicious=True,
+                    shared_attribute="email",
+                )
+
+
+_PLOT_PATTERN = re.compile(r"plot\s*(\d+)", re.IGNORECASE)
+_LR_PATTERN = re.compile(r"l\.?r\.?\s*no?\.?\s*(\d+)", re.IGNORECASE)
+_BUILDING_PATTERN = re.compile(
+    r"(\w+)\s+(building|house|plaza|towers?|place|centre|center)", re.IGNORECASE
+)
+
+
 def _addresses_similar(addr1: str, addr2: str) -> bool:
-    """Check if two addresses are suspiciously similar (same plot/building)."""
-    # Normalize and extract plot numbers
-    addr1_lower = addr1.lower()
-    addr2_lower = addr2.lower()
+    """Check if two addresses are suspiciously similar.
+    Uses multiple matching strategies for Kenya's varied address formats:
+    1. Plot number matching (e.g., 'Plot 45' ~ 'Plot 45A')
+    2. LR number matching (e.g., 'L.R. No. 1234')
+    3. Building name matching (e.g., 'Westlands Plaza')
+    4. High token overlap for SPECIFIC addresses
+    """
+    a1 = addr1.lower().strip()
+    a2 = addr2.lower().strip()
 
-    # Extract plot number if present
-    import re
+    # Exact match after normalization
+    if a1 == a2:
+        return True
 
-    plot_pattern = r"plot\s*(\d+)"
+    # 1. Plot number match
+    m1 = _PLOT_PATTERN.search(a1)
+    m2 = _PLOT_PATTERN.search(a2)
+    if m1 and m2 and m1.group(1) == m2.group(1):
+        return True
 
-    match1 = re.search(plot_pattern, addr1_lower)
-    match2 = re.search(plot_pattern, addr2_lower)
+    # 2. LR number match
+    lr1 = _LR_PATTERN.search(a1)
+    lr2 = _LR_PATTERN.search(a2)
+    if lr1 and lr2 and lr1.group(1) == lr2.group(1):
+        return True
 
-    if match1 and match2:
-        # Same plot number (ignoring letter suffixes like 45A, 45B)
-        return match1.group(1) == match2.group(1)
+    # 3. Building name match
+    b1 = _BUILDING_PATTERN.search(a1)
+    b2 = _BUILDING_PATTERN.search(a2)
+    if b1 and b2:
+        if b1.group(0).lower() == b2.group(0).lower():
+            return True
+
+    # 4. High token overlap for addresses with enough detail
+    tokens1 = set(re.findall(r"\w+", a1))
+    tokens2 = set(re.findall(r"\w+", a2))
+    # Only use token overlap if both addresses have enough tokens (not too short/vague)
+    if len(tokens1) >= 3 and len(tokens2) >= 3:
+        overlap = tokens1 & tokens2
+        # Remove common filler words
+        filler = {
+            "road",
+            "street",
+            "avenue",
+            "along",
+            "off",
+            "near",
+            "the",
+            "and",
+            "po",
+            "box",
+        }
+        meaningful_overlap = overlap - filler
+        min_tokens = min(len(tokens1 - filler), len(tokens2 - filler))
+        if min_tokens > 0 and len(meaningful_overlap) / min_tokens >= 0.6:
+            return True
 
     return False
 
 
-def _normalize_phone(phone: str) -> str:
-    """Normalize phone number for comparison."""
-    return "".join(c for c in phone if c.isdigit())
+def _normalize_phone(phone: str | None) -> str | None:
+    """Normalize phone number for comparison. Returns None for empty/missing."""
+    if not phone:
+        return None
+    digits = "".join(c for c in phone if c.isdigit())
+    return digits if digits else None
 
 
 def find_conflict_path(

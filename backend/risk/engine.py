@@ -15,7 +15,9 @@ from models import (
     RiskFactorType,
     RiskCategory,
     TenderStatus,
+    AddressQuality,
 )
+from connectors.normalize import classify_address
 from graph.builder import find_conflict_path
 import networkx as nx
 
@@ -192,50 +194,122 @@ def check_cartel_pattern(
     return None
 
 
+# ---------------------------------------------------------------------------
+# Multi-signal shell company detection weights
+# ---------------------------------------------------------------------------
+_SHELL_SIGNAL_WEIGHTS = {
+    "company_age_very_new": 25,  # < 30 days old
+    "company_age_new": 12,  # < 90 days old
+    "address_placeholder": 15,  # "PO Box 123" default
+    "address_vague": 8,  # "MOI AVENUE" — road name only
+    "address_missing": 10,  # No address at all
+    "no_directors": 12,  # Zero directors listed
+    "no_ownership": 8,  # No ownership info
+    "generic_email": 5,  # Gmail/Yahoo contact
+    "large_value_new_company": 20,  # High contract value + new company
+    "missing_registration": 10,  # No registration date
+}
+_SHELL_THRESHOLD = 40
+
+
 def check_shell_company(tender: Tender, winner: Company | None) -> RiskFactor | None:
     """
-    Check if winning company was registered very recently (shell company indicator).
+    Multi-signal shell company detection.
+    Combines registration recency, address quality, director/ownership
+    completeness, email patterns, and contract value signals.
+    Works under Kenya's sparse/generic data reality.
     """
     if not winner:
         return None
 
-    # Calculate company age at time of tender deadline
-    company_age_days = (tender.deadline - winner.registration_date).days
+    signals = []
+    composite_score = 0
+    evidence = [f"Company: {winner.name}"]
 
-    if company_age_days < 30:
-        return RiskFactor(
-            type=RiskFactorType.SHELL_COMPANY,
-            description=f"Winning company registered only {company_age_days} days before tender deadline",
-            weight=RISK_WEIGHTS[RiskFactorType.SHELL_COMPANY],
-            evidence=[
-                f"Company: {winner.name}",
-                f"Registration date: {winner.registration_date.isoformat()}",
-                f"Tender deadline: {tender.deadline.isoformat()}",
-                f"Company age at deadline: {company_age_days} days",
-                (
-                    f"Contract value: KES {tender.awarded_amount:,.0f}"
-                    if tender.awarded_amount
-                    else ""
-                ),
-            ],
-            related_entity_ids=[winner.id],
-        )
-    elif company_age_days < 90:
-        # Less severe but still notable
-        return RiskFactor(
-            type=RiskFactorType.SHELL_COMPANY,
-            description=f"Winning company registered only {company_age_days} days before tender deadline",
-            weight=RISK_WEIGHTS[RiskFactorType.SHELL_COMPANY] // 2,  # Reduced weight
-            evidence=[
-                f"Company: {winner.name}",
-                f"Registration date: {winner.registration_date.isoformat()}",
-                f"Tender deadline: {tender.deadline.isoformat()}",
-                f"Company age at deadline: {company_age_days} days",
-            ],
-            related_entity_ids=[winner.id],
-        )
+    # --- Signal 1: Company age ---
+    if winner.registration_date and tender.deadline:
+        company_age_days = (tender.deadline - winner.registration_date).days
+        if company_age_days < 30:
+            composite_score += _SHELL_SIGNAL_WEIGHTS["company_age_very_new"]
+            signals.append("company_age_very_new")
+            evidence.append(f"Registered only {company_age_days} days before deadline")
+        elif company_age_days < 90:
+            composite_score += _SHELL_SIGNAL_WEIGHTS["company_age_new"]
+            signals.append("company_age_new")
+            evidence.append(f"Registered only {company_age_days} days before deadline")
+    elif not winner.registration_date:
+        composite_score += _SHELL_SIGNAL_WEIGHTS["missing_registration"]
+        signals.append("missing_registration")
+        evidence.append("No registration date on record")
 
-    return None
+    # --- Signal 2: Address quality ---
+    addr = winner.physical_address or winner.address
+    addr_quality = classify_address(addr)
+    if addr_quality == AddressQuality.PLACEHOLDER:
+        composite_score += _SHELL_SIGNAL_WEIGHTS["address_placeholder"]
+        signals.append("address_placeholder")
+        evidence.append(f"Placeholder address: '{addr}'")
+    elif addr_quality == AddressQuality.VAGUE:
+        composite_score += _SHELL_SIGNAL_WEIGHTS["address_vague"]
+        signals.append("address_vague")
+        evidence.append(f"Vague address: '{addr}'")
+    elif addr_quality == AddressQuality.UNKNOWN:
+        composite_score += _SHELL_SIGNAL_WEIGHTS["address_missing"]
+        signals.append("address_missing")
+        evidence.append("No address on record")
+
+    # --- Signal 3: Director count ---
+    quality = winner.data_quality_flags or {}
+    director_count = quality.get("director_count", len(winner.director_ids))
+    if director_count == 0:
+        composite_score += _SHELL_SIGNAL_WEIGHTS["no_directors"]
+        signals.append("no_directors")
+        evidence.append("No directors listed")
+
+    # --- Signal 4: Ownership info ---
+    if quality.get("has_ownership") is False:
+        composite_score += _SHELL_SIGNAL_WEIGHTS["no_ownership"]
+        signals.append("no_ownership")
+        evidence.append("No ownership records")
+
+    # --- Signal 5: Generic email domain ---
+    if quality.get("email_is_generic") is True:
+        composite_score += _SHELL_SIGNAL_WEIGHTS["generic_email"]
+        signals.append("generic_email")
+        evidence.append(f"Generic email: {winner.contact_email}")
+
+    # --- Signal 6: Large contract + new company ---
+    if tender.awarded_amount and tender.awarded_amount > 1_000_000:
+        is_new = (
+            "company_age_very_new" in signals
+            or "company_age_new" in signals
+            or "missing_registration" in signals
+        )
+        if is_new:
+            composite_score += _SHELL_SIGNAL_WEIGHTS["large_value_new_company"]
+            signals.append("large_value_new_company")
+            evidence.append(
+                f"Large contract KES {tender.awarded_amount:,.0f} awarded to new/unverifiable company"
+            )
+
+    # --- Threshold check ---
+    if composite_score < _SHELL_THRESHOLD // 2:
+        return None
+
+    # Scale weight proportionally to composite
+    max_weight = RISK_WEIGHTS[RiskFactorType.SHELL_COMPANY]
+    weight = min(max_weight, int(max_weight * composite_score / 100))
+    if composite_score >= _SHELL_THRESHOLD:
+        weight = max_weight  # Full weight if threshold met
+
+    signal_summary = ", ".join(signals)
+    return RiskFactor(
+        type=RiskFactorType.SHELL_COMPANY,
+        description=f"Shell company indicators ({len(signals)} signals: {signal_summary})",
+        weight=weight,
+        evidence=evidence,
+        related_entity_ids=[winner.id],
+    )
 
 
 def check_price_anomaly(
@@ -245,6 +319,8 @@ def check_price_anomaly(
     Check if awarded amount is significantly above estimate or comparable tenders.
     """
     if not tender.awarded_amount or not tender.estimated_value:
+        return None
+    if tender.estimated_value <= 0:
         return None
 
     # Check against estimate
@@ -289,6 +365,8 @@ def check_rushed_timeline(tender: Tender) -> RiskFactor | None:
     """
     Check if tender had unusually short submission window.
     """
+    if not tender.deadline or not tender.published_date:
+        return None
     submission_window = (tender.deadline - tender.published_date).days
 
     if submission_window <= 5:
