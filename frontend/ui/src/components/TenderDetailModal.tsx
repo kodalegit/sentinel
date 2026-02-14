@@ -30,6 +30,9 @@ import {
   UserX,
   Loader2,
   FolderOpen,
+  Tag,
+  Mail,
+  MapPin,
 } from "lucide-react";
 
 interface TenderDetailModalProps {
@@ -159,12 +162,16 @@ function TenderDetailContent({
         <InfoItem icon={<Building2 size={14} />} label="Procuring Entity">
           {tender.procuring_entity}
         </InfoItem>
-        <InfoItem icon={<Calendar size={14} />} label="Deadline">
-          {tender.deadline}
-        </InfoItem>
-        <InfoItem icon={<DollarSign size={14} />} label="Estimated Value">
-          <span className="font-display">{formatKES(tender.estimated_value)}</span>
-        </InfoItem>
+        {tender.deadline && (
+          <InfoItem icon={<Calendar size={14} />} label="Deadline">
+            {tender.deadline}
+          </InfoItem>
+        )}
+        {tender.estimated_value && (
+          <InfoItem icon={<DollarSign size={14} />} label="Estimated Value">
+            <span className="font-display">{formatKES(tender.estimated_value)}</span>
+          </InfoItem>
+        )}
         {tender.awarded_amount && (
           <InfoItem icon={<DollarSign size={14} />} label="Awarded Amount">
             <span className="font-display">{formatKES(tender.awarded_amount)}</span>
@@ -172,6 +179,19 @@ function TenderDetailContent({
         )}
         <InfoItem icon={<Users size={14} />} label="Bidders">
           {bids.length} companies
+        </InfoItem>
+        {tender.procurement_method && (
+          <InfoItem icon={<Tag size={14} />} label="Method">
+            {tender.procurement_method}
+          </InfoItem>
+        )}
+        {tender.pe_type && (
+          <InfoItem icon={<Building2 size={14} />} label="PE Type">
+            {tender.pe_type}
+          </InfoItem>
+        )}
+        <InfoItem icon={<DollarSign size={14} />} label="Currency">
+          {tender.currency}
         </InfoItem>
       </div>
 
@@ -193,14 +213,28 @@ function TenderDetailContent({
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
               <Building2 className="text-primary" size={16} />
             </div>
-            <div>
+            <div className="space-y-1">
               <p className="font-medium text-sm">{winning_company.name}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
+              <p className="text-xs text-muted-foreground">
                 Reg: {winning_company.registration_number}
               </p>
-              <p className="text-xs text-muted-foreground">
-                {winning_company.address}
-              </p>
+              {(winning_company.physical_address || winning_company.address) && (
+                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                  <MapPin size={10} className="shrink-0" />
+                  {winning_company.physical_address || winning_company.address}
+                </p>
+              )}
+              {winning_company.contact_email && (
+                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                  <Mail size={10} className="shrink-0" />
+                  {winning_company.contact_email}
+                </p>
+              )}
+              {winning_company.supplier_type && (
+                <span className="inline-flex text-[10px] rounded-full border border-border/50 bg-secondary/80 px-2 py-0.5">
+                  {winning_company.supplier_type}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -294,6 +328,12 @@ const FACTOR_CONFIG: Record<
     label: "Rushed Timeline",
     accent: "text-[#35638c]",
     border: "border-[#35638c]/20 bg-[#35638c]/10",
+  },
+  ML_ANOMALY: {
+    icon: <ShieldAlert size={16} />,
+    label: "ML Anomaly",
+    accent: "text-[#6b4bbd]",
+    border: "border-[#6b4bbd]/20 bg-[#6b4bbd]/10",
   },
 };
 

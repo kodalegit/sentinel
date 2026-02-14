@@ -14,8 +14,12 @@ from connectors.ppip import sync_ppip_fiscal_year
 from connectors.egp import normalize_egp_tenders, normalize_egp_contract
 from db.config import async_session
 from db.models import (
-    CompanyDB, DirectorDB, TenderDB, ContractDB,
-    OwnershipDB, CompanyDirectorDB,
+    CompanyDB,
+    DirectorDB,
+    TenderDB,
+    ContractDB,
+    OwnershipDB,
+    CompanyDirectorDB,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,6 +29,7 @@ router = APIRouter(prefix="/api/ingest", tags=["ingestion"])
 # ---------------------------------------------------------------------------
 # Request / Response schemas
 # ---------------------------------------------------------------------------
+
 
 class PPIPSyncRequest(BaseModel):
     fiscal_year: str = Field(..., description="Fiscal year e.g. '2025-2026'")
@@ -42,7 +47,9 @@ class EGPTenderRequest(BaseModel):
 
 
 class EGPContractRequest(BaseModel):
-    contracts: list[dict] = Field(..., description="List of e-GP contract detail payloads")
+    contracts: list[dict] = Field(
+        ..., description="List of e-GP contract detail payloads"
+    )
 
 
 class IngestResponse(BaseModel):
@@ -55,11 +62,15 @@ class IngestResponse(BaseModel):
 # Helper: persist entities to DB
 # ---------------------------------------------------------------------------
 
+
 async def _persist_company(db, company) -> Optional[CompanyDB]:
     """Persist a company, skipping duplicates by registration_number."""
     from sqlalchemy import select
+
     result = await db.execute(
-        select(CompanyDB).where(CompanyDB.registration_number == company.registration_number)
+        select(CompanyDB).where(
+            CompanyDB.registration_number == company.registration_number
+        )
     )
     existing = result.scalar_one_or_none()
     if existing:
@@ -91,6 +102,7 @@ async def _persist_company(db, company) -> Optional[CompanyDB]:
 async def _persist_tender(db, tender) -> Optional[TenderDB]:
     """Persist a tender, skipping duplicates by reference_number."""
     from sqlalchemy import select
+
     result = await db.execute(
         select(TenderDB).where(TenderDB.reference_number == tender.reference_number)
     )
@@ -108,7 +120,9 @@ async def _persist_tender(db, tender) -> Optional[TenderDB]:
         awarded_amount=tender.awarded_amount,
         published_date=tender.published_date,
         deadline=tender.deadline,
-        status=tender.status.value if hasattr(tender.status, 'value') else tender.status,
+        status=(
+            tender.status.value if hasattr(tender.status, "value") else tender.status
+        ),
         procurement_method=tender.procurement_method,
         procurement_category=tender.procurement_category,
         pe_type=tender.pe_type,
@@ -124,9 +138,12 @@ async def _persist_tender(db, tender) -> Optional[TenderDB]:
     return db_tender
 
 
-async def _persist_contract(db, contract, tender_db_id=None, company_db_id=None) -> Optional[ContractDB]:
+async def _persist_contract(
+    db, contract, tender_db_id=None, company_db_id=None
+) -> Optional[ContractDB]:
     """Persist a contract, skipping duplicates by contract_number."""
     from sqlalchemy import select
+
     result = await db.execute(
         select(ContractDB).where(ContractDB.contract_number == contract.contract_number)
     )
@@ -165,6 +182,7 @@ async def _persist_contract(db, contract, tender_db_id=None, company_db_id=None)
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.post("/ppip/sync", response_model=PPIPSyncResponse)
 async def sync_ppip(request: PPIPSyncRequest):
@@ -269,6 +287,7 @@ async def ingest_egp_contracts(request: EGPContractRequest):
                 # Persist directors
                 for director in result["directors"]:
                     from sqlalchemy import select
+
                     existing = await db.execute(
                         select(DirectorDB).where(DirectorDB.name == director.name)
                     )
@@ -288,20 +307,24 @@ async def ingest_egp_contracts(request: EGPContractRequest):
                             )
                         )
                         if not existing_link.scalar_one_or_none():
-                            db.add(CompanyDirectorDB(
-                                company_id=company_db_id,
-                                director_id=db_director.id,
-                            ))
+                            db.add(
+                                CompanyDirectorDB(
+                                    company_id=company_db_id,
+                                    director_id=db_director.id,
+                                )
+                            )
 
                 # Persist ownership records
                 for ownership in result["ownership"]:
                     if company_db_id:
-                        db.add(OwnershipDB(
-                            company_id=company_db_id,
-                            owner_name=ownership.owner_name,
-                            nationality=ownership.nationality,
-                            postal_address=ownership.postal_address,
-                        ))
+                        db.add(
+                            OwnershipDB(
+                                company_id=company_db_id,
+                                owner_name=ownership.owner_name,
+                                nationality=ownership.nationality,
+                                postal_address=ownership.postal_address,
+                            )
+                        )
                         ownership_saved += 1
 
                 # Persist tender stub (if available)
@@ -318,7 +341,8 @@ async def ingest_egp_contracts(request: EGPContractRequest):
                 # Persist contract
                 contract = result["contract"]
                 db_contract = await _persist_contract(
-                    db, contract,
+                    db,
+                    contract,
                     tender_db_id=tender_db_id,
                     company_db_id=company_db_id,
                 )

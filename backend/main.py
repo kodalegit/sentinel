@@ -4,7 +4,7 @@ Sentinel API - FastAPI backend for public procurement oversight.
 
 import uuid
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
@@ -30,6 +30,65 @@ from routes.tenders_graph import router as tenders_graph_router
 from routes.graph import router as graph_router
 from routes.cases import router as cases_router
 from routes.ingest import router as ingest_router
+
+
+async def recompute_app_state(app: FastAPI) -> dict:
+    """
+    Reload all data from DB, rebuild graph, recompute risk scores,
+    and update the in-memory app state. Called at startup and after ingestion.
+    Returns summary stats.
+    """
+    data = await load_data_from_db()
+
+    graph = build_procurement_graph(
+        tenders=data["tenders"],
+        companies=data["companies"],
+        directors=data["directors"],
+        officials=data["officials"],
+        bids=data["bids"],
+    )
+
+    communities = detect_communities(graph, data["bids"], data["companies"])
+
+    scorer = HybridRiskScorer()
+    risk_scores = scorer.score_all(
+        tenders=data["tenders"],
+        companies=data["companies"],
+        directors=data["directors"],
+        officials=data["officials"],
+        bids=data["bids"],
+        graph=graph,
+        communities=communities,
+        bids_by_tender=data["bids_by_tender"],
+    )
+
+    for tender_id, risk in risk_scores.items():
+        if tender_id in graph:
+            graph.nodes[tender_id]["risk_level"] = risk.category.value
+
+    await persist_risk_scores(risk_scores)
+
+    app.state.app_state = AppState(
+        tenders=data["tenders"],
+        companies=data["companies"],
+        directors=data["directors"],
+        officials=data["officials"],
+        bids=data["bids"],
+        bids_by_tender=data["bids_by_tender"],
+        graph=graph,
+        risk_scores=risk_scores,
+        communities=communities,
+    )
+
+    s = app.state.app_state
+    return {
+        "tenders": len(s.tenders),
+        "companies": len(s.companies),
+        "nodes": s.graph.number_of_nodes(),
+        "edges": s.graph.number_of_edges(),
+        "communities": len(s.communities),
+        "risk_scores": len(s.risk_scores),
+    }
 
 
 async def load_data_from_db():
@@ -80,62 +139,11 @@ async def persist_risk_scores(risk_scores: dict[str, RiskScore]):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize data on startup."""
-    # Load data from PostgreSQL
-    data = await load_data_from_db()
-
-    # Build the shadow graph
-    graph = build_procurement_graph(
-        tenders=data["tenders"],
-        companies=data["companies"],
-        directors=data["directors"],
-        officials=data["officials"],
-        bids=data["bids"],
-    )
-
-    # Detect communities once (Louvain) — cached for routes and rule engine
-    communities = detect_communities(graph, data["bids"], data["companies"])
-
-    # Compute hybrid risk scores (rules + Isolation Forest)
-    scorer = HybridRiskScorer()
-    risk_scores = scorer.score_all(
-        tenders=data["tenders"],
-        companies=data["companies"],
-        directors=data["directors"],
-        officials=data["officials"],
-        bids=data["bids"],
-        graph=graph,
-        communities=communities,
-        bids_by_tender=data["bids_by_tender"],
-    )
-
-    # Update graph with risk levels
-    for tender_id, risk in risk_scores.items():
-        if tender_id in graph:
-            graph.nodes[tender_id]["risk_level"] = risk.category.value
-
-    # Persist risk scores to DB
-    await persist_risk_scores(risk_scores)
-
-    # Store typed state on the app
-    app.state.app_state = AppState(
-        tenders=data["tenders"],
-        companies=data["companies"],
-        directors=data["directors"],
-        officials=data["officials"],
-        bids=data["bids"],
-        bids_by_tender=data["bids_by_tender"],
-        graph=graph,
-        risk_scores=risk_scores,
-        communities=communities,
-    )
-
-    s = app.state.app_state
-    print(f"Loaded {len(s.tenders)} tenders from PostgreSQL")
-    print(
-        f"Built graph with {s.graph.number_of_nodes()} nodes and {s.graph.number_of_edges()} edges"
-    )
-    print(f"Detected {len(s.communities)} bidding communities")
-    print(f"Computed and persisted {len(s.risk_scores)} risk scores")
+    stats = await recompute_app_state(app)
+    print(f"Loaded {stats['tenders']} tenders from PostgreSQL")
+    print(f"Built graph with {stats['nodes']} nodes and {stats['edges']} edges")
+    print(f"Detected {stats['communities']} bidding communities")
+    print(f"Computed and persisted {stats['risk_scores']} risk scores")
 
     yield
 
@@ -165,6 +173,13 @@ app.include_router(tenders_graph_router)
 app.include_router(graph_router)
 app.include_router(cases_router)
 app.include_router(ingest_router)
+
+
+@app.post("/api/recompute")
+async def recompute(request: Request):
+    """Reload data from DB and recompute graph + risk scores."""
+    stats = await recompute_app_state(request.app)
+    return {"status": "ok", "stats": stats}
 
 
 @app.get("/")

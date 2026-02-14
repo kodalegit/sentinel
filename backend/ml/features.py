@@ -82,7 +82,7 @@ def extract_tender_features(
     for tid, tender in tenders.items():
         tender_bids = bids_by_tender.get(tid, [])
         bid_amounts = [b.amount for b in tender_bids]
-        est = tender.estimated_value
+        est = tender.estimated_value or 0.0
 
         # Price features
         price_ratio = (

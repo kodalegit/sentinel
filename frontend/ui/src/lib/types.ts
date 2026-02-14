@@ -20,7 +20,8 @@ export type EdgeType =
   | "AWARDED_BY"
   | "RELATED_TO"
   | "SHARES_ADDRESS"
-  | "SHARES_PHONE";
+  | "SHARES_PHONE"
+  | "SHARES_EMAIL";
 
 // Core entities
 export interface Tender {
@@ -30,23 +31,36 @@ export interface Tender {
   description: string;
   procuring_entity: string;
   category: string;
-  estimated_value: number;
-  published_date: string;
-  deadline: string;
+  estimated_value: number | null;
+  published_date: string | null;
+  deadline: string | null;
   status: TenderStatus;
   awarded_to: string | null;
   awarded_amount: number | null;
   procurement_officer_id: string | null;
+  procurement_method: string | null;
+  procurement_category: string | null;
+  pe_type: string | null;
+  currency: string;
+  source_system: string | null;
 }
 
 export interface Company {
   id: string;
   name: string;
   registration_number: string;
-  registration_date: string;
-  address: string;
-  phone: string;
+  registration_date: string | null;
+  address: string | null;
+  phone: string | null;
   director_ids: string[];
+  supplier_type: string | null;
+  brs_number: string | null;
+  contact_email: string | null;
+  physical_address: string | null;
+  postal_address: string | null;
+  postal_code: string | null;
+  source_system: string | null;
+  data_quality_flags: Record<string, unknown> | null;
 }
 
 export interface Director {
@@ -200,4 +214,23 @@ export interface CaseStats {
   escalated: number;
   resolved: number;
   dismissed: number;
+}
+
+// Ingestion
+export interface IngestionResponse {
+  status: string;
+  message: string;
+  counts: Record<string, number>;
+}
+
+export interface RecomputeResponse {
+  status: string;
+  stats: {
+    tenders: number;
+    companies: number;
+    nodes: number;
+    edges: number;
+    communities: number;
+    risk_scores: number;
+  };
 }

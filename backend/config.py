@@ -30,9 +30,6 @@ class Settings(BaseSettings):
     ppip_base_url: str = "https://tenders.go.ke/api/ocds"
     ppip_timeout: float = 30.0
 
-    # Redis (for async jobs)
-    redis_url: str = "redis://localhost:6379"
-
     # CORS
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 

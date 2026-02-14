@@ -12,6 +12,8 @@ import type {
   CaseStats,
   RiskCategory,
   TenderStatus,
+  IngestionResponse,
+  RecomputeResponse,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -133,6 +135,55 @@ export async function addCaseNote(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
+  });
+  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  return response.json();
+}
+
+// --- Ingestion ---
+
+export async function syncPPIP(fiscalYear: string): Promise<IngestionResponse> {
+  const response = await fetch(`${API_BASE}/api/ingest/ppip/sync`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fiscal_year: fiscalYear }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || `API error: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function ingestEGPTenders(payload: unknown): Promise<IngestionResponse> {
+  const response = await fetch(`${API_BASE}/api/ingest/egp/tenders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || `API error: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function ingestEGPContracts(payload: unknown): Promise<IngestionResponse> {
+  const response = await fetch(`${API_BASE}/api/ingest/egp/contracts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || `API error: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function triggerRecompute(): Promise<RecomputeResponse> {
+  const response = await fetch(`${API_BASE}/api/recompute`, {
+    method: "POST",
   });
   if (!response.ok) throw new Error(`API error: ${response.status}`);
   return response.json();

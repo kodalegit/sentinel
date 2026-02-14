@@ -33,6 +33,9 @@ import {
   UserX,
   Loader2,
   FolderOpen,
+  Tag,
+  Mail,
+  MapPin,
 } from "lucide-react";
 
 const RISK_SCORE_COLORS: Record<RiskCategory, string> = {
@@ -300,12 +303,16 @@ export default function TenderDetailPage({
               <MetaItem icon={<Building2 size={14} />} label="Procuring Entity">
                 {tender.procuring_entity}
               </MetaItem>
-              <MetaItem icon={<Calendar size={14} />} label="Deadline">
-                {tender.deadline}
-              </MetaItem>
-              <MetaItem icon={<DollarSign size={14} />} label="Estimated Value">
-                <span className="font-display">{formatKES(tender.estimated_value)}</span>
-              </MetaItem>
+              {tender.deadline && (
+                <MetaItem icon={<Calendar size={14} />} label="Deadline">
+                  {tender.deadline}
+                </MetaItem>
+              )}
+              {tender.estimated_value && (
+                <MetaItem icon={<DollarSign size={14} />} label="Estimated Value">
+                  <span className="font-display">{formatKES(tender.estimated_value)}</span>
+                </MetaItem>
+              )}
               {tender.awarded_amount && (
                 <MetaItem icon={<DollarSign size={14} />} label="Awarded Amount">
                   <span className="font-display">{formatKES(tender.awarded_amount)}</span>
@@ -314,11 +321,34 @@ export default function TenderDetailPage({
               <MetaItem icon={<Users size={14} />} label="Bidders">
                 {bids.length} companies
               </MetaItem>
+              {tender.procurement_method && (
+                <MetaItem icon={<Tag size={14} />} label="Procurement Method">
+                  {tender.procurement_method}
+                </MetaItem>
+              )}
+              {tender.procurement_category && (
+                <MetaItem icon={<Tag size={14} />} label="Category">
+                  {tender.procurement_category}
+                </MetaItem>
+              )}
+              {tender.pe_type && (
+                <MetaItem icon={<Building2 size={14} />} label="PE Type">
+                  {tender.pe_type}
+                </MetaItem>
+              )}
+              <MetaItem icon={<DollarSign size={14} />} label="Currency">
+                {tender.currency}
+              </MetaItem>
               <div className="pt-2 border-t border-border/40">
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">Status:</span>
                   <StatusBadge status={tender.status} />
                 </div>
+                {tender.source_system && tender.source_system !== "synthetic" && (
+                  <span className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-primary/20 bg-primary/5 px-2 py-0.5 text-[10px] text-primary">
+                    Source: {tender.source_system.toUpperCase()}
+                  </span>
+                )}
               </div>
             </div>
 
@@ -332,14 +362,42 @@ export default function TenderDetailPage({
                   <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 shrink-0">
                     <Building2 className="text-primary" size={16} />
                   </div>
-                  <div>
+                  <div className="space-y-1">
                     <p className="font-medium text-sm">{winning_company.name}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
+                    <p className="text-xs text-muted-foreground">
                       Reg: {winning_company.registration_number}
                     </p>
-                    <p className="text-xs text-muted-foreground">
-                      {winning_company.address}
-                    </p>
+                    {winning_company.physical_address && (
+                      <p className="text-xs text-muted-foreground flex items-center gap-1">
+                        <MapPin size={10} className="shrink-0" />
+                        {winning_company.physical_address}
+                      </p>
+                    )}
+                    {!winning_company.physical_address && winning_company.address && (
+                      <p className="text-xs text-muted-foreground flex items-center gap-1">
+                        <MapPin size={10} className="shrink-0" />
+                        {winning_company.address}
+                      </p>
+                    )}
+                    {winning_company.contact_email && (
+                      <p className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Mail size={10} className="shrink-0" />
+                        {winning_company.contact_email}
+                      </p>
+                    )}
+                    {winning_company.supplier_type && (
+                      <span className="inline-flex text-[10px] rounded-full border border-border/50 bg-secondary/50 px-2 py-0.5">
+                        {winning_company.supplier_type}
+                      </span>
+                    )}
+                    {winning_company.data_quality_flags && (
+                      <div className="mt-2 pt-2 border-t border-border/30">
+                        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Data Quality</span>
+                        <div className="flex items-center gap-2 mt-1">
+                          <QualityBar score={winning_company.data_quality_flags.quality_score as number | undefined} />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -428,6 +486,21 @@ function RiskFactorCard({ factor }: { factor: RiskFactor }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function QualityBar({ score }: { score?: number }) {
+  const s = score ?? 0;
+  const color =
+    s >= 70 ? "bg-emerald-500" : s >= 40 ? "bg-[#b78b43]" : "bg-[#c4412f]";
+
+  return (
+    <div className="flex items-center gap-2 w-full">
+      <div className="flex-1 h-1.5 rounded-full bg-secondary/80 overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${s}%` }} />
+      </div>
+      <span className="text-[10px] font-bold tabular-nums text-muted-foreground">{s}%</span>
     </div>
   );
 }

@@ -65,14 +65,26 @@ export function TenderCard({ tender, onClick }: TenderCardProps) {
           <Building2 size={12} />
           {t.procuring_entity}
         </span>
-        <span className="inline-flex items-center gap-1.5">
-          <Calendar size={12} />
-          {t.deadline}
-        </span>
+        {t.deadline && (
+          <span className="inline-flex items-center gap-1.5">
+            <Calendar size={12} />
+            {t.deadline}
+          </span>
+        )}
         {bidder_count > 0 && (
           <span className="inline-flex items-center gap-1.5">
             <Users size={12} />
             {bidder_count} bidders
+          </span>
+        )}
+        {t.procurement_method && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-secondary/50 px-2 py-0.5 text-[10px]">
+            {t.procurement_method}
+          </span>
+        )}
+        {t.source_system && t.source_system !== "synthetic" && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/20 bg-primary/5 px-2 py-0.5 text-[10px] text-primary">
+            {t.source_system.toUpperCase()}
           </span>
         )}
       </div>
@@ -84,7 +96,9 @@ export function TenderCard({ tender, onClick }: TenderCardProps) {
             Contract Value
           </span>
           <p className="font-display text-lg text-foreground/90">
-            {formatKES(t.awarded_amount || t.estimated_value)}
+            {t.awarded_amount || t.estimated_value
+              ? formatKES(t.awarded_amount || t.estimated_value!)
+              : "—"}
           </p>
         </div>
 

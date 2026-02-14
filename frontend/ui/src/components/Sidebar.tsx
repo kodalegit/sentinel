@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   Network,
   FolderOpen,
+  Database,
   Sun,
   Moon,
 } from "lucide-react";
@@ -20,6 +21,7 @@ const NAV_ITEMS = [
   { href: "/", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/graph", icon: Network, label: "Graph" },
   { href: "/cases", icon: FolderOpen, label: "Cases" },
+  { href: "/sources", icon: Database, label: "Data Sources" },
 ];
 
 export function Sidebar() {

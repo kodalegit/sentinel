@@ -31,7 +31,7 @@ def get_dashboard_stats(state: State):
         if t.status in [TenderStatus.OPEN, TenderStatus.EVALUATION]
     )
 
-    total_value = sum(t.estimated_value for t in state.tenders.values())
+    total_value = sum((t.estimated_value or 0) for t in state.tenders.values())
     flagged_today = high_risk
 
     return DashboardStats(
