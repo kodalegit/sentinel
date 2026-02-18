@@ -8,6 +8,7 @@
 import { useState } from "react";
 import { useFullGraph, useCommunities, useCommunityGraph } from "@/hooks/useTenders";
 import { ShadowGraph } from "@/components/ShadowGraph";
+import { AuthGuard } from "@/components/AuthGuard";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -21,7 +22,7 @@ import {
 } from "lucide-react";
 import type { CommunityCluster } from "@/lib/types";
 
-export default function GraphExplorer() {
+function GraphExplorerContent() {
   const { graph: fullGraph, loading: graphLoading, error } = useFullGraph();
   const { clusters, loading: clustersLoading } = useCommunities();
   const [selectedCluster, setSelectedCluster] = useState<CommunityCluster | null>(null);
@@ -202,6 +203,14 @@ export default function GraphExplorer() {
         </main>
       </div>
     </div>
+  );
+}
+
+export default function GraphExplorer() {
+  return (
+    <AuthGuard>
+      <GraphExplorerContent />
+    </AuthGuard>
   );
 }
 

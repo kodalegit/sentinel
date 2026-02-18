@@ -8,6 +8,8 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCases, useCaseStats, useCaseDetail, queryKeys } from "@/hooks/useTenders";
 import { updateCase, addCaseNote } from "@/lib/api";
+import { AuthGuard } from "@/components/AuthGuard";
+import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -86,8 +88,9 @@ const NOTE_TYPE_LABELS: Record<NoteType, string> = {
   ACTION: "Action",
 };
 
-export default function CasesPage() {
+function CasesPageContent() {
   const queryClient = useQueryClient();
+  const { isSupervisorOrAdmin } = useAuth();
   const [statusFilter, setStatusFilter] = useState<CaseStatus | "ALL">("ALL");
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -325,6 +328,7 @@ function CaseDetailDialog({
   const [noteContent, setNoteContent] = useState("");
   const [noteType, setNoteType] = useState<NoteType>("OBSERVATION");
   const [submitting, setSubmitting] = useState(false);
+  const { isSupervisorOrAdmin } = useAuth();
 
   if (!item) return null;
   const c = item.case;
@@ -398,18 +402,20 @@ function CaseDetailDialog({
                   Transition to
                 </span>
                 <div className="flex gap-2 mt-1.5">
-                  {nextStatuses[c.status].map((s) => (
-                    <Button
-                      key={s}
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onStatusChange(c.id, s)}
-                      className="text-xs h-8"
-                    >
-                      {STATUS_CONFIG[s].icon}
-                      <span className="ml-1">{STATUS_CONFIG[s].label}</span>
-                    </Button>
-                  ))}
+                  {nextStatuses[c.status]
+                    .filter((s) => s !== "DISMISSED" || isSupervisorOrAdmin)
+                    .map((s) => (
+                      <Button
+                        key={s}
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onStatusChange(c.id, s)}
+                        className="text-xs h-8"
+                      >
+                        {STATUS_CONFIG[s].icon}
+                        <span className="ml-1">{STATUS_CONFIG[s].label}</span>
+                      </Button>
+                    ))}
                 </div>
               </div>
             )}
@@ -519,5 +525,13 @@ function MetaItem({
         {value}
       </p>
     </div>
+  );
+}
+
+export default function CasesPage() {
+  return (
+    <AuthGuard>
+      <CasesPageContent />
+    </AuthGuard>
   );
 }

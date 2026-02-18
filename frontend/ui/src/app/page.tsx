@@ -11,6 +11,7 @@ import { formatKES } from "@/lib/api";
 import type { RiskCategory } from "@/lib/types";
 import { TenderCard } from "@/components/TenderCard";
 import { StatCard } from "@/components/ui/StatCard";
+import { AuthGuard } from "@/components/AuthGuard";
 import {
   AlertTriangle,
   AlertCircle,
@@ -28,7 +29,7 @@ const FILTER_TABS: { key: FilterTab; label: string; dot?: string }[] = [
   { key: "LOW", label: "Low Risk", dot: "bg-[#1f6f5c]" },
 ];
 
-export default function Dashboard() {
+function DashboardContent() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<FilterTab>("ALL");
 
@@ -187,5 +188,13 @@ export default function Dashboard() {
       </div>
 
     </div>
+  );
+}
+
+export default function Dashboard() {
+  return (
+    <AuthGuard>
+      <DashboardContent />
+    </AuthGuard>
   );
 }

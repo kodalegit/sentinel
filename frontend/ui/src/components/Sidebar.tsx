@@ -5,7 +5,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Shield,
   LayoutDashboard,
@@ -14,8 +14,13 @@ import {
   Database,
   Sun,
   Moon,
+  LogOut,
+  Users,
+  ChevronDown,
 } from "lucide-react";
 import { useTheme } from "next-themes";
+import { useState } from "react";
+import { useAuth } from "@/lib/auth";
 
 const NAV_ITEMS = [
   { href: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -24,9 +29,23 @@ const NAV_ITEMS = [
   { href: "/sources", icon: Database, label: "Data Sources" },
 ];
 
+const ROLE_LABELS: Record<string, string> = {
+  admin: "Admin",
+  supervisor: "Supervisor",
+  auditor: "Auditor",
+};
+
 export function Sidebar() {
   const pathname = usePathname();
   const { theme, setTheme } = useTheme();
+  const { user, logout, isAdmin } = useAuth();
+  const router = useRouter();
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  const handleLogout = () => {
+    logout();
+    router.push("/login");
+  };
 
   return (
     <aside className="fixed left-0 top-0 z-50 flex h-screen w-[240px] flex-col border-r border-sidebar-border/80 bg-sidebar text-sidebar-foreground">
@@ -84,7 +103,24 @@ export function Sidebar() {
         </nav>
       </div>
 
-      <div className="px-6 pb-6 space-y-3">
+      <div className="px-4 pb-6 space-y-2">
+        {/* Admin: User Management link */}
+        {isAdmin && (
+          <Link
+            href="/admin/users"
+            className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
+              pathname.startsWith("/admin/users")
+                ? "bg-sidebar-accent text-sidebar-foreground"
+                : "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
+            }`}
+          >
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg">
+              <Users size={18} strokeWidth={1.5} />
+            </span>
+            <span>User Management</span>
+          </Link>
+        )}
+
         {/* Theme toggle */}
         <button
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -96,13 +132,44 @@ export function Sidebar() {
           <span>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
         </button>
 
-        <div className="rounded-xl border border-sidebar-border/70 bg-sidebar-accent/40 px-4 py-3 text-[11px] text-sidebar-foreground/70">
-          <div className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-emerald-400" />
-            <span className="uppercase tracking-wider">Monitoring Active</span>
+        {/* User info + logout */}
+        {user ? (
+          <div className="relative">
+            <button
+              onClick={() => setUserMenuOpen((v) => !v)}
+              className="flex w-full items-center gap-3 rounded-xl border border-sidebar-border/70 bg-sidebar-accent/40 px-3 py-2.5 text-left transition-all hover:bg-sidebar-accent/70"
+            >
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sidebar-primary/20 text-sidebar-primary text-xs font-semibold uppercase">
+                {user.full_name.charAt(0)}
+              </span>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium text-sidebar-foreground truncate">{user.full_name}</p>
+                <p className="text-[11px] text-sidebar-foreground/50">{ROLE_LABELS[user.role] ?? user.role}</p>
+              </div>
+              <ChevronDown size={14} className={`text-sidebar-foreground/40 transition-transform ${userMenuOpen ? "rotate-180" : ""}`} />
+            </button>
+
+            {userMenuOpen && (
+              <div className="absolute bottom-full left-0 right-0 mb-1 rounded-xl border border-sidebar-border/70 bg-sidebar shadow-lg overflow-hidden">
+                <button
+                  onClick={handleLogout}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground transition-colors"
+                >
+                  <LogOut size={15} />
+                  <span>Sign out</span>
+                </button>
+              </div>
+            )}
           </div>
-          <p className="mt-1 text-sidebar-foreground/50">v2.0 Intelligence Suite</p>
-        </div>
+        ) : (
+          <div className="rounded-xl border border-sidebar-border/70 bg-sidebar-accent/40 px-4 py-3 text-[11px] text-sidebar-foreground/70">
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-emerald-400" />
+              <span className="uppercase tracking-wider">Monitoring Active</span>
+            </div>
+            <p className="mt-1 text-sidebar-foreground/50">v2.0 Intelligence Suite</p>
+          </div>
+        )}
       </div>
     </aside>
   );

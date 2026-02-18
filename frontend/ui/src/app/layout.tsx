@@ -3,6 +3,7 @@ import { IBM_Plex_Sans, Newsreader } from "next/font/google";
 import { Sidebar } from "@/components/Sidebar";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { QueryProvider } from "@/components/QueryProvider";
+import { AuthProvider } from "@/lib/auth";
 import "./globals.css";
 
 const plexSans = IBM_Plex_Sans({
@@ -34,19 +35,21 @@ export default function RootLayout({
         className={`${plexSans.variable} ${newsreader.variable} font-body antialiased bg-noise`}
       >
         <QueryProvider>
-          <ThemeProvider
-            attribute="class"
-            defaultTheme="light"
-            enableSystem={false}
-            disableTransitionOnChange
-          >
-            <div className="flex min-h-screen">
-              <Sidebar />
-              <main className="flex-1 ml-[240px] min-h-screen">
-                {children}
-              </main>
-            </div>
-          </ThemeProvider>
+          <AuthProvider>
+            <ThemeProvider
+              attribute="class"
+              defaultTheme="light"
+              enableSystem={false}
+              disableTransitionOnChange
+            >
+              <div className="flex min-h-screen">
+                <Sidebar />
+                <main className="flex-1 ml-[240px] min-h-screen">
+                  {children}
+                </main>
+              </div>
+            </ThemeProvider>
+          </AuthProvider>
         </QueryProvider>
       </body>
     </html>
