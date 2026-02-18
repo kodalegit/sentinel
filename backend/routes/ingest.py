@@ -1,18 +1,20 @@
 """
 Ingestion API routes for Sentinel.
 Provides endpoints for PPIP OCDS sync and e-GP payload ingestion.
+Requires supervisor or admin role.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
 from connectors.ppip import sync_ppip_fiscal_year
 from connectors.egp import normalize_egp_tenders, normalize_egp_contract
 from db.config import async_session
+from auth.dependencies import SupervisorOrAdmin
 from db.models import (
     CompanyDB,
     DirectorDB,
@@ -91,7 +93,7 @@ async def _persist_company(db, company) -> Optional[CompanyDB]:
         egp_registration_number=company.egp_registration_number,
         source_system=company.source_system,
         source_record_id=company.source_record_id,
-        ingested_at=datetime.utcnow(),
+        ingested_at=datetime.now(timezone.utc).replace(tzinfo=None),
         data_quality_flags=company.data_quality_flags,
     )
     db.add(db_company)
@@ -131,7 +133,7 @@ async def _persist_tender(db, tender) -> Optional[TenderDB]:
         buyer_id=tender.buyer_id,
         source_system=tender.source_system,
         source_record_id=tender.source_record_id,
-        ingested_at=datetime.utcnow(),
+        ingested_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
     db.add(db_tender)
     await db.flush()
@@ -172,7 +174,7 @@ async def _persist_contract(
         pe_type=contract.pe_type,
         source_system=contract.source_system,
         source_record_id=contract.source_record_id,
-        ingested_at=datetime.utcnow(),
+        ingested_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
     db.add(db_contract)
     await db.flush()
@@ -185,10 +187,11 @@ async def _persist_contract(
 
 
 @router.post("/ppip/sync", response_model=PPIPSyncResponse)
-async def sync_ppip(request: PPIPSyncRequest):
+async def sync_ppip(request: PPIPSyncRequest, current_user: SupervisorOrAdmin):
     """
     Sync PPIP OCDS tenders for a given fiscal year.
     Fetches from tenders.go.ke, normalizes, and persists.
+    Requires supervisor or admin role.
     """
     try:
         result = await sync_ppip_fiscal_year(request.fiscal_year)
@@ -230,10 +233,13 @@ async def sync_ppip(request: PPIPSyncRequest):
 
 
 @router.post("/egp/tenders", response_model=IngestResponse)
-async def ingest_egp_tenders(request: EGPTenderRequest):
+async def ingest_egp_tenders(
+    request: EGPTenderRequest, current_user: SupervisorOrAdmin
+):
     """
     Ingest e-GP tender list payload.
     Accepts the shape returned by Kenya's e-GP tender API.
+    Requires supervisor or admin role.
     """
     payload = {}
     if request.respData:
@@ -261,7 +267,9 @@ async def ingest_egp_tenders(request: EGPTenderRequest):
 
 
 @router.post("/egp/contracts", response_model=IngestResponse)
-async def ingest_egp_contracts(request: EGPContractRequest):
+async def ingest_egp_contracts(
+    request: EGPContractRequest, current_user: SupervisorOrAdmin
+):
     """
     Ingest e-GP contract detail payloads.
     Each item should have contractmaindata, contractmoredetails, supplierdetails.

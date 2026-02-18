@@ -30,6 +30,9 @@ from routes.tenders_graph import router as tenders_graph_router
 from routes.graph import router as graph_router
 from routes.cases import router as cases_router
 from routes.ingest import router as ingest_router
+from routes.auth import router as auth_router
+from routes.users import router as users_router
+from auth.dependencies import SupervisorOrAdmin
 
 
 async def recompute_app_state(app: FastAPI) -> dict:
@@ -173,11 +176,13 @@ app.include_router(tenders_graph_router)
 app.include_router(graph_router)
 app.include_router(cases_router)
 app.include_router(ingest_router)
+app.include_router(auth_router)
+app.include_router(users_router)
 
 
 @app.post("/api/recompute")
-async def recompute(request: Request):
-    """Reload data from DB and recompute graph + risk scores."""
+async def recompute(request: Request, current_user: SupervisorOrAdmin):
+    """Reload data from DB and recompute graph + risk scores. Requires supervisor or admin."""
     stats = await recompute_app_state(request.app)
     return {"status": "ok", "stats": stats}
 

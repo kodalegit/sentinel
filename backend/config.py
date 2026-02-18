@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
+    # JWT Authentication
+    jwt_secret_key: str = "sentinel-dev-secret-key-change-in-production"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 7
+
     @property
     def sync_database_url(self) -> str:
         """Sync URL for Alembic migrations."""

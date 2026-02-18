@@ -7,6 +7,7 @@ import asyncio
 import uuid
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from db.config import async_session, engine, Base
 from db.models import (
@@ -17,6 +18,7 @@ from db.models import (
     TenderDB,
     BidDB,
     CompanyDirectorDB,
+    UserDB,
 )
 from data.synthetic import generate_synthetic_data
 
@@ -154,11 +156,84 @@ async def seed_database():
     )
 
 
+SYSTEM_USER_ID = uuid.UUID("a0000000-0000-0000-0000-000000000001")
+
+DEFAULT_USERS = [
+    {
+        "id": SYSTEM_USER_ID,
+        "username": "system",
+        "email": "system@sentinel.local",
+        "full_name": "System User",
+        "role": "system",
+        "password": None,  # Cannot login
+    },
+    {
+        "id": uuid.UUID("a0000000-0000-0000-0000-000000000002"),
+        "username": "admin",
+        "email": "admin@sentinel.local",
+        "full_name": "Admin User",
+        "role": "admin",
+        "password": "admin123",
+    },
+    {
+        "id": uuid.UUID("a0000000-0000-0000-0000-000000000003"),
+        "username": "supervisor",
+        "email": "supervisor@sentinel.local",
+        "full_name": "Jane Supervisor",
+        "role": "supervisor",
+        "password": "super123",
+    },
+    {
+        "id": uuid.UUID("a0000000-0000-0000-0000-000000000004"),
+        "username": "auditor",
+        "email": "auditor@sentinel.local",
+        "full_name": "John Auditor",
+        "role": "auditor",
+        "password": "audit123",
+    },
+]
+
+
+async def seed_users():
+    """Seed default users if they don't exist."""
+    from auth.security import get_password_hash
+
+    async with async_session() as db:
+        async with db.begin():
+            for user_data in DEFAULT_USERS:
+                existing = await db.execute(
+                    select(UserDB).where(UserDB.username == user_data["username"])
+                )
+                if existing.scalar_one_or_none():
+                    continue
+
+                hashed = (
+                    get_password_hash(user_data["password"])
+                    if user_data["password"]
+                    else "$2b$12$disabled-cannot-login-placeholder-hash-value"
+                )
+                db.add(
+                    UserDB(
+                        id=user_data["id"],
+                        username=user_data["username"],
+                        email=user_data["email"],
+                        hashed_password=hashed,
+                        full_name=user_data["full_name"],
+                        role=user_data["role"],
+                    )
+                )
+
+    print(
+        f"Seeded {len(DEFAULT_USERS)} default users (admin, supervisor, auditor, system)"
+    )
+
+
 async def reset_and_seed():
     """Drop all tables, recreate, and seed."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+    await seed_users()
     await seed_database()
     print("Database reset and seeded successfully.")
 

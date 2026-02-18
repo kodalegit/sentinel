@@ -23,6 +23,7 @@ from db.models import (
     AuditLogDB,
     CaseDB,
     CaseNoteDB,
+    UserDB,
 )
 
 
@@ -235,8 +236,10 @@ async def get_cases(
     query = (
         select(CaseDB)
         .options(
-            selectinload(CaseDB.notes),
+            selectinload(CaseDB.notes).selectinload(CaseNoteDB.author),
             selectinload(CaseDB.tender),
+            selectinload(CaseDB.assigned_to),
+            selectinload(CaseDB.created_by),
         )
         .order_by(CaseDB.created_at.desc())
     )
@@ -252,8 +255,10 @@ async def get_case(db: AsyncSession, case_id: uuid.UUID) -> CaseDB | None:
     result = await db.execute(
         select(CaseDB)
         .options(
-            selectinload(CaseDB.notes),
+            selectinload(CaseDB.notes).selectinload(CaseNoteDB.author),
             selectinload(CaseDB.tender),
+            selectinload(CaseDB.assigned_to),
+            selectinload(CaseDB.created_by),
         )
         .where(CaseDB.id == case_id)
     )
@@ -263,7 +268,11 @@ async def get_case(db: AsyncSession, case_id: uuid.UUID) -> CaseDB | None:
 async def get_cases_for_tender(db: AsyncSession, tender_id: uuid.UUID) -> list[CaseDB]:
     result = await db.execute(
         select(CaseDB)
-        .options(selectinload(CaseDB.notes))
+        .options(
+            selectinload(CaseDB.notes).selectinload(CaseNoteDB.author),
+            selectinload(CaseDB.assigned_to),
+            selectinload(CaseDB.created_by),
+        )
         .where(CaseDB.tender_id == tender_id)
         .order_by(CaseDB.created_at.desc())
     )
@@ -275,21 +284,23 @@ async def create_case(
     tender_id: uuid.UUID,
     title: str,
     priority: str = "MEDIUM",
-    assigned_to: str | None = None,
-    created_by: str = "auditor",
+    assigned_to_id: uuid.UUID | None = None,
+    created_by_id: uuid.UUID = None,
     summary: str | None = None,
 ) -> CaseDB:
     case = CaseDB(
         tender_id=tender_id,
         title=title,
         priority=priority,
-        assigned_to=assigned_to,
-        created_by=created_by,
+        assigned_to_id=assigned_to_id,
+        created_by_id=created_by_id,
         summary=summary,
     )
     db.add(case)
     await db.flush()
-    await db.refresh(case, attribute_names=["notes", "tender"])
+    await db.refresh(
+        case, attribute_names=["notes", "tender", "assigned_to", "created_by"]
+    )
     return case
 
 
@@ -305,7 +316,9 @@ async def update_case(
         if value is not None and hasattr(case, key):
             setattr(case, key, value)
     await db.flush()
-    await db.refresh(case, attribute_names=["notes", "tender"])
+    await db.refresh(
+        case, attribute_names=["notes", "tender", "assigned_to", "created_by"]
+    )
     return case
 
 
@@ -313,17 +326,18 @@ async def add_case_note(
     db: AsyncSession,
     case_id: uuid.UUID,
     content: str,
-    author: str = "auditor",
+    author_id: uuid.UUID,
     note_type: str = "OBSERVATION",
 ) -> CaseNoteDB:
     note = CaseNoteDB(
         case_id=case_id,
         content=content,
-        author=author,
+        author_id=author_id,
         note_type=note_type,
     )
     db.add(note)
     await db.flush()
+    await db.refresh(note, attribute_names=["author"])
     return note
 
 

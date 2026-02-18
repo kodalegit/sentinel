@@ -70,6 +70,56 @@ class RelationshipType(str, Enum):
     BUSINESS_PARTNER = "BUSINESS_PARTNER"
 
 
+class UserRole(str, Enum):
+    AUDITOR = "auditor"
+    SUPERVISOR = "supervisor"
+    ADMIN = "admin"
+    SYSTEM = "system"
+
+
+# User & Authentication Models
+class User(BaseModel):
+    id: str
+    username: str
+    email: str
+    full_name: str
+    role: UserRole
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserCreate(BaseModel):
+    username: str
+    email: str
+    password: str
+    full_name: str
+    role: UserRole = UserRole.AUDITOR
+
+
+class UserUpdate(BaseModel):
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    role: Optional[UserRole] = None
+    is_active: Optional[bool] = None
+    password: Optional[str] = None
+
+
+class Token(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+class TokenRefresh(BaseModel):
+    refresh_token: str
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 # Core Domain Entities
 class Director(BaseModel):
     id: str
@@ -225,7 +275,8 @@ class NoteType(str, Enum):
 class CaseNote(BaseModel):
     id: str
     case_id: str
-    author: str
+    author: str  # Display name
+    author_id: Optional[str] = None  # User UUID
     content: str
     note_type: NoteType
     created_at: datetime
@@ -237,8 +288,10 @@ class Case(BaseModel):
     title: str
     status: CaseStatus
     priority: RiskCategory
-    assigned_to: Optional[str] = None
-    created_by: str
+    assigned_to: Optional[str] = None  # Display name
+    assigned_to_id: Optional[str] = None  # User UUID
+    created_by: str  # Display name
+    created_by_id: Optional[str] = None  # User UUID
     summary: Optional[str] = None
     decision: Optional[str] = None
     created_at: datetime
@@ -259,22 +312,20 @@ class CaseCreate(BaseModel):
     tender_id: str
     title: str
     priority: Optional[RiskCategory] = None
-    assigned_to: Optional[str] = None
+    assigned_to_id: Optional[str] = None  # User UUID to assign to
     summary: Optional[str] = None
-    created_by: str = "auditor"
 
 
 class CaseUpdate(BaseModel):
     status: Optional[CaseStatus] = None
     priority: Optional[RiskCategory] = None
-    assigned_to: Optional[str] = None
+    assigned_to_id: Optional[str] = None  # User UUID to assign to
     summary: Optional[str] = None
     decision: Optional[str] = None
 
 
 class CaseNoteCreate(BaseModel):
     content: str
-    author: str = "auditor"
     note_type: NoteType = NoteType.OBSERVATION
 
 

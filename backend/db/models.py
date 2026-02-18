@@ -4,7 +4,7 @@ Maps the procurement domain to PostgreSQL tables.
 """
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
@@ -31,6 +31,40 @@ def gen_uuid():
     return uuid.uuid4()
 
 
+# --- User & Authentication ---
+
+
+class UserDB(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="auditor")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('auditor', 'supervisor', 'admin', 'system')",
+            name="ck_user_role",
+        ),
+        Index("ix_users_username", "username"),
+        Index("ix_users_email", "email"),
+    )
+
+
 # --- Core Entities ---
 
 
@@ -47,7 +81,9 @@ class CompanyDB(Base):
     registration_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
 
     # Kenya-specific fields
     supplier_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
@@ -87,7 +123,9 @@ class DirectorDB(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     national_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
 
     companies: Mapped[list["CompanyDB"]] = relationship(
         secondary="company_directors", back_populates="directors"
@@ -118,7 +156,9 @@ class OfficialDB(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     department: Mapped[str] = mapped_column(String(255), nullable=False)
     position: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
 
     related_persons: Mapped[list["OfficialRelationshipDB"]] = relationship(
         back_populates="official"
@@ -178,9 +218,13 @@ class TenderDB(Base):
     procurement_officer_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("officials.id"), nullable=True
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
     )
 
     # Kenya-specific fields
@@ -237,7 +281,9 @@ class BidDB(Base):
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     submission_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     technical_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
 
     tender: Mapped["TenderDB"] = relationship(back_populates="bids")
     company: Mapped["CompanyDB"] = relationship(back_populates="bids")
@@ -268,7 +314,9 @@ class RiskAssessmentDB(Base):
     ml_feature_importance: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     recommendation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     model_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    assessed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    assessed_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
 
     tender: Mapped["TenderDB"] = relationship(back_populates="risk_assessments")
 
@@ -297,21 +345,31 @@ class CaseDB(Base):
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEN")
     priority: Mapped[str] = mapped_column(String(10), nullable=False, default="MEDIUM")
-    assigned_to: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    created_by: Mapped[str] = mapped_column(
-        String(255), nullable=False, default="system"
+    assigned_to_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=False
     )
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     decision: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
     )
 
     tender: Mapped["TenderDB"] = relationship()
     notes: Mapped[list["CaseNoteDB"]] = relationship(
         back_populates="case", order_by="CaseNoteDB.created_at.desc()"
     )
+    assigned_to: Mapped[Optional["UserDB"]] = relationship(
+        foreign_keys=[assigned_to_id]
+    )
+    created_by: Mapped["UserDB"] = relationship(foreign_keys=[created_by_id])
 
     __table_args__ = (
         CheckConstraint(
@@ -324,6 +382,7 @@ class CaseDB(Base):
         ),
         Index("ix_cases_status", "status"),
         Index("ix_cases_tender", "tender_id"),
+        Index("ix_cases_assigned", "assigned_to_id"),
     )
 
 
@@ -336,14 +395,19 @@ class CaseNoteDB(Base):
     case_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
     )
-    author: Mapped[str] = mapped_column(String(255), nullable=False, default="auditor")
+    author_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=False
+    )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     note_type: Mapped[str] = mapped_column(
         String(20), nullable=False, default="OBSERVATION"
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
 
     case: Mapped["CaseDB"] = relationship(back_populates="notes")
+    author: Mapped["UserDB"] = relationship()
 
     __table_args__ = (
         CheckConstraint(
@@ -351,6 +415,7 @@ class CaseNoteDB(Base):
             name="ck_note_type",
         ),
         Index("ix_notes_case", "case_id"),
+        Index("ix_notes_author", "author_id"),
     )
 
 
@@ -402,7 +467,9 @@ class ContractDB(Base):
     ingested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     data_quality_flags: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
 
     tender: Mapped[Optional["TenderDB"]] = relationship(back_populates="contracts")
     supplier: Mapped[Optional["CompanyDB"]] = relationship(back_populates="contracts")
@@ -428,7 +495,9 @@ class OwnershipDB(Base):
     owner_name: Mapped[str] = mapped_column(String(255), nullable=False)
     nationality: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     postal_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
 
     company: Mapped["CompanyDB"] = relationship(back_populates="ownership_records")
 
@@ -453,7 +522,9 @@ class AuditLogDB(Base):
         UUID(as_uuid=True), nullable=True
     )
     details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
 
     __table_args__ = (
         Index("ix_audit_entity", "entity_type", "entity_id"),
