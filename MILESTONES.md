@@ -74,9 +74,9 @@ Ground the system in real Kenyan procurement data. The current schema was design
 
 ## Milestone 2: User Management & Authentication
 
-**Priority**: HIGH  
-**Timeline**: Weeks 3–4 (1–2 weeks)  
-**Status**: Not Started
+**Priority**: HIGH
+**Timeline**: Weeks 3–4 (1–2 weeks)
+**Status**: ✅ Complete
 
 ### Description
 
@@ -84,17 +84,50 @@ Cases currently have no real ownership — anyone can create, update, or dismiss
 
 ### Deliverables
 
-- User model with roles: **auditor**, **supervisor**, **admin**
-- JWT-based authentication (login, token refresh)
-- Role-based route protection (e.g., only supervisors can escalate/dismiss cases)
-- User attribution on case actions, notes, and audit logs
-- Basic login UI
+- ✅ User model with roles: **auditor**, **supervisor**, **admin**, **system**
+- ✅ JWT-based authentication (login, token refresh)
+- ✅ Role-based route protection (e.g., only supervisors can escalate/dismiss cases)
+- ✅ User attribution on case actions, notes, and audit logs
+- ✅ Basic login UI
+- ✅ Admin user management page
 
 ### Success Criteria
 
-- An auditor can log in, open and investigate cases, but cannot dismiss or escalate
-- A supervisor can escalate, resolve, or dismiss cases
-- All case actions are attributed to the logged-in user in the audit trail
+- ✅ An auditor can log in, open and investigate cases, but cannot dismiss or escalate
+- ✅ A supervisor can escalate, resolve, or dismiss cases
+- ✅ All case actions are attributed to the logged-in user in the audit trail
+- ✅ Admin can create, edit, and deactivate users
+
+### Implementation Details
+
+**Backend:**
+
+- `UserDB` model with FK relationships to `CaseDB` and `CaseNoteDB`
+- Alembic migration `a1b2c3d4e5f6` — adds `users` table, migrates string user fields to UUID FKs
+- `auth/security.py` — bcrypt password hashing, JWT access (30min) + refresh (7 day) tokens
+- `auth/dependencies.py` — `get_current_user`, `require_roles`, typed `CurrentUser`, `SupervisorOrAdmin`, `AdminOnly`
+- `routes/auth.py` — `POST /api/auth/login`, `POST /api/auth/refresh`, `GET /api/auth/me`
+- `routes/users.py` — full CRUD at `/api/users` (admin only), `/api/users/assignable/list`
+- All case routes protected with `CurrentUser`; dismiss/reassign gated to supervisor+
+- Ingestion routes + `/api/recompute` protected with `SupervisorOrAdmin`
+- Audit logs include `user_id` attribution
+- Seed users: admin/admin123, supervisor/super123, auditor/audit123, system (no login)
+
+**Frontend:**
+
+- `AuthProvider` + `useAuth` hook — JWT stored in localStorage, auto-refresh on 401
+- `/login` page with demo credentials hint
+- `AuthGuard` component — wraps Dashboard, Cases, Graph pages; redirects to `/login` if unauthenticated
+- Sidebar — shows logged-in user avatar + role, logout button, admin-only User Management link
+- Cases page — DISMISS button hidden for auditors
+- `/admin/users` — create, edit role/password, activate/deactivate users
+
+**Default Credentials:**
+| User | Password | Role |
+|------|----------|------|
+| `admin` | `admin123` | Admin |
+| `supervisor` | `super123` | Supervisor |
+| `auditor` | `audit123` | Auditor |
 
 ---
 

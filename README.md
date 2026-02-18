@@ -197,9 +197,16 @@ Without an LLM key, the system falls back to structured template explanations.
 - **Typed notes**: Timestamped, user-attributed investigation notes
 - **Audit trail**: All actions logged
 
+### Authentication & Authorization
+
+- **JWT-based auth**: Access (30min) + refresh (7 day) tokens
+- **Role-based access**: auditor, supervisor, admin roles with different permissions
+- **User attribution**: All case actions tracked to logged-in user
+- **Admin user management**: Create, edit, deactivate users
+
 ---
 
-## Current Status (Week 2)
+## Current Status (Week 4)
 
 **Complete:**
 
@@ -211,13 +218,23 @@ Without an LLM key, the system falls back to structured template explanations.
 - [x] UI overhaul (shadcn/ui components, dashboard, graph explorer, cases page)
 - [x] Infrastructure (Docker Compose, Dockerfiles, Railway configs)
 - [x] Backend refactor (Pydantic settings, modular routes, typed AppState)
+- [x] **Authentication & User Management** (JWT auth, role-based access, admin user management)
+- [x] **PPIP/e-GP Data Ingestion** (connectors, provenance, multi-signal detection)
 
-**Upcoming (Week 3):**
+**Upcoming (Week 5):**
 
-- [ ] Production startup pipeline (automated migrations, health checks)
-- [ ] Redis + ARQ worker for async background jobs
-- [ ] Data ingestion API (POST tenders/companies)
-- [ ] Configurable synthetic data generator
+- [ ] Investigation workflow hardening (case assignment, supervisor dashboard, case timeline)
+- [ ] CSV/PDF ingestion for additional data sources
+
+---
+
+## Default Credentials
+
+| User         | Password   | Role       | Permissions                            |
+| ------------ | ---------- | ---------- | -------------------------------------- |
+| `admin`      | `admin123` | Admin      | Full access, user management           |
+| `supervisor` | `super123` | Supervisor | Case management, escalation, dismissal |
+| `auditor`    | `audit123` | Auditor    | View, investigate, add notes           |
 
 ---
 

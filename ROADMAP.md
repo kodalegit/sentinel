@@ -94,42 +94,69 @@
 
 ---
 
-## Weeks 3–4: Authentication & User Management
+## Weeks 3–4: Authentication & User Management (✅ COMPLETE)
 
 **Goal**: JWT auth with role-based access, user-attributed actions
 
 ### Deliverables
 
-- [ ] **User Model & Auth**
-  - [ ] User table: username, email, hashed_password, role, is_active
-  - [ ] Alembic migration for users table
-  - [ ] JWT tokens (access + refresh) via `python-jose` + `passlib`
-  - [ ] Login endpoint: POST `/api/auth/login`
-  - [ ] Token refresh endpoint: POST `/api/auth/refresh`
-- [ ] **Role-Based Access Control**
-  - [ ] Roles: `auditor`, `supervisor`, `admin`
-  - [ ] Route protection via FastAPI `Depends()` — typed dependency (fits existing pattern)
-  - [ ] Auditors: view, investigate, add notes
-  - [ ] Supervisors: + assign, escalate, dismiss, resolve cases
-  - [ ] Admins: + manage users
-- [ ] **User Attribution**
-  - [ ] Case actions attributed to logged-in user
-  - [ ] Audit log entries include user identity
-- [ ] **Login UI**
-  - [ ] Login page with JWT token management
-  - [ ] Protected routes in frontend
+- [x] **User Model & Auth**
+  - [x] User table: username, email, hashed_password, role, is_active
+  - [x] Alembic migration (`a1b2c3d4e5f6`) for users table and FK migration
+  - [x] JWT tokens (access + refresh) via `python-jose` + `passlib`
+  - [x] Login endpoint: POST `/api/auth/login`
+  - [x] Token refresh endpoint: POST `/api/auth/refresh`
+  - [x] Current user endpoint: GET `/api/auth/me`
+- [x] **Role-Based Access Control**
+  - [x] Roles: `auditor`, `supervisor`, `admin`, `system`
+  - [x] Route protection via FastAPI `Depends()` — typed dependency (fits existing pattern)
+  - [x] `CurrentUser`, `SupervisorOrAdmin`, `AdminOnly` dependencies
+  - [x] Auditors: view, investigate, add notes
+  - [x] Supervisors: + assign, escalate, dismiss, resolve cases
+  - [x] Admins: + manage users (CRUD + activate/deactivate)
+- [x] **User Attribution**
+  - [x] Case actions attributed to logged-in user
+  - [x] Audit log entries include user identity
+  - [x] Ingestion routes protected with supervisor/admin role
+- [x] **Login UI**
+  - [x] Login page with JWT token management
+  - [x] Protected routes in frontend (AuthGuard)
+  - [x] Sidebar shows logged-in user + logout
+  - [x] Admin user management page (`/admin/users`)
 
 ### Success Criteria
 
-- Auditor can log in and investigate but cannot dismiss/escalate
-- Supervisor can escalate, resolve, dismiss, and reassign cases
-- All case actions are attributed to the logged-in user in audit trail
+- [x] Auditor can log in and investigate but cannot dismiss/escalate
+- [x] Supervisor can escalate, resolve, dismiss, and reassign cases
+- [x] All case actions are attributed to the logged-in user in audit trail
+- [x] Admin can create, edit, and deactivate users
+
+### Implementation Notes
+
+**Backend:**
+
+- `backend/auth/security.py` — password hashing, JWT create/decode
+- `backend/auth/dependencies.py` — typed dependencies for role-based access
+- `backend/routes/auth.py` — login, refresh, me endpoints
+- `backend/routes/users.py` — CRUD operations (admin only), assignable users list
+- All case routes protected; dismiss/reassign gated to supervisor+
+- Ingestion routes + `/api/recompute` protected with supervisor/admin
+- Seed users: admin/admin123, supervisor/super123, auditor/audit123
+
+**Frontend:**
+
+- `src/lib/auth.tsx` — AuthProvider context, useAuth hook
+- `src/components/AuthGuard.tsx` — route protection wrapper
+- `src/app/login/page.tsx` — login page
+- Sidebar — user avatar, role, logout, admin-only User Management link
+- Cases page — DISMISS button hidden for auditors
+- `/admin/users` — full user CRUD UI
 
 ### Mentor Review Checkpoint
 
-- **Demo**: Login as auditor vs supervisor, show permission differences
-- **Discussion**: Auth security, token management, production migration to OAuth2
-- **Blockers**: _[Document any issues here]_
+- [x] **Demo**: Login as auditor vs supervisor, show permission differences
+- [x] **Discussion**: Auth security, token management, production migration to OAuth2
+- [x] **Blockers**: None
 
 ---
 
