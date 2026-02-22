@@ -160,36 +160,43 @@
 
 ---
 
-## Weeks 4–5: Investigation Workflow Hardening
+## Weeks 4–5: Investigation Workflow Hardening ✅
 
 **Goal**: Realistic audit workflow with assignment, oversight, and decision recording
 
 ### Deliverables
 
-- [ ] **Hybrid Case Assignment**
-  - [ ] Supervisors assign cases to specific auditors
-  - [ ] Auditors self-assign from unassigned case queue
-  - [ ] Reassignment capability
-- [ ] **Supervisor Dashboard**
-  - [ ] View all open/escalated cases
-  - [ ] Filter by assignee, priority, status
-  - [ ] Case workload overview
-- [ ] **Investigation Experience**
-  - [ ] Case timeline: full history of status changes, notes, assignments
-  - [ ] Decision recording: structured finding, recommendation, evidence references
-  - [ ] Notification hooks (placeholder): log/in-app indicator on escalation or assignment
+- [x] **Hybrid Case Assignment**
+  - [x] Supervisors assign cases to specific auditors
+  - [x] Auditors self-assign from unassigned case queue
+  - [x] Reassignment capability
+- [x] **Supervisor Dashboard**
+  - [x] View all open/escalated cases
+  - [x] Filter by assignee, priority, status
+  - [x] Case workload overview (cards per auditor)
+- [x] **Investigation Experience**
+  - [x] Case timeline: full history of status changes, notes, assignments
+  - [x] Decision recording: structured finding, recommendation, evidence references
+  - [x] Notification hooks: bell icon in sidebar, in-app notifications on escalation/assignment
 
 ### Success Criteria
 
-- Supervisor can assign and reassign cases; auditor can pick up unassigned cases
-- Case timeline shows full investigation history
-- Decisions are recorded with structured evidence references
+- ✅ Supervisor can assign and reassign cases; auditor can pick up unassigned cases
+- ✅ Case timeline shows full investigation history
+- ✅ Decisions are recorded with structured evidence references
+
+### Implementation Notes
+
+- Schema: `case_events`, `case_evidence_links`, `case_notifications` tables; `cases` gains `decision_type`, `finding`, `closed_at`
+- Backend: Event-driven case management, auto-link evidence on case creation, notification hooks
+- Frontend: Full `/cases/[id]` detail page, workload overview, notification bell in sidebar
+- Forward-compatible for M5 LLM agent: evidence links become context envelope, events support AI event types
 
 ### Mentor Review Checkpoint
 
 - **Demo**: Full investigation workflow — assign → investigate → decide → escalate
 - **Discussion**: Real-world auditor workflow requirements
-- **Blockers**: _[Document any issues here]_
+- **Blockers**: None
 
 ---
 

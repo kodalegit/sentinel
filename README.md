@@ -11,7 +11,7 @@ Sentinel transforms opaque tender data into actionable intelligence through:
 - **Hybrid Risk Scoring**: 5 rule-based checks fused with Isolation Forest anomaly detection
 - **Shadow Graph Visualization**: Reveals hidden connections between companies, directors, and officials
 - **Grounded AI Explanations**: LangGraph agent with evidence packs ensures every explanation cites real data
-- **Case Management**: Full investigation workflow — open cases, add notes, transition through status stages
+- **Case Management**: Full investigation workflow with timeline, evidence linking, structured decisions, supervisor workload view, and notifications
 - **PostgreSQL Persistence**: Production-grade async database with Alembic migrations and audit trail
 
 ---
@@ -42,7 +42,7 @@ Sentinel transforms opaque tender data into actionable intelligence through:
 │  ┌────────────────────────────────────────────────────────┐   │
 │  │ Core: Tenders, Bids, Companies, Directors, Officials    │   │
 │  │ Risk: Risk Assessments (versioned)                        │   │
-│  │ Cases: Cases, Case Notes, Audit Log                       │   │
+│  │ Cases: Cases, Notes, Events, Evidence Links, Notifications │   │
 │  └────────────────────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────────────┘
 ```

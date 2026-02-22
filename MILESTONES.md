@@ -135,7 +135,7 @@ Cases currently have no real ownership — anyone can create, update, or dismiss
 
 **Priority**: HIGH  
 **Timeline**: Week 4–5 (1–2 weeks)  
-**Status**: Not Started
+**Status**: ✅ Complete
 
 ### Description
 
@@ -143,17 +143,54 @@ The case management system has the basic status machine (OPEN → INVESTIGATING 
 
 ### Deliverables
 
-- **Hybrid case assignment**: supervisors can assign cases to auditors; auditors can self-assign from an unassigned queue
-- Supervisor dashboard: view all open/escalated cases, filter by assignee and priority
-- Decision recording with structured fields (finding, recommendation, evidence references)
-- Case timeline view showing full history of status changes, notes, and assignments
-- Notification hooks (placeholder — e.g., log or in-app indicator when a case is escalated or assigned)
+- ✅ **Hybrid case assignment**: supervisors can assign cases to auditors; auditors can self-assign from an unassigned queue
+- ✅ Supervisor dashboard: view all open/escalated cases, filter by assignee and priority, workload overview
+- ✅ Decision recording with structured fields (finding, recommendation, evidence references)
+- ✅ Case timeline view showing full history of status changes, notes, and assignments
+- ✅ Notification hooks (bell icon in sidebar, in-app notifications for assignment and escalation)
 
 ### Success Criteria
 
-- A supervisor can assign and reassign cases; an auditor can pick up unassigned cases
-- A case's full investigation history is visible in a timeline
-- Decisions are recorded with structured evidence references
+- ✅ A supervisor can assign and reassign cases; an auditor can pick up unassigned cases
+- ✅ A case's full investigation history is visible in a timeline
+- ✅ Decisions are recorded with structured evidence references
+
+### Implementation Details
+
+**Schema (Alembic migration `b5c6d7e8f9a0`):**
+
+- `case_events` table — immutable event log for timeline (CASE_OPENED, STATUS_CHANGE, ASSIGNMENT, NOTE_ADDED, PRIORITY_CHANGE, DECISION_RECORDED, EVIDENCE_LINKED, EVIDENCE_UNLINKED)
+- `case_evidence_links` table — links cases to evidence items (TENDER, RISK_FACTOR, GRAPH_PATH, DOCUMENT). Becomes LLM context envelope in M5.
+- `case_notifications` table — notification hooks for assignment and escalation
+- `cases` table additions: `decision_type` (SUBSTANTIATED/UNSUBSTANTIATED/REFERRED/INCONCLUSIVE), `finding`, `closed_at`
+
+**Backend:**
+
+- Repository functions: `create_case_event`, `get_case_events`, `add_case_evidence_link`, `get_case_evidence_links`, `remove_case_evidence_link`, `create_notification`, `get_user_notifications`, `mark_notification_read`, `get_unread_notification_count`, `get_cases_with_filters`, `get_supervisor_workload`
+- New API endpoints:
+  - `GET /api/cases/{id}/timeline` — chronological event history
+  - `GET/POST/DELETE /api/cases/{id}/evidence` — evidence link management
+  - `POST /api/cases/{id}/self-assign` — auditor picks up unassigned case
+  - `POST /api/cases/{id}/decision` — record structured decision
+  - `GET /api/cases/workload` — supervisor workload view (cases per assignee)
+  - `GET /api/notifications`, `GET /api/notifications/count`, `PATCH /api/notifications/{id}/read`
+- All case mutations emit events to the timeline
+- Auto-link tender and risk factors as evidence on case creation
+- Notifications created on assignment and escalation
+
+**Frontend:**
+
+- Full `/cases/[id]` detail page replaces dialog — two-column layout with timeline, evidence panel, decision form, assignment controls
+- Cases list page: clicking a case navigates to detail page
+- Supervisor workload overview: cards showing cases per auditor, unassigned count, filter by assignee
+- Notification bell in sidebar with unread count badge, dropdown listing recent notifications
+
+**Design Decisions for M5 (LLM Agent + RAG):**
+
+- `CaseEventDB` is forward-compatible — M5 adds AI_SUMMARY and AI_SUGGESTION event types without schema changes
+- `CaseEvidenceLinkDB` becomes the structured context envelope the LLM agent receives
+- Notes remain investigation artifacts; M5 adds separate `case_messages` table for chat history
+- Structured decisions include `evidence_references` — the same references the LLM will cite
 
 ---
 
