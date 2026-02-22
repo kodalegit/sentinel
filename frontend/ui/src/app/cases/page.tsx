@@ -5,37 +5,27 @@
 "use client";
 
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { useCases, useCaseStats, useCaseDetail, queryKeys } from "@/hooks/useTenders";
-import { updateCase, addCaseNote } from "@/lib/api";
+import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
+import { useCases, useCaseStats } from "@/hooks/useTenders";
+import { getWorkload } from "@/lib/api";
 import { AuthGuard } from "@/components/AuthGuard";
 import { useAuth } from "@/lib/auth";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   Loader2,
   FolderOpen,
   Search,
-  AlertTriangle,
   CheckCircle2,
   Clock,
   ArrowUpRight,
   XCircle,
-  MessageSquarePlus,
-  Send,
+  Users,
 } from "lucide-react";
 import type {
   CaseWithTender,
   CaseStatus,
-  NoteType,
   RiskCategory,
+  WorkloadItem,
 } from "@/lib/types";
 
 const STATUS_CONFIG: Record<
@@ -81,69 +71,41 @@ const PRIORITY_ACCENT: Record<RiskCategory, string> = {
   LOW: "from-[#1f6f5c] via-[#1f6f5c]/60 to-transparent",
 };
 
-const NOTE_TYPE_LABELS: Record<NoteType, string> = {
-  OBSERVATION: "Observation",
-  EVIDENCE: "Evidence",
-  DECISION: "Decision",
-  ACTION: "Action",
-};
-
 function CasesPageContent() {
-  const queryClient = useQueryClient();
+  const router = useRouter();
   const { isSupervisorOrAdmin } = useAuth();
   const [statusFilter, setStatusFilter] = useState<CaseStatus | "ALL">("ALL");
-  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
-  const [detailOpen, setDetailOpen] = useState(false);
+  const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
 
   const { cases, loading } = useCases(statusFilter);
   const { stats } = useCaseStats();
-  const { detail: selectedCase } = useCaseDetail(detailOpen ? selectedCaseId : null);
 
-  const invalidateCases = () => {
-    queryClient.invalidateQueries({ queryKey: ["cases"] });
-    queryClient.invalidateQueries({ queryKey: queryKeys.caseStats });
-  };
+  // M3: Workload data for supervisors
+  const { data: workload = [] } = useQuery<WorkloadItem[]>({
+    queryKey: ["workload"],
+    queryFn: getWorkload,
+    enabled: isSupervisorOrAdmin,
+  });
 
   const handleOpenDetail = (caseId: string) => {
-    setSelectedCaseId(caseId);
-    setDetailOpen(true);
+    router.push(`/cases/${caseId}`);
   };
 
-  const handleStatusChange = async (
-    caseId: string,
-    newStatus: CaseStatus
-  ) => {
-    try {
-      await updateCase(caseId, { status: newStatus });
-      invalidateCases();
-      queryClient.invalidateQueries({ queryKey: queryKeys.caseDetail(caseId) });
-    } catch {
-      // silent
-    }
-  };
+  // Filter cases by assignee
+  const filteredCases = cases.filter((item) => {
+    if (assigneeFilter === "all") return true;
+    if (assigneeFilter === "unassigned") return !item.case.assigned_to_id;
+    return item.case.assigned_to_id === assigneeFilter;
+  });
 
-  const handleAddNote = async (
-    caseId: string,
-    content: string,
-    noteType: NoteType
-  ) => {
-    try {
-      await addCaseNote(caseId, { content, note_type: noteType });
-      queryClient.invalidateQueries({ queryKey: queryKeys.caseDetail(caseId) });
-    } catch {
-      // silent
-    }
-  };
-
-  const statusTabs: { key: CaseStatus | "ALL"; label: string; count?: number }[] =
-    [
-      { key: "ALL", label: "All", count: stats?.total },
-      { key: "OPEN", label: "Open", count: stats?.open },
-      { key: "INVESTIGATING", label: "Investigating", count: stats?.investigating },
-      { key: "ESCALATED", label: "Escalated", count: stats?.escalated },
-      { key: "RESOLVED", label: "Resolved", count: stats?.resolved },
-      { key: "DISMISSED", label: "Dismissed", count: stats?.dismissed },
-    ];
+  const statusTabs: { key: CaseStatus | "ALL"; label: string; count?: number }[] = [
+    { key: "ALL", label: "All", count: stats?.total },
+    { key: "OPEN", label: "Open", count: stats?.open },
+    { key: "INVESTIGATING", label: "Investigating", count: stats?.investigating },
+    { key: "ESCALATED", label: "Escalated", count: stats?.escalated },
+    { key: "RESOLVED", label: "Resolved", count: stats?.resolved },
+    { key: "DISMISSED", label: "Dismissed", count: stats?.dismissed },
+  ];
 
   return (
     <div className="min-h-screen pb-12">
@@ -161,13 +123,56 @@ function CasesPageContent() {
               </p>
             </div>
             <p className="text-xs text-muted-foreground">
-              Live case activity &amp; notes
+              Click any case to view full details
             </p>
           </div>
         </div>
       </header>
 
       <div className="max-w-7xl mx-auto px-6 lg:px-10 py-8 space-y-6">
+        {/* M3: Supervisor Workload Overview */}
+        {isSupervisorOrAdmin && workload.length > 0 && (
+          <section className="rounded-2xl border border-border/70 bg-card p-5">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4 flex items-center gap-2">
+              <Users size={16} />
+              Team Workload
+            </h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+              {workload.map((w) => (
+                <button
+                  key={w.user_id || "unassigned"}
+                  onClick={() => setAssigneeFilter(w.user_id || "unassigned")}
+                  className={`rounded-xl border p-3 text-left transition-all hover:border-primary/50 ${
+                    assigneeFilter === (w.user_id || "unassigned")
+                      ? "border-primary bg-primary/5"
+                      : "border-border/50 bg-muted/20"
+                  }`}
+                >
+                  <p className="text-sm font-medium truncate">{w.full_name}</p>
+                  <p className="text-xs text-muted-foreground">{w.role || "Queue"}</p>
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className="text-lg font-display">{w.total_active}</span>
+                    <span className="text-xs text-muted-foreground">active</span>
+                  </div>
+                  <div className="flex gap-1 mt-1 text-[10px]">
+                    {w.open > 0 && <span className="text-[#35638c]">{w.open} open</span>}
+                    {w.investigating > 0 && <span className="text-[#b78b43]">{w.investigating} inv</span>}
+                    {w.escalated > 0 && <span className="text-[#c4412f]">{w.escalated} esc</span>}
+                  </div>
+                </button>
+              ))}
+            </div>
+            {assigneeFilter !== "all" && (
+              <button
+                onClick={() => setAssigneeFilter("all")}
+                className="mt-3 text-xs text-primary hover:underline"
+              >
+                Clear filter
+              </button>
+            )}
+          </section>
+        )}
+
         {/* Status filter chips */}
         {stats && (
           <div className="flex items-center gap-2 overflow-x-auto pb-1 stagger-children">
@@ -207,17 +212,19 @@ function CasesPageContent() {
           <div className="flex items-center justify-center py-20">
             <Loader2 className="w-7 h-7 animate-spin text-primary" />
           </div>
-        ) : cases.length === 0 ? (
+        ) : filteredCases.length === 0 ? (
           <div className="rounded-2xl border border-border/50 bg-card p-16 text-center">
             <FolderOpen className="w-10 h-10 text-muted-foreground/50 mx-auto mb-4" />
-            <p className="font-medium text-foreground/80">No cases yet</p>
+            <p className="font-medium text-foreground/80">No cases found</p>
             <p className="text-sm text-muted-foreground mt-1">
-              Open a case from any tender&apos;s detail view to start investigating.
+              {assigneeFilter !== "all"
+                ? "Try clearing the assignee filter."
+                : "Open a case from any tender's detail view to start investigating."}
             </p>
           </div>
         ) : (
           <div className="space-y-2">
-            {cases.map((item) => (
+            {filteredCases.map((item) => (
               <CaseRow
                 key={item.case.id}
                 item={item}
@@ -227,18 +234,6 @@ function CasesPageContent() {
           </div>
         )}
       </div>
-
-      {/* Case Detail Dialog */}
-      <CaseDetailDialog
-        open={detailOpen && !!selectedCase}
-        onClose={() => {
-          setDetailOpen(false);
-          setSelectedCaseId(null);
-        }}
-        item={selectedCase}
-        onStatusChange={handleStatusChange}
-        onAddNote={handleAddNote}
-      />
     </div>
   );
 }
@@ -308,222 +303,6 @@ function CaseRow({
           <span>{c.notes.length} note{c.notes.length !== 1 ? "s" : ""}</span>
         )}
       </div>
-    </div>
-  );
-}
-
-function CaseDetailDialog({
-  open,
-  onClose,
-  item,
-  onStatusChange,
-  onAddNote,
-}: {
-  open: boolean;
-  onClose: () => void;
-  item: CaseWithTender | null;
-  onStatusChange: (caseId: string, status: CaseStatus) => Promise<void>;
-  onAddNote: (caseId: string, content: string, noteType: NoteType) => Promise<void>;
-}) {
-  const [noteContent, setNoteContent] = useState("");
-  const [noteType, setNoteType] = useState<NoteType>("OBSERVATION");
-  const [submitting, setSubmitting] = useState(false);
-  const { isSupervisorOrAdmin } = useAuth();
-
-  if (!item) return null;
-  const c = item.case;
-  const statusCfg = STATUS_CONFIG[c.status];
-
-  const handleSubmitNote = async () => {
-    if (!noteContent.trim()) return;
-    setSubmitting(true);
-    await onAddNote(c.id, noteContent.trim(), noteType);
-    setNoteContent("");
-    setSubmitting(false);
-  };
-
-  const nextStatuses: Record<CaseStatus, CaseStatus[]> = {
-    OPEN: ["INVESTIGATING", "DISMISSED"],
-    INVESTIGATING: ["ESCALATED", "RESOLVED", "DISMISSED"],
-    ESCALATED: ["RESOLVED", "INVESTIGATING"],
-    RESOLVED: [],
-    DISMISSED: ["OPEN"],
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col bg-card/95 border border-border/70">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-3">
-            <span className="inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.15em] text-muted-foreground">
-              <span className={`h-1.5 w-1.5 rounded-full ${statusCfg.dot}`} />
-              {statusCfg.label}
-            </span>
-            <span className="font-display text-lg truncate">{c.title}</span>
-          </DialogTitle>
-        </DialogHeader>
-
-        <ScrollArea className="flex-1 -mx-6 px-6">
-          <div className="space-y-5 pb-4">
-            {/* Meta grid */}
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <MetaItem label="Tender" value={item.tender_title} />
-              <MetaItem
-                label="Risk"
-                value={`${item.risk_score} (${item.risk_category})`}
-                className={PRIORITY_COLOR[item.risk_category]}
-              />
-              <MetaItem label="Priority" value={c.priority} />
-              <MetaItem label="Assigned to" value={c.assigned_to || "Unassigned"} />
-              <MetaItem label="Created" value={new Date(c.created_at).toLocaleString()} />
-              <MetaItem label="Created by" value={c.created_by} />
-            </div>
-
-            {c.summary && (
-              <div>
-                <span className="text-[11px] uppercase tracking-[0.15em] text-muted-foreground">
-                  Summary
-                </span>
-                <p className="text-sm mt-1 text-foreground/80">{c.summary}</p>
-              </div>
-            )}
-
-            {c.decision && (
-              <div className="rounded-xl border border-[#1f6f5c]/20 bg-[#1f6f5c]/10 p-3">
-                <p className="text-xs font-medium text-[#1f6f5c]">Decision</p>
-                <p className="text-sm text-[#1f6f5c]/80 mt-1">{c.decision}</p>
-              </div>
-            )}
-
-            {/* Status transitions */}
-            {nextStatuses[c.status].length > 0 && (
-              <div>
-                <span className="text-[11px] uppercase tracking-[0.15em] text-muted-foreground">
-                  Transition to
-                </span>
-                <div className="flex gap-2 mt-1.5">
-                  {nextStatuses[c.status]
-                    .filter((s) => s !== "DISMISSED" || isSupervisorOrAdmin)
-                    .map((s) => (
-                      <Button
-                        key={s}
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onStatusChange(c.id, s)}
-                        className="text-xs h-8"
-                      >
-                        {STATUS_CONFIG[s].icon}
-                        <span className="ml-1">{STATUS_CONFIG[s].label}</span>
-                      </Button>
-                    ))}
-                </div>
-              </div>
-            )}
-
-            <div className="border-t border-border/50" />
-
-            {/* Notes */}
-            <div>
-              <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground mb-3 flex items-center gap-2">
-                <MessageSquarePlus size={14} />
-                Investigation Notes ({c.notes.length})
-              </h3>
-
-              {/* Add note form */}
-              <div className="space-y-2 mb-4">
-                <div className="flex gap-1.5">
-                  {(Object.keys(NOTE_TYPE_LABELS) as NoteType[]).map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => setNoteType(t)}
-                      className={`text-[11px] px-2.5 py-1 rounded-full border transition-colors uppercase tracking-[0.15em] font-medium ${
-                        noteType === t
-                          ? "bg-primary text-primary-foreground border-primary"
-                          : "border-border/50 text-muted-foreground hover:bg-accent/50"
-                      }`}
-                    >
-                      {NOTE_TYPE_LABELS[t]}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex gap-2">
-                  <textarea
-                    value={noteContent}
-                    onChange={(e) => setNoteContent(e.target.value)}
-                    placeholder="Add a note..."
-                    rows={2}
-                    className="flex-1 text-sm rounded-xl border border-border/50 bg-secondary/50 px-3 py-2 resize-none focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={handleSubmitNote}
-                    disabled={!noteContent.trim() || submitting}
-                    className="self-end h-8"
-                  >
-                    {submitting ? (
-                      <Loader2 size={14} className="animate-spin" />
-                    ) : (
-                      <Send size={14} />
-                    )}
-                  </Button>
-                </div>
-              </div>
-
-              {/* Note list */}
-              {c.notes.length === 0 ? (
-                <p className="text-xs text-muted-foreground text-center py-6">
-                  No notes yet
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {c.notes.map((note) => (
-                    <div
-                      key={note.id}
-                      className="rounded-lg border border-border/40 bg-muted/20 p-3 text-sm"
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline" className="text-[11px] uppercase tracking-wider">
-                            {NOTE_TYPE_LABELS[note.note_type]}
-                          </Badge>
-                          <span className="text-xs text-muted-foreground">
-                            {note.author}
-                          </span>
-                        </div>
-                        <span className="text-[11px] text-muted-foreground">
-                          {new Date(note.created_at).toLocaleString()}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-foreground/80">{note.content}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </ScrollArea>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function MetaItem({
-  label,
-  value,
-  className = "",
-}: {
-  label: string;
-  value: string;
-  className?: string;
-}) {
-  return (
-    <div>
-      <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
-        {label}
-      </span>
-      <p className={`text-sm font-medium mt-0.5 ${className || "text-foreground/80"}`}>
-        {value}
-      </p>
     </div>
   );
 }

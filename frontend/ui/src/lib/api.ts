@@ -14,6 +14,10 @@ import type {
   TenderStatus,
   IngestionResponse,
   RecomputeResponse,
+  CaseEvent,
+  CaseEvidenceLink,
+  CaseNotification,
+  WorkloadItem,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -128,6 +132,31 @@ async function patchApi<T>(endpoint: string, data: unknown): Promise<T> {
   return response.json();
 }
 
+async function deleteApi(endpoint: string): Promise<void> {
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+
+  if (response.status === 401) {
+    const newToken = await refreshTokens();
+    if (newToken) {
+      const retried = await fetch(`${API_BASE}${endpoint}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${newToken}` },
+      });
+      if (retried.ok || retried.status === 204) return;
+    }
+    if (typeof window !== "undefined") window.location.href = "/login";
+    throw new Error("Session expired. Please log in again.");
+  }
+
+  if (!response.ok && response.status !== 204) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || `API error: ${response.status}`);
+  }
+}
+
 export async function getDashboardStats(): Promise<DashboardStats> {
   return fetchApi<DashboardStats>("/api/stats");
 }
@@ -221,6 +250,61 @@ export async function addCaseNote(
   data: { content: string; note_type?: string },
 ): Promise<unknown> {
   return postApi<unknown>(`/api/cases/${caseId}/notes`, data);
+}
+
+// --- M3: Timeline & Evidence ---
+
+export async function getCaseTimeline(caseId: string): Promise<CaseEvent[]> {
+  return fetchApi<CaseEvent[]>(`/api/cases/${caseId}/timeline`);
+}
+
+export async function getCaseEvidence(caseId: string): Promise<CaseEvidenceLink[]> {
+  return fetchApi<CaseEvidenceLink[]>(`/api/cases/${caseId}/evidence`);
+}
+
+export async function addCaseEvidence(
+  caseId: string,
+  data: { evidence_type: string; reference_id: string; label: string; link_metadata?: Record<string, unknown> },
+): Promise<CaseEvidenceLink> {
+  return postApi<CaseEvidenceLink>(`/api/cases/${caseId}/evidence`, data);
+}
+
+export async function removeCaseEvidence(caseId: string, linkId: string): Promise<void> {
+  return deleteApi(`/api/cases/${caseId}/evidence/${linkId}`);
+}
+
+// --- M3: Self-Assign & Decision ---
+
+export async function selfAssignCase(caseId: string): Promise<CaseWithTender> {
+  return postApi<CaseWithTender>(`/api/cases/${caseId}/self-assign`, {});
+}
+
+export async function recordDecision(
+  caseId: string,
+  data: { decision_type: string; finding: string; recommendation?: string; evidence_references?: string[] },
+): Promise<CaseWithTender> {
+  return postApi<CaseWithTender>(`/api/cases/${caseId}/decision`, data);
+}
+
+// --- M3: Workload ---
+
+export async function getWorkload(): Promise<WorkloadItem[]> {
+  return fetchApi<WorkloadItem[]>("/api/cases/workload");
+}
+
+// --- M3: Notifications ---
+
+export async function getNotifications(unreadOnly = false): Promise<CaseNotification[]> {
+  const qs = unreadOnly ? "?unread_only=true" : "";
+  return fetchApi<CaseNotification[]>(`/api/notifications${qs}`);
+}
+
+export async function getNotificationCount(): Promise<{ unread_count: number }> {
+  return fetchApi<{ unread_count: number }>("/api/notifications/count");
+}
+
+export async function markNotificationRead(notificationId: string): Promise<void> {
+  return patchApi(`/api/notifications/${notificationId}/read`, {});
 }
 
 // --- Ingestion ---

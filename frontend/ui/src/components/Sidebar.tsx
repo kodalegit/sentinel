@@ -17,10 +17,14 @@ import {
   LogOut,
   Users,
   ChevronDown,
+  Bell,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
+import { getNotificationCount, getNotifications, markNotificationRead } from "@/lib/api";
+import type { CaseNotification } from "@/lib/types";
 
 const NAV_ITEMS = [
   { href: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -41,10 +45,34 @@ export function Sidebar() {
   const { user, logout, isAdmin } = useAuth();
   const router = useRouter();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+
+  // M3: Notification queries
+  const { data: notificationCount } = useQuery({
+    queryKey: ["notification-count"],
+    queryFn: getNotificationCount,
+    enabled: !!user,
+    refetchInterval: 30000, // Poll every 30 seconds
+  });
+
+  const { data: notifications = [], refetch: refetchNotifications } = useQuery<CaseNotification[]>({
+    queryKey: ["notifications"],
+    queryFn: () => getNotifications(false),
+    enabled: !!user && notificationsOpen,
+  });
 
   const handleLogout = () => {
     logout();
     router.push("/login");
+  };
+
+  const handleNotificationClick = async (notification: CaseNotification) => {
+    if (!notification.is_read) {
+      await markNotificationRead(notification.id);
+      refetchNotifications();
+    }
+    setNotificationsOpen(false);
+    router.push(`/cases/${notification.case_id}`);
   };
 
   return (
@@ -104,6 +132,53 @@ export function Sidebar() {
       </div>
 
       <div className="px-4 pb-6 space-y-2">
+        {/* M3: Notifications bell */}
+        {user && (
+          <div className="relative">
+            <button
+              onClick={() => setNotificationsOpen((v) => !v)}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground transition-all duration-200"
+            >
+              <span className="relative flex h-8 w-8 items-center justify-center rounded-lg">
+                <Bell size={18} strokeWidth={1.5} />
+                {notificationCount && notificationCount.unread_count > 0 && (
+                  <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-[#c4412f] text-[10px] font-bold text-white">
+                    {notificationCount.unread_count > 9 ? "9+" : notificationCount.unread_count}
+                  </span>
+                )}
+              </span>
+              <span>Notifications</span>
+            </button>
+
+            {notificationsOpen && (
+              <div className="absolute bottom-full left-0 right-0 mb-1 max-h-80 overflow-y-auto rounded-xl border border-sidebar-border/70 bg-sidebar shadow-lg">
+                {notifications.length === 0 ? (
+                  <div className="px-4 py-6 text-center text-xs text-sidebar-foreground/50">
+                    No notifications
+                  </div>
+                ) : (
+                  <div className="py-1">
+                    {notifications.slice(0, 10).map((n) => (
+                      <button
+                        key={n.id}
+                        onClick={() => handleNotificationClick(n)}
+                        className={`w-full px-4 py-3 text-left hover:bg-sidebar-accent/70 transition-colors ${
+                          n.is_read ? "opacity-60" : ""
+                        }`}
+                      >
+                        <p className="text-xs text-sidebar-foreground line-clamp-2">{n.message}</p>
+                        <p className="text-[10px] text-sidebar-foreground/50 mt-1">
+                          {new Date(n.created_at).toLocaleString()}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Admin: User Management link */}
         {isAdmin && (
           <Link

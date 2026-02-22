@@ -7,6 +7,7 @@
 
 import { use, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTenderDetail, useTenderGraph } from "@/hooks/useTenders";
 import { formatKES, createCase } from "@/lib/api";
 import type { RiskFactor, RiskFactorType, RiskCategory } from "@/lib/types";
@@ -93,6 +94,7 @@ export default function TenderDetailPage({
 }) {
   const { id } = use(params);
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { detail, loading } = useTenderDetail(id);
   const [showGraph, setShowGraph] = useState(false);
   const { graph, loading: graphLoading } = useTenderGraph(showGraph ? id : null);
@@ -127,6 +129,8 @@ export default function TenderDetailPage({
         tender_id: tender.id,
         title: `Investigation: ${tender.title}`,
       });
+      // Invalidate cases cache so the new case appears in the list
+      await queryClient.invalidateQueries({ queryKey: ["cases"] });
       router.push("/cases");
     } catch {
       // silent
