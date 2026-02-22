@@ -293,7 +293,11 @@ class Case(BaseModel):
     created_by: str  # Display name
     created_by_id: Optional[str] = None  # User UUID
     summary: Optional[str] = None
-    decision: Optional[str] = None
+    decision: Optional[str] = None  # Legacy recommendation field
+    # M3: Structured decision fields
+    decision_type: Optional[str] = None
+    finding: Optional[str] = None
+    closed_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
     notes: list[CaseNote] = Field(default_factory=list)
@@ -327,6 +331,94 @@ class CaseUpdate(BaseModel):
 class CaseNoteCreate(BaseModel):
     content: str
     note_type: NoteType = NoteType.OBSERVATION
+
+
+# M3: Case Events & Timeline
+class EventType(str, Enum):
+    CASE_OPENED = "CASE_OPENED"
+    STATUS_CHANGE = "STATUS_CHANGE"
+    ASSIGNMENT = "ASSIGNMENT"
+    NOTE_ADDED = "NOTE_ADDED"
+    PRIORITY_CHANGE = "PRIORITY_CHANGE"
+    DECISION_RECORDED = "DECISION_RECORDED"
+    EVIDENCE_LINKED = "EVIDENCE_LINKED"
+    EVIDENCE_UNLINKED = "EVIDENCE_UNLINKED"
+
+
+class CaseEvent(BaseModel):
+    id: str
+    case_id: str
+    event_type: EventType
+    actor: str  # Display name
+    actor_id: str
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    event_metadata: Optional[dict] = None
+    created_at: datetime
+
+
+# M3: Evidence Links
+class EvidenceType(str, Enum):
+    TENDER = "TENDER"
+    RISK_FACTOR = "RISK_FACTOR"
+    GRAPH_PATH = "GRAPH_PATH"
+    DOCUMENT = "DOCUMENT"
+
+
+class CaseEvidenceLink(BaseModel):
+    id: str
+    case_id: str
+    evidence_type: EvidenceType
+    reference_id: str
+    label: str
+    link_metadata: Optional[dict] = None
+    added_by: str  # Display name
+    added_by_id: str
+    created_at: datetime
+
+
+class CaseEvidenceLinkCreate(BaseModel):
+    evidence_type: EvidenceType
+    reference_id: str
+    label: str
+    link_metadata: Optional[dict] = None
+
+
+# M3: Structured Decisions
+class DecisionType(str, Enum):
+    SUBSTANTIATED = "SUBSTANTIATED"
+    UNSUBSTANTIATED = "UNSUBSTANTIATED"
+    REFERRED = "REFERRED"
+    INCONCLUSIVE = "INCONCLUSIVE"
+
+
+class CaseDecision(BaseModel):
+    decision_type: DecisionType
+    finding: str
+    recommendation: Optional[str] = None
+    evidence_references: list[str] = Field(default_factory=list)  # Evidence link IDs
+
+
+# M3: Notifications
+class CaseNotification(BaseModel):
+    id: str
+    case_id: str
+    case_title: Optional[str] = None
+    message: str
+    is_read: bool
+    created_at: datetime
+
+
+# M3: Supervisor Workload
+class WorkloadItem(BaseModel):
+    user_id: Optional[str] = None
+    username: str
+    full_name: str
+    role: Optional[str] = None
+    open: int
+    investigating: int
+    escalated: int
+    total_active: int
 
 
 # Contract model (Kenya e-GP)

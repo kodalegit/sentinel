@@ -23,6 +23,9 @@ from db.models import (
     AuditLogDB,
     CaseDB,
     CaseNoteDB,
+    CaseEventDB,
+    CaseEvidenceLinkDB,
+    CaseNotificationDB,
     UserDB,
 )
 
@@ -376,6 +379,263 @@ async def get_case_stats(db: AsyncSession) -> dict:
         "resolved": resolved,
         "dismissed": dismissed,
     }
+
+
+# --- Case Events (M3) ---
+
+
+async def create_case_event(
+    db: AsyncSession,
+    case_id: uuid.UUID,
+    event_type: str,
+    actor_id: uuid.UUID,
+    old_value: str | None = None,
+    new_value: str | None = None,
+    event_metadata: dict | None = None,
+) -> CaseEventDB:
+    """Create an immutable case event for the timeline."""
+    event = CaseEventDB(
+        case_id=case_id,
+        event_type=event_type,
+        actor_id=actor_id,
+        old_value=old_value,
+        new_value=new_value,
+        event_metadata=event_metadata,
+    )
+    db.add(event)
+    await db.flush()
+    await db.refresh(event, attribute_names=["actor"])
+    return event
+
+
+async def get_case_events(db: AsyncSession, case_id: uuid.UUID) -> list[CaseEventDB]:
+    """Get chronological timeline of case events."""
+    result = await db.execute(
+        select(CaseEventDB)
+        .options(selectinload(CaseEventDB.actor))
+        .where(CaseEventDB.case_id == case_id)
+        .order_by(CaseEventDB.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+# --- Case Evidence Links (M3) ---
+
+
+async def add_case_evidence_link(
+    db: AsyncSession,
+    case_id: uuid.UUID,
+    evidence_type: str,
+    reference_id: str,
+    label: str,
+    added_by_id: uuid.UUID,
+    link_metadata: dict | None = None,
+) -> CaseEvidenceLinkDB:
+    """Link evidence to a case."""
+    link = CaseEvidenceLinkDB(
+        case_id=case_id,
+        evidence_type=evidence_type,
+        reference_id=reference_id,
+        label=label,
+        link_metadata=link_metadata,
+        added_by_id=added_by_id,
+    )
+    db.add(link)
+    await db.flush()
+    await db.refresh(link, attribute_names=["added_by"])
+    return link
+
+
+async def get_case_evidence_links(
+    db: AsyncSession, case_id: uuid.UUID
+) -> list[CaseEvidenceLinkDB]:
+    """Get all evidence links for a case."""
+    result = await db.execute(
+        select(CaseEvidenceLinkDB)
+        .options(selectinload(CaseEvidenceLinkDB.added_by))
+        .where(CaseEvidenceLinkDB.case_id == case_id)
+        .order_by(CaseEvidenceLinkDB.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_case_evidence_link(
+    db: AsyncSession, link_id: uuid.UUID
+) -> CaseEvidenceLinkDB | None:
+    """Get a single evidence link by ID."""
+    result = await db.execute(
+        select(CaseEvidenceLinkDB).where(CaseEvidenceLinkDB.id == link_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def remove_case_evidence_link(db: AsyncSession, link_id: uuid.UUID) -> bool:
+    """Remove an evidence link. Returns True if deleted."""
+    link = await get_case_evidence_link(db, link_id)
+    if not link:
+        return False
+    await db.delete(link)
+    await db.flush()
+    return True
+
+
+# --- Case Notifications (M3) ---
+
+
+async def create_notification(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    case_id: uuid.UUID,
+    message: str,
+) -> CaseNotificationDB:
+    """Create a notification for a user."""
+    notification = CaseNotificationDB(
+        user_id=user_id,
+        case_id=case_id,
+        message=message,
+    )
+    db.add(notification)
+    await db.flush()
+    return notification
+
+
+async def get_user_notifications(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    unread_only: bool = False,
+    limit: int = 20,
+) -> list[CaseNotificationDB]:
+    """Get notifications for a user."""
+    query = (
+        select(CaseNotificationDB)
+        .options(selectinload(CaseNotificationDB.case))
+        .where(CaseNotificationDB.user_id == user_id)
+        .order_by(CaseNotificationDB.created_at.desc())
+        .limit(limit)
+    )
+    if unread_only:
+        query = query.where(CaseNotificationDB.is_read == False)
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
+async def mark_notification_read(
+    db: AsyncSession, notification_id: uuid.UUID
+) -> CaseNotificationDB | None:
+    """Mark a notification as read."""
+    result = await db.execute(
+        select(CaseNotificationDB).where(CaseNotificationDB.id == notification_id)
+    )
+    notification = result.scalar_one_or_none()
+    if notification:
+        notification.is_read = True
+        await db.flush()
+    return notification
+
+
+async def get_unread_notification_count(db: AsyncSession, user_id: uuid.UUID) -> int:
+    """Get count of unread notifications for a user."""
+    result = await db.execute(
+        select(func.count(CaseNotificationDB.id)).where(
+            CaseNotificationDB.user_id == user_id,
+            CaseNotificationDB.is_read == False,
+        )
+    )
+    return result.scalar_one()
+
+
+# --- Supervisor Workload (M3) ---
+
+
+async def get_cases_with_filters(
+    db: AsyncSession,
+    status: str | None = None,
+    priority: str | None = None,
+    assigned_to_id: uuid.UUID | str | None = None,
+) -> list[CaseDB]:
+    """Get cases with extended filters including assignee."""
+    query = (
+        select(CaseDB)
+        .options(
+            selectinload(CaseDB.notes).selectinload(CaseNoteDB.author),
+            selectinload(CaseDB.tender),
+            selectinload(CaseDB.assigned_to),
+            selectinload(CaseDB.created_by),
+        )
+        .order_by(CaseDB.created_at.desc())
+    )
+    if status:
+        query = query.where(CaseDB.status == status)
+    if priority:
+        query = query.where(CaseDB.priority == priority)
+    if assigned_to_id == "unassigned":
+        query = query.where(CaseDB.assigned_to_id.is_(None))
+    elif assigned_to_id:
+        query = query.where(CaseDB.assigned_to_id == assigned_to_id)
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
+async def get_supervisor_workload(db: AsyncSession) -> list[dict]:
+    """Get case workload per assignee for supervisor dashboard."""
+    # Get all active users who can be assigned cases
+    users_result = await db.execute(
+        select(UserDB).where(
+            UserDB.is_active == True, UserDB.role.in_(["auditor", "supervisor"])
+        )
+    )
+    users = list(users_result.scalars().all())
+
+    workload = []
+    for user in users:
+        # Count cases by status for this user
+        cases_result = await db.execute(
+            select(CaseDB.status, func.count(CaseDB.id))
+            .where(CaseDB.assigned_to_id == user.id)
+            .group_by(CaseDB.status)
+        )
+        status_counts = {row[0]: row[1] for row in cases_result.fetchall()}
+
+        workload.append(
+            {
+                "user_id": str(user.id),
+                "username": user.username,
+                "full_name": user.full_name,
+                "role": user.role,
+                "open": status_counts.get("OPEN", 0),
+                "investigating": status_counts.get("INVESTIGATING", 0),
+                "escalated": status_counts.get("ESCALATED", 0),
+                "total_active": (
+                    status_counts.get("OPEN", 0)
+                    + status_counts.get("INVESTIGATING", 0)
+                    + status_counts.get("ESCALATED", 0)
+                ),
+            }
+        )
+
+    # Add unassigned count
+    unassigned_result = await db.execute(
+        select(func.count(CaseDB.id)).where(
+            CaseDB.assigned_to_id.is_(None),
+            CaseDB.status.in_(["OPEN", "INVESTIGATING", "ESCALATED"]),
+        )
+    )
+    unassigned_count = unassigned_result.scalar_one()
+
+    workload.append(
+        {
+            "user_id": None,
+            "username": "unassigned",
+            "full_name": "Unassigned",
+            "role": None,
+            "open": unassigned_count,
+            "investigating": 0,
+            "escalated": 0,
+            "total_active": unassigned_count,
+        }
+    )
+
+    return workload
 
 
 # --- Audit Log ---
