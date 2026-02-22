@@ -430,14 +430,23 @@ async def update_case(
                 message=f"You have been assigned to case: {case_db.title}",
             )
 
-    # Audit log
+    # Audit log - convert UUIDs to strings for JSON serialization
+    audit_details = {}
+    for key, value in update_fields.items():
+        if isinstance(value, _uuid.UUID):
+            audit_details[key] = str(value)
+        elif isinstance(value, datetime):
+            audit_details[key] = value.isoformat()
+        else:
+            audit_details[key] = value
+
     await repo.create_audit_log(
         db=db,
         action="CASE_UPDATED",
         entity_type="case",
         entity_id=case_db.id,
         user_id=current_user.id,
-        details=update_fields,
+        details=audit_details,
     )
     await db.commit()
     await db.refresh(
