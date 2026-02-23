@@ -76,7 +76,7 @@ class CompanyDB(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     registration_number: Mapped[str] = mapped_column(
-        String(50), unique=True, nullable=False
+        String(255), unique=True, nullable=False
     )
     registration_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -94,11 +94,11 @@ class CompanyDB(Base):
     contact_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     physical_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     postal_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    postal_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    postal_code: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Provenance
     source_system: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    source_record_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_record_id: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     ingested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     data_quality_flags: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
@@ -201,7 +201,7 @@ class TenderDB(Base):
         UUID(as_uuid=True), primary_key=True, default=gen_uuid
     )
     reference_number: Mapped[str] = mapped_column(
-        String(100), unique=True, nullable=False
+        String(255), unique=True, nullable=False
     )
     title: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -236,12 +236,12 @@ class TenderDB(Base):
     )
     pe_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     currency: Mapped[str] = mapped_column(String(10), nullable=False, default="KES")
-    ocds_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    ocds_id: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     buyer_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     # Provenance
     source_system: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    source_record_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_record_id: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     ingested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     data_quality_flags: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
@@ -550,7 +550,7 @@ class ContractDB(Base):
         nullable=True,
     )
     contract_number: Mapped[str] = mapped_column(
-        String(100), unique=True, nullable=False
+        String(255), unique=True, nullable=False
     )
     title: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -579,7 +579,7 @@ class ContractDB(Base):
 
     # Provenance
     source_system: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    source_record_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_record_id: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     ingested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     data_quality_flags: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
