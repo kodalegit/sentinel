@@ -10,6 +10,7 @@ import {
   getTenderDetail,
   getTenderGraph,
   getFullGraph,
+  getGraphStats,
   getCases,
   getCaseStats,
   getCaseDetail,
@@ -74,10 +75,23 @@ export function useTenderGraph(tenderId: string | null) {
   return { graph, loading, error, refetch };
 }
 
-export function useFullGraph() {
+export function useGraphStats() {
+  const { data: stats = null, isLoading: loading, error } = useQuery({
+    queryKey: ["graph-stats"] as const,
+    queryFn: getGraphStats,
+    staleTime: 5 * 60 * 1000,
+  });
+  return { stats, loading, error };
+}
+
+export function useFullGraph(options?: {
+  limitNodes?: number;
+  limitEdges?: number;
+  nodeType?: string;
+}) {
   const { data: graph = null, isLoading: loading, error } = useQuery({
-    queryKey: queryKeys.fullGraph,
-    queryFn: getFullGraph,
+    queryKey: ["full-graph", options] as const,
+    queryFn: () => getFullGraph(options),
     staleTime: 5 * 60 * 1000,
   });
   return { graph, loading, error };

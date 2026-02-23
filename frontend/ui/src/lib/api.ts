@@ -14,6 +14,10 @@ import type {
   TenderStatus,
   IngestionResponse,
   RecomputeResponse,
+  CaseEvent,
+  CaseEvidenceLink,
+  CaseNotification,
+  WorkloadItem,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -84,7 +88,10 @@ async function postApi<T>(endpoint: string, data: unknown): Promise<T> {
     if (newToken) {
       const retried = await fetch(`${API_BASE}${endpoint}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${newToken}` },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${newToken}`,
+        },
         body: JSON.stringify(data),
       });
       if (retried.ok) return retried.json();
@@ -112,7 +119,10 @@ async function patchApi<T>(endpoint: string, data: unknown): Promise<T> {
     if (newToken) {
       const retried = await fetch(`${API_BASE}${endpoint}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${newToken}` },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${newToken}`,
+        },
         body: JSON.stringify(data),
       });
       if (retried.ok) return retried.json();
@@ -126,6 +136,31 @@ async function patchApi<T>(endpoint: string, data: unknown): Promise<T> {
     throw new Error(err.detail || `API error: ${response.status}`);
   }
   return response.json();
+}
+
+async function deleteApi(endpoint: string): Promise<void> {
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+
+  if (response.status === 401) {
+    const newToken = await refreshTokens();
+    if (newToken) {
+      const retried = await fetch(`${API_BASE}${endpoint}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${newToken}` },
+      });
+      if (retried.ok || retried.status === 204) return;
+    }
+    if (typeof window !== "undefined") window.location.href = "/login";
+    throw new Error("Session expired. Please log in again.");
+  }
+
+  if (!response.ok && response.status !== 204) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || `API error: ${response.status}`);
+  }
 }
 
 export async function getDashboardStats(): Promise<DashboardStats> {
@@ -160,8 +195,32 @@ export async function getTenderGraph(
   return fetchApi<GraphData>(`/api/tenders/${tenderId}/graph?depth=${depth}`);
 }
 
-export async function getFullGraph(): Promise<GraphData> {
-  return fetchApi<GraphData>("/api/graph/explore");
+export interface GraphStats {
+  total_nodes: number;
+  total_edges: number;
+  node_types: Record<string, number>;
+  edge_types: Record<string, number>;
+  communities: number;
+  is_large: boolean;
+}
+
+export async function getGraphStats(): Promise<GraphStats> {
+  return fetchApi<GraphStats>("/api/graph/stats");
+}
+
+export async function getFullGraph(options?: {
+  limitNodes?: number;
+  limitEdges?: number;
+  nodeType?: string;
+}): Promise<GraphData> {
+  const params = new URLSearchParams();
+  if (options?.limitNodes)
+    params.set("limit_nodes", String(options.limitNodes));
+  if (options?.limitEdges)
+    params.set("limit_edges", String(options.limitEdges));
+  if (options?.nodeType) params.set("node_type", options.nodeType);
+  const qs = params.toString();
+  return fetchApi<GraphData>(`/api/graph/explore${qs ? `?${qs}` : ""}`);
 }
 
 export async function getCommunities(): Promise<CommunitiesResponse> {
@@ -223,17 +282,99 @@ export async function addCaseNote(
   return postApi<unknown>(`/api/cases/${caseId}/notes`, data);
 }
 
+// --- M3: Timeline & Evidence ---
+
+export async function getCaseTimeline(caseId: string): Promise<CaseEvent[]> {
+  return fetchApi<CaseEvent[]>(`/api/cases/${caseId}/timeline`);
+}
+
+export async function getCaseEvidence(
+  caseId: string,
+): Promise<CaseEvidenceLink[]> {
+  return fetchApi<CaseEvidenceLink[]>(`/api/cases/${caseId}/evidence`);
+}
+
+export async function addCaseEvidence(
+  caseId: string,
+  data: {
+    evidence_type: string;
+    reference_id: string;
+    label: string;
+    link_metadata?: Record<string, unknown>;
+  },
+): Promise<CaseEvidenceLink> {
+  return postApi<CaseEvidenceLink>(`/api/cases/${caseId}/evidence`, data);
+}
+
+export async function removeCaseEvidence(
+  caseId: string,
+  linkId: string,
+): Promise<void> {
+  return deleteApi(`/api/cases/${caseId}/evidence/${linkId}`);
+}
+
+// --- M3: Self-Assign & Decision ---
+
+export async function selfAssignCase(caseId: string): Promise<CaseWithTender> {
+  return postApi<CaseWithTender>(`/api/cases/${caseId}/self-assign`, {});
+}
+
+export async function recordDecision(
+  caseId: string,
+  data: {
+    decision_type: string;
+    finding: string;
+    recommendation?: string;
+    evidence_references?: string[];
+  },
+): Promise<CaseWithTender> {
+  return postApi<CaseWithTender>(`/api/cases/${caseId}/decision`, data);
+}
+
+// --- M3: Workload ---
+
+export async function getWorkload(): Promise<WorkloadItem[]> {
+  return fetchApi<WorkloadItem[]>("/api/cases/workload");
+}
+
+// --- M3: Notifications ---
+
+export async function getNotifications(
+  unreadOnly = false,
+): Promise<CaseNotification[]> {
+  const qs = unreadOnly ? "?unread_only=true" : "";
+  return fetchApi<CaseNotification[]>(`/api/notifications${qs}`);
+}
+
+export async function getNotificationCount(): Promise<{
+  unread_count: number;
+}> {
+  return fetchApi<{ unread_count: number }>("/api/notifications/count");
+}
+
+export async function markNotificationRead(
+  notificationId: string,
+): Promise<void> {
+  return patchApi(`/api/notifications/${notificationId}/read`, {});
+}
+
 // --- Ingestion ---
 
 export async function syncPPIP(fiscalYear: string): Promise<IngestionResponse> {
-  return postApi<IngestionResponse>("/api/ingest/ppip/sync", { fiscal_year: fiscalYear });
+  return postApi<IngestionResponse>("/api/ingest/ppip/sync", {
+    fiscal_year: fiscalYear,
+  });
 }
 
-export async function ingestEGPTenders(payload: unknown): Promise<IngestionResponse> {
+export async function ingestEGPTenders(
+  payload: unknown,
+): Promise<IngestionResponse> {
   return postApi<IngestionResponse>("/api/ingest/egp/tenders", payload);
 }
 
-export async function ingestEGPContracts(payload: unknown): Promise<IngestionResponse> {
+export async function ingestEGPContracts(
+  payload: unknown,
+): Promise<IngestionResponse> {
   return postApi<IngestionResponse>("/api/ingest/egp/contracts", payload);
 }
 
@@ -270,7 +411,13 @@ export async function createUser(data: {
 
 export async function updateUser(
   userId: string,
-  data: { role?: string; is_active?: boolean; full_name?: string; email?: string; password?: string },
+  data: {
+    role?: string;
+    is_active?: boolean;
+    full_name?: string;
+    email?: string;
+    password?: string;
+  },
 ): Promise<ApiUser> {
   return patchApi<ApiUser>(`/api/users/${userId}`, data);
 }

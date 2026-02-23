@@ -146,83 +146,162 @@ def build_procurement_graph(
     return G
 
 
+# Maximum edges per company for shared attributes to prevent explosion
+MAX_SHARED_EDGES_PER_COMPANY = 50
+
+
 def _add_shared_address_edges(G: nx.Graph, companies: dict[str, Company]):
     """Add edges between companies that share similar addresses.
+    Uses hash-based grouping for O(n) performance instead of O(n²) pairwise comparison.
     Excludes placeholder addresses (e.g., 'PO Box 123') which are common
     defaults in Kenya's e-GP system and would create false connections."""
-    company_list = list(companies.values())
+    from collections import defaultdict
 
-    for i, comp1 in enumerate(company_list):
-        addr1 = comp1.physical_address or comp1.address
-        if not addr1:
+    # Group companies by normalized address key
+    address_groups: dict[str, list[tuple[str, str, AddressQuality]]] = defaultdict(list)
+
+    for company in companies.values():
+        addr = company.physical_address or company.address
+        if not addr:
             continue
-        q1 = classify_address(addr1)
-        if q1 == AddressQuality.PLACEHOLDER:
+        quality = classify_address(addr)
+        if quality == AddressQuality.PLACEHOLDER:
             continue
 
-        for comp2 in company_list[i + 1 :]:
-            addr2 = comp2.physical_address or comp2.address
-            if not addr2:
-                continue
-            q2 = classify_address(addr2)
-            if q2 == AddressQuality.PLACEHOLDER:
-                continue
+        # Create normalized key for grouping
+        addr_key = _normalize_address_key(addr)
+        if addr_key:
+            address_groups[addr_key].append((company.id, addr, quality))
 
-            if _addresses_similar(addr1, addr2):
+    # Track edges per company to enforce limit
+    edge_count: dict[str, int] = defaultdict(int)
+
+    # Create edges within each group
+    for group in address_groups.values():
+        if len(group) < 2:
+            continue
+        # Limit group size to prevent explosion from common addresses
+        if len(group) > 100:
+            continue  # Skip overly common addresses (likely vague)
+
+        for i, (id1, addr1, q1) in enumerate(group):
+            if edge_count[id1] >= MAX_SHARED_EDGES_PER_COMPANY:
+                continue
+            for id2, addr2, q2 in group[i + 1 :]:
+                if edge_count[id2] >= MAX_SHARED_EDGES_PER_COMPANY:
+                    continue
                 # Lower confidence if either address is vague
                 confidence = "high"
                 if q1 == AddressQuality.VAGUE or q2 == AddressQuality.VAGUE:
                     confidence = "low"
                 G.add_edge(
-                    comp1.id,
-                    comp2.id,
+                    id1,
+                    id2,
                     relationship=EdgeType.SHARES_ADDRESS.value,
                     suspicious=True,
                     confidence=confidence,
                 )
+                edge_count[id1] += 1
+                edge_count[id2] += 1
 
 
 def _add_shared_phone_edges(G: nx.Graph, companies: dict[str, Company]):
-    """Add edges between companies that share the same phone number."""
-    company_list = list(companies.values())
+    """Add edges between companies that share the same phone number.
+    Uses hash-based grouping for O(n) performance."""
+    from collections import defaultdict
 
-    for i, comp1 in enumerate(company_list):
-        p1 = _normalize_phone(comp1.phone)
-        if not p1:
+    # Group companies by normalized phone
+    phone_groups: dict[str, list[str]] = defaultdict(list)
+
+    for company in companies.values():
+        phone = _normalize_phone(company.phone)
+        if phone and len(phone) >= 6:  # Minimum valid phone length
+            phone_groups[phone].append(company.id)
+
+    # Track edges per company to enforce limit
+    edge_count: dict[str, int] = defaultdict(int)
+
+    # Create edges within each group
+    for group in phone_groups.values():
+        if len(group) < 2:
             continue
-        for comp2 in company_list[i + 1 :]:
-            p2 = _normalize_phone(comp2.phone)
-            if not p2:
+        # Skip overly common phones (likely placeholder/default)
+        if len(group) > 50:
+            continue
+
+        for i, id1 in enumerate(group):
+            if edge_count[id1] >= MAX_SHARED_EDGES_PER_COMPANY:
                 continue
-            if p1 == p2:
+            for id2 in group[i + 1 :]:
+                if edge_count[id2] >= MAX_SHARED_EDGES_PER_COMPANY:
+                    continue
                 G.add_edge(
-                    comp1.id,
-                    comp2.id,
+                    id1,
+                    id2,
                     relationship=EdgeType.SHARES_PHONE.value,
                     suspicious=True,
                 )
+                edge_count[id1] += 1
+                edge_count[id2] += 1
 
 
 def _add_shared_email_edges(G: nx.Graph, companies: dict[str, Company]):
-    """Add edges between companies that share the same contact email."""
-    company_list = list(companies.values())
+    """Add edges between companies that share the same contact email.
+    Uses hash-based grouping for O(n) performance."""
+    from collections import defaultdict
 
-    for i, comp1 in enumerate(company_list):
-        e1 = comp1.contact_email
-        if not e1:
+    # Group companies by normalized email
+    email_groups: dict[str, list[str]] = defaultdict(list)
+
+    for company in companies.values():
+        email = company.contact_email
+        if email:
+            normalized = email.strip().lower()
+            # Skip generic/placeholder emails
+            if normalized and "@" in normalized and not _is_generic_email(normalized):
+                email_groups[normalized].append(company.id)
+
+    # Track edges per company to enforce limit
+    edge_count: dict[str, int] = defaultdict(int)
+
+    # Create edges within each group
+    for group in email_groups.values():
+        if len(group) < 2:
             continue
-        for comp2 in company_list[i + 1 :]:
-            e2 = comp2.contact_email
-            if not e2:
+        # Skip overly common emails
+        if len(group) > 50:
+            continue
+
+        for i, id1 in enumerate(group):
+            if edge_count[id1] >= MAX_SHARED_EDGES_PER_COMPANY:
                 continue
-            if e1.strip().lower() == e2.strip().lower():
+            for id2 in group[i + 1 :]:
+                if edge_count[id2] >= MAX_SHARED_EDGES_PER_COMPANY:
+                    continue
                 G.add_edge(
-                    comp1.id,
-                    comp2.id,
-                    relationship=EdgeType.SHARES_ADDRESS.value,
+                    id1,
+                    id2,
+                    relationship=EdgeType.SHARES_EMAIL.value,
                     suspicious=True,
-                    shared_attribute="email",
                 )
+                edge_count[id1] += 1
+                edge_count[id2] += 1
+
+
+def _is_generic_email(email: str) -> bool:
+    """Check if email is a generic/placeholder that shouldn't create edges."""
+    generic_patterns = [
+        "info@",
+        "admin@",
+        "contact@",
+        "sales@",
+        "support@",
+        "noreply@",
+        "no-reply@",
+        "test@",
+        "example@",
+    ]
+    return any(email.startswith(p) for p in generic_patterns)
 
 
 _PLOT_PATTERN = re.compile(r"plot\s*(\d+)", re.IGNORECASE)
@@ -230,6 +309,57 @@ _LR_PATTERN = re.compile(r"l\.?r\.?\s*no?\.?\s*(\d+)", re.IGNORECASE)
 _BUILDING_PATTERN = re.compile(
     r"(\w+)\s+(building|house|plaza|towers?|place|centre|center)", re.IGNORECASE
 )
+
+
+def _normalize_address_key(addr: str) -> str | None:
+    """Create a normalized key for address grouping.
+    Returns None for addresses that are too vague to group reliably.
+    Uses multiple strategies to extract a groupable key."""
+    a = addr.lower().strip()
+
+    # 1. Try plot number
+    m = _PLOT_PATTERN.search(a)
+    if m:
+        return f"plot:{m.group(1)}"
+
+    # 2. Try LR number
+    m = _LR_PATTERN.search(a)
+    if m:
+        return f"lr:{m.group(1)}"
+
+    # 3. Try building name
+    m = _BUILDING_PATTERN.search(a)
+    if m:
+        return f"building:{m.group(0).lower()}"
+
+    # 4. For specific addresses, use normalized token set
+    # Only if address has enough meaningful tokens
+    tokens = set(re.findall(r"\w+", a))
+    filler = {
+        "road",
+        "street",
+        "avenue",
+        "along",
+        "off",
+        "near",
+        "the",
+        "and",
+        "po",
+        "box",
+        "nairobi",
+        "kenya",
+        "mombasa",
+        "kisumu",
+        "nakuru",
+    }
+    meaningful = tokens - filler
+
+    # Need at least 3 meaningful tokens for a reliable key
+    if len(meaningful) >= 3:
+        # Sort for consistent key
+        return f"tokens:{'-'.join(sorted(meaningful))}"
+
+    return None
 
 
 def _addresses_similar(addr1: str, addr2: str) -> bool:

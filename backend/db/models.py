@@ -76,7 +76,7 @@ class CompanyDB(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     registration_number: Mapped[str] = mapped_column(
-        String(50), unique=True, nullable=False
+        String(255), unique=True, nullable=False
     )
     registration_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -94,11 +94,11 @@ class CompanyDB(Base):
     contact_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     physical_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     postal_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    postal_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    postal_code: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Provenance
     source_system: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    source_record_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_record_id: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     ingested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     data_quality_flags: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
@@ -201,7 +201,7 @@ class TenderDB(Base):
         UUID(as_uuid=True), primary_key=True, default=gen_uuid
     )
     reference_number: Mapped[str] = mapped_column(
-        String(100), unique=True, nullable=False
+        String(255), unique=True, nullable=False
     )
     title: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -236,12 +236,12 @@ class TenderDB(Base):
     )
     pe_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     currency: Mapped[str] = mapped_column(String(10), nullable=False, default="KES")
-    ocds_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    ocds_id: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     buyer_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     # Provenance
     source_system: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    source_record_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_record_id: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     ingested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     data_quality_flags: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
@@ -353,6 +353,10 @@ class CaseDB(Base):
     )
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     decision: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Structured decision fields (M3)
+    decision_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    finding: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
@@ -365,6 +369,15 @@ class CaseDB(Base):
     tender: Mapped["TenderDB"] = relationship()
     notes: Mapped[list["CaseNoteDB"]] = relationship(
         back_populates="case", order_by="CaseNoteDB.created_at.desc()"
+    )
+    events: Mapped[list["CaseEventDB"]] = relationship(
+        back_populates="case", order_by="CaseEventDB.created_at.asc()"
+    )
+    evidence_links: Mapped[list["CaseEvidenceLinkDB"]] = relationship(
+        back_populates="case", order_by="CaseEvidenceLinkDB.created_at.desc()"
+    )
+    notifications: Mapped[list["CaseNotificationDB"]] = relationship(
+        back_populates="case"
     )
     assigned_to: Mapped[Optional["UserDB"]] = relationship(
         foreign_keys=[assigned_to_id]
@@ -379,6 +392,10 @@ class CaseDB(Base):
         CheckConstraint(
             "priority IN ('HIGH', 'MEDIUM', 'LOW')",
             name="ck_case_priority",
+        ),
+        CheckConstraint(
+            "decision_type IS NULL OR decision_type IN ('SUBSTANTIATED', 'UNSUBSTANTIATED', 'REFERRED', 'INCONCLUSIVE')",
+            name="ck_case_decision_type",
         ),
         Index("ix_cases_status", "status"),
         Index("ix_cases_tender", "tender_id"),
@@ -419,6 +436,105 @@ class CaseNoteDB(Base):
     )
 
 
+class CaseEventDB(Base):
+    """Immutable event log for case timeline (M3)."""
+
+    __tablename__ = "case_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    actor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=False
+    )
+    old_value: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    new_value: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    event_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+    case: Mapped["CaseDB"] = relationship(back_populates="events")
+    actor: Mapped["UserDB"] = relationship()
+
+    __table_args__ = (
+        CheckConstraint(
+            "event_type IN ('CASE_OPENED', 'STATUS_CHANGE', 'ASSIGNMENT', 'NOTE_ADDED', 'PRIORITY_CHANGE', 'DECISION_RECORDED', 'EVIDENCE_LINKED', 'EVIDENCE_UNLINKED')",
+            name="ck_event_type",
+        ),
+        Index("ix_events_case", "case_id"),
+        Index("ix_events_created", "created_at"),
+    )
+
+
+class CaseEvidenceLinkDB(Base):
+    """Links cases to evidence items (M3). Becomes LLM context envelope in M5."""
+
+    __tablename__ = "case_evidence_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    evidence_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    reference_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    label: Mapped[str] = mapped_column(String(500), nullable=False)
+    link_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    added_by_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+    case: Mapped["CaseDB"] = relationship(back_populates="evidence_links")
+    added_by: Mapped["UserDB"] = relationship()
+
+    __table_args__ = (
+        CheckConstraint(
+            "evidence_type IN ('TENDER', 'RISK_FACTOR', 'GRAPH_PATH', 'DOCUMENT')",
+            name="ck_evidence_type",
+        ),
+        Index("ix_evidence_case", "case_id"),
+        Index("ix_evidence_type", "evidence_type"),
+    )
+
+
+class CaseNotificationDB(Base):
+    """Notification hooks for case events (M3 placeholder)."""
+
+    __tablename__ = "case_notifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False
+    )
+    message: Mapped[str] = mapped_column(String(500), nullable=False)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+    user: Mapped["UserDB"] = relationship()
+    case: Mapped["CaseDB"] = relationship(back_populates="notifications")
+
+    __table_args__ = (
+        Index("ix_notifications_user", "user_id"),
+        Index("ix_notifications_unread", "user_id", "is_read"),
+    )
+
+
 class ContractDB(Base):
     __tablename__ = "contracts"
 
@@ -434,7 +550,7 @@ class ContractDB(Base):
         nullable=True,
     )
     contract_number: Mapped[str] = mapped_column(
-        String(100), unique=True, nullable=False
+        String(255), unique=True, nullable=False
     )
     title: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -463,7 +579,7 @@ class ContractDB(Base):
 
     # Provenance
     source_system: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    source_record_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_record_id: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     ingested_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     data_quality_flags: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 

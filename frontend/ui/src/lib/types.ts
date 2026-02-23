@@ -192,9 +192,14 @@ export interface Case {
   status: CaseStatus;
   priority: RiskCategory;
   assigned_to: string | null;
+  assigned_to_id: string | null;
   created_by: string;
+  created_by_id: string | null;
   summary: string | null;
   decision: string | null;
+  decision_type: string | null;
+  finding: string | null;
+  closed_at: string | null;
   created_at: string;
   updated_at: string;
   notes: CaseNote[];
@@ -214,6 +219,69 @@ export interface CaseStats {
   escalated: number;
   resolved: number;
   dismissed: number;
+}
+
+// M3: Case Events & Timeline
+export type EventType =
+  | "CASE_OPENED"
+  | "STATUS_CHANGE"
+  | "ASSIGNMENT"
+  | "NOTE_ADDED"
+  | "PRIORITY_CHANGE"
+  | "DECISION_RECORDED"
+  | "EVIDENCE_LINKED"
+  | "EVIDENCE_UNLINKED";
+
+export interface CaseEvent {
+  id: string;
+  case_id: string;
+  event_type: EventType;
+  actor: string;
+  actor_id: string;
+  old_value: string | null;
+  new_value: string | null;
+  event_metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+// M3: Evidence Links
+export type EvidenceType = "TENDER" | "RISK_FACTOR" | "GRAPH_PATH" | "DOCUMENT";
+
+export interface CaseEvidenceLink {
+  id: string;
+  case_id: string;
+  evidence_type: EvidenceType;
+  reference_id: string;
+  label: string;
+  link_metadata: Record<string, unknown> | null;
+  added_by: string;
+  added_by_id: string;
+  created_at: string;
+}
+
+// M3: Structured Decisions
+export type DecisionType = "SUBSTANTIATED" | "UNSUBSTANTIATED" | "REFERRED" | "INCONCLUSIVE";
+
+// M3: Notifications
+export interface CaseNotification {
+  id: string;
+  case_id: string;
+  case_title: string | null;
+  message: string;
+  is_read: boolean;
+  created_at: string;
+}
+
+// M3: Supervisor Workload
+export interface WorkloadItem {
+  user_id: string | null;
+  username: string;
+  full_name: string;
+  role: string | null;
+  open: number;
+  investigating: number;
+  escalated: number;
+  total_active: number;
 }
 
 // Ingestion
