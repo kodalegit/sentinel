@@ -5,8 +5,8 @@
 
 "use client";
 
-import { useState } from "react";
-import { useFullGraph, useCommunities, useCommunityGraph } from "@/hooks/useTenders";
+import { useState, useMemo } from "react";
+import { useFullGraph, useCommunities, useCommunityGraph, useGraphStats } from "@/hooks/useTenders";
 import { ShadowGraph } from "@/components/ShadowGraph";
 import { AuthGuard } from "@/components/AuthGuard";
 import { Button } from "@/components/ui/button";
@@ -23,10 +23,21 @@ import {
 import type { CommunityCluster } from "@/lib/types";
 
 function GraphExplorerContent() {
-  const { graph: fullGraph, loading: graphLoading, error } = useFullGraph();
-  const { clusters, loading: clustersLoading } = useCommunities();
+  const { stats, loading: statsLoading } = useGraphStats();
+  const isLargeGraph = stats?.is_large ?? false;
+  
+  // For large graphs, start in cluster mode; for small graphs, load full graph
+  const [viewMode, setViewMode] = useState<"full" | "cluster" | "stats">("full");
   const [selectedCluster, setSelectedCluster] = useState<CommunityCluster | null>(null);
-  const [viewMode, setViewMode] = useState<"full" | "cluster">("full");
+  
+  // Only fetch full graph if not large, or if user explicitly requests it
+  const [forceLoadFull, setForceLoadFull] = useState(false);
+  const shouldLoadFullGraph = !isLargeGraph || forceLoadFull;
+  
+  const { graph: fullGraph, loading: graphLoading, error } = useFullGraph(
+    shouldLoadFullGraph ? { limitNodes: 500, limitEdges: 2000 } : undefined
+  );
+  const { clusters, loading: clustersLoading } = useCommunities();
 
   const { graph: clusterGraph, loading: clusterGraphLoading } = useCommunityGraph(
     viewMode === "cluster" && selectedCluster ? selectedCluster.id : null
@@ -38,12 +49,18 @@ function GraphExplorerContent() {
   };
 
   const handleShowFullGraph = () => {
+    if (isLargeGraph && !forceLoadFull) {
+      setForceLoadFull(true);
+    }
     setViewMode("full");
     setSelectedCluster(null);
   };
 
   const activeGraph = viewMode === "cluster" && clusterGraph ? clusterGraph : fullGraph;
-  const isLoading = viewMode === "cluster" ? clusterGraphLoading : graphLoading;
+  const isLoading = viewMode === "cluster" ? clusterGraphLoading : (graphLoading || statsLoading);
+  
+  // Show stats view for large graphs that haven't loaded full graph yet
+  const showStatsView = isLargeGraph && !forceLoadFull && viewMode === "full";
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -64,14 +81,17 @@ function GraphExplorerContent() {
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
-              {activeGraph && (
+              {stats && (
                 <span className="text-xs text-muted-foreground tabular-nums">
-                  <span className="text-foreground/70">{activeGraph.nodes.length}</span> nodes
+                  <span className="text-foreground/70">{stats.total_nodes.toLocaleString()}</span> nodes
                   <span className="mx-1.5 opacity-40">&middot;</span>
-                  <span className="text-foreground/70">{activeGraph.edges.length}</span> edges
+                  <span className="text-foreground/70">{stats.total_edges.toLocaleString()}</span> edges
+                  {stats.is_large && (
+                    <span className="ml-2 text-amber-500">(large graph)</span>
+                  )}
                 </span>
               )}
-              {viewMode === "cluster" && (
+              {(viewMode === "cluster" || showStatsView) && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -79,7 +99,7 @@ function GraphExplorerContent() {
                   className="text-xs h-8"
                 >
                   <LayoutGrid size={14} />
-                  Full Graph
+                  {isLargeGraph ? "Load Sample" : "Full Graph"}
                 </Button>
               )}
             </div>
@@ -139,6 +159,33 @@ function GraphExplorerContent() {
                 <AlertTriangle className="w-8 h-8 text-destructive mx-auto mb-3" />
                 <p className="text-sm">Failed to load graph data</p>
                 <p className="text-xs text-muted-foreground mt-1">{error.message}</p>
+              </div>
+            </div>
+          ) : showStatsView ? (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="text-center max-w-md p-8">
+                <AlertTriangle className="w-12 h-12 text-amber-500 mx-auto mb-4" />
+                <h3 className="text-lg font-semibold mb-2">Large Graph Detected</h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  This graph has {stats?.total_nodes.toLocaleString()} nodes and {stats?.total_edges.toLocaleString()} edges.
+                  Loading the full graph may be slow.
+                </p>
+                <p className="text-sm text-muted-foreground mb-6">
+                  We recommend exploring individual <strong>communities</strong> from the sidebar,
+                  or click below to load a sample of high-risk tenders.
+                </p>
+                <div className="flex gap-3 justify-center">
+                  <Button onClick={handleShowFullGraph} variant="outline">
+                    Load Sample (500 nodes)
+                  </Button>
+                  <Button onClick={() => {
+                    if (clusters.length > 0) {
+                      handleClusterClick(clusters[0]);
+                    }
+                  }} disabled={clusters.length === 0}>
+                    View Top Community
+                  </Button>
+                </div>
               </div>
             </div>
           ) : activeGraph ? (

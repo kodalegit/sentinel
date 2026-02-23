@@ -61,6 +61,7 @@ class EdgeType(str, Enum):
     RELATED_TO = "RELATED_TO"
     SHARES_ADDRESS = "SHARES_ADDRESS"
     SHARES_PHONE = "SHARES_PHONE"
+    SHARES_EMAIL = "SHARES_EMAIL"
 
 
 class RelationshipType(str, Enum):
