@@ -24,6 +24,9 @@ from db.mappers import (
 from graph.builder import build_procurement_graph
 from graph.communities import detect_communities
 from ml.hybrid_scorer import HybridRiskScorer
+from graph.neo4j_driver import close_neo4j_driver, check_neo4j_health
+from graph.neo4j_sync import sync_graph_to_neo4j
+from graph.neo4j_communities import detect_communities_neo4j
 from routes.stats import router as stats_router
 from routes.tenders import router as tenders_router
 from routes.tenders_graph import router as tenders_graph_router
@@ -43,6 +46,7 @@ async def recompute_app_state(app: FastAPI) -> dict:
     """
     data = await load_data_from_db()
 
+    # Build NetworkX graph (always needed for ML features)
     graph = build_procurement_graph(
         tenders=data["tenders"],
         companies=data["companies"],
@@ -51,7 +55,32 @@ async def recompute_app_state(app: FastAPI) -> dict:
         bids=data["bids"],
     )
 
-    communities = detect_communities(graph, data["bids"], data["companies"])
+    # Sync to Neo4j if enabled
+    neo4j_stats = None
+    if settings.neo4j_enabled:
+        try:
+            neo4j_health = await check_neo4j_health()
+            if neo4j_health["status"] == "healthy":
+                neo4j_stats = await sync_graph_to_neo4j(
+                    companies=data["companies"],
+                    directors=data["directors"],
+                    officials=data["officials"],
+                    tenders=data["tenders"],
+                    bids=data["bids"],
+                )
+                print(f"Synced to Neo4j: {neo4j_stats}")
+        except Exception as e:
+            print(f"Neo4j sync failed, using NetworkX fallback: {e}")
+
+    # Detect communities (use Neo4j if available, else NetworkX)
+    if settings.neo4j_enabled and neo4j_stats:
+        try:
+            communities = await detect_communities_neo4j()
+        except Exception as e:
+            print(f"Neo4j community detection failed, using NetworkX: {e}")
+            communities = detect_communities(graph, data["bids"], data["companies"])
+    else:
+        communities = detect_communities(graph, data["bids"], data["companies"])
 
     scorer = HybridRiskScorer()
     risk_scores = scorer.score_all(
@@ -84,7 +113,7 @@ async def recompute_app_state(app: FastAPI) -> dict:
     )
 
     s = app.state.app_state
-    return {
+    result = {
         "tenders": len(s.tenders),
         "companies": len(s.companies),
         "nodes": s.graph.number_of_nodes(),
@@ -92,6 +121,9 @@ async def recompute_app_state(app: FastAPI) -> dict:
         "communities": len(s.communities),
         "risk_scores": len(s.risk_scores),
     }
+    if neo4j_stats:
+        result["neo4j_synced"] = neo4j_stats
+    return result
 
 
 async def load_data_from_db():
@@ -147,9 +179,14 @@ async def lifespan(app: FastAPI):
     print(f"Built graph with {stats['nodes']} nodes and {stats['edges']} edges")
     print(f"Detected {stats['communities']} bidding communities")
     print(f"Computed and persisted {stats['risk_scores']} risk scores")
+    if stats.get("neo4j_synced"):
+        print(f"Neo4j sync: {stats['neo4j_synced']}")
 
     yield
 
+    # Cleanup Neo4j connection
+    if settings.neo4j_enabled:
+        await close_neo4j_driver()
     print("Shutting down Sentinel API")
 
 

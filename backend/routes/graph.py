@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
+from config import settings
 from models import GraphData, GraphNode, GraphEdge
 from state import State
 from graph.builder import (
@@ -12,6 +13,12 @@ from graph.communities import (
     get_cluster_subgraph,
     find_shortest_path,
 )
+from graph.neo4j_communities import (
+    find_shortest_path_neo4j,
+    get_entity_neighborhood_neo4j,
+    get_cluster_subgraph_neo4j,
+)
+from graph.neo4j_driver import check_neo4j_health
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
 
@@ -171,12 +178,24 @@ def get_community_graph(
 
 
 @router.get("/path")
-def get_path(
+async def get_path(
     state: State,
     source: str = Query(..., description="Source entity ID"),
     target: str = Query(..., description="Target entity ID"),
 ):
     """Find shortest path between two entities in the graph."""
+    # Try Neo4j first if enabled
+    if settings.neo4j_enabled:
+        try:
+            health = await check_neo4j_health()
+            if health["status"] == "healthy":
+                result = await find_shortest_path_neo4j(source, target)
+                if result:
+                    return result
+        except Exception:
+            pass  # Fall back to NetworkX
+
+    # NetworkX fallback
     result = find_shortest_path(state.graph, source, target)
     if result is None:
         raise HTTPException(status_code=404, detail="No path found between entities")
@@ -184,12 +203,27 @@ def get_path(
 
 
 @router.get("/entity/{entity_id}", response_model=GraphData)
-def get_entity_neighborhood(
+async def get_entity_neighborhood(
     entity_id: str,
     state: State,
     depth: int = Query(2, ge=1, le=3),
 ):
     """Get k-hop neighborhood around any entity."""
+    # Try Neo4j first if enabled
+    if settings.neo4j_enabled:
+        try:
+            health = await check_neo4j_health()
+            if health["status"] == "healthy":
+                result = await get_entity_neighborhood_neo4j(entity_id, depth)
+                if result and result.get("nodes"):
+                    return GraphData(
+                        nodes=[GraphNode(**n) for n in result["nodes"]],
+                        edges=[GraphEdge(**e) for e in result["edges"]],
+                    )
+        except Exception:
+            pass  # Fall back to NetworkX
+
+    # NetworkX fallback
     if entity_id not in state.graph:
         raise HTTPException(status_code=404, detail="Entity not found in graph")
 

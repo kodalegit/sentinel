@@ -72,26 +72,61 @@ ML detections were previously tagged as `PRICE_ANOMALY`, but the model uses all 
 
 ## Graph Analytics
 
+### Hybrid Architecture: PostgreSQL + Neo4j
+
+**Key decision: Hybrid graph architecture with PostgreSQL as source of truth and Neo4j for analytics.**
+
+The system uses a dual-database approach:
+
+1. **PostgreSQL**: Source of truth for all entities (companies, tenders, bids, cases)
+2. **Neo4j**: Optimized graph analytics (community detection, pathfinding, centrality)
+
+This provides:
+
+- **Performance**: Neo4j's index-free adjacency enables sub-millisecond traversals
+- **Accuracy**: Neo4j GDS provides best-in-class algorithms (Louvain, PageRank)
+- **Robustness**: PostgreSQL remains authoritative; Neo4j can be rebuilt from PG
+- **Graceful fallback**: System works with NetworkX if Neo4j is unavailable
+
 ### Shadow Graph (`graph/builder.py`)
 
 Heterogeneous NetworkX graph with:
 
 - **Node types**: COMPANY, DIRECTOR, OFFICIAL, TENDER
-- **Edge types**: DIRECTOR_OF, BID_ON, WON, AWARDED_BY, RELATED_TO, SHARES_ADDRESS, SHARES_PHONE
-- Suspicious edges flagged for: family connections, shared addresses (plot number matching), shared phone numbers
+- **Edge types**: DIRECTOR_OF, BID_ON, WON, AWARDED_BY, RELATED_TO, SHARES_ADDRESS, SHARES_PHONE, SHARES_EMAIL
+- Suspicious edges flagged for: family connections, shared addresses (plot number matching), shared phone numbers, shared emails
 
-### Community Detection (`graph/communities.py`)
+**Key decision: Hash-based shared attribute detection (O(n) instead of O(n²)).**
+The original pairwise comparison of all companies for shared attributes caused edge explosion (22M edges for 10K tenders). Hash-based grouping by normalized attribute keys reduces complexity to O(n) and limits edges per company to 50.
 
-**Key decision: Louvain as the single community detection algorithm.**
-Previously, two algorithms solved the same problem:
+### Neo4j Sync (`graph/neo4j_sync.py`)
 
-1. `find_cartel_clusters()` — connected components on co-bidding graph (threshold ≥3)
-2. `detect_communities()` — Louvain on co-bidding graph (threshold ≥2)
+Syncs PostgreSQL entities to Neo4j on recomputation:
 
-Louvain is strictly more informative: it produces weighted, scored communities with shared-attribute analysis. Connected components are a simpler subset. Unified to Louvain everywhere with threshold ≥2 (Louvain's modularity optimization handles noise).
+```
+PostgreSQL → sync_graph_to_neo4j()
+  → Create Company, Director, Official, Tender nodes
+  → Create DIRECTED_BY, BID_ON, RELATED_TO edges
+  → Create SHARES_ADDRESS, SHARES_PHONE, SHARES_EMAIL, SHARES_DIRECTOR edges
+```
+
+### Community Detection (`graph/neo4j_communities.py`)
+
+**Key decision: Neo4j GDS Louvain with NetworkX fallback.**
+
+When Neo4j GDS is available:
+
+- Uses `gds.louvain.stream()` for community detection
+- Provides better quality communities than NetworkX implementation
+- Enables future algorithms (PageRank, centrality, triangle count)
+
+When Neo4j is unavailable:
+
+- Falls back to NetworkX Louvain implementation
+- Same interface, slightly lower performance
 
 **Key decision: communities cached at startup.**
-Communities were previously recomputed on every API request. Now computed once in `lifespan` alongside risk scores and stored in `AppState.communities`. Routes serve cached data.
+Communities are computed once in `lifespan` alongside risk scores and stored in `AppState.communities`. Routes serve cached data.
 
 The `get_cartel_sets()` helper extracts simple `list[set[str]]` from Louvain clusters for the rule engine's cartel check, maintaining the same interface.
 
@@ -246,11 +281,24 @@ All fields are nullable where appropriate to handle sparse Kenyan data.
 | -------------- | ---------------------------------------------------- |
 | Backend        | FastAPI, Python 3.12                                 |
 | Database       | PostgreSQL (asyncpg + SQLAlchemy)                    |
+| Graph Database | Neo4j 5 (GDS + APOC) with NetworkX fallback          |
 | ML             | scikit-learn (Isolation Forest), SHAP, pandas, numpy |
-| Graph          | NetworkX (Louvain community detection)               |
 | AI             | LangChain + LangGraph (configurable LLM)             |
 | Frontend       | Next.js, TypeScript, Tailwind CSS, shadcn/ui         |
 | Infrastructure | Docker Compose, Railway                              |
+
+### Neo4j Configuration
+
+```bash
+# Environment variables
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=sentinel123
+NEO4J_DATABASE=neo4j
+NEO4J_ENABLED=true  # Set to false for NetworkX-only mode
+```
+
+**Docker Compose** includes Neo4j with GDS and APOC plugins pre-installed.
 
 ### Data Sources & Ingestion
 
@@ -289,3 +337,7 @@ All fields are nullable where appropriate to handle sparse Kenyan data.
 5. **Evidence-grounded intelligence**: LLM outputs are grounded in structured evidence packs to prevent hallucination. Template fallback ensures system works without LLM.
 
 6. **Null-safe operations**: All optional fields are checked before use. Missing data is treated as a signal rather than causing analysis failure.
+
+7. **Hybrid graph architecture**: PostgreSQL as source of truth, Neo4j for analytics. Graceful fallback to NetworkX if Neo4j unavailable.
+
+8. **Hash-based edge detection**: O(n) complexity instead of O(n²) for shared attribute detection. Edge limits per entity prevent explosion.

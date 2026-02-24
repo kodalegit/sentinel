@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
 
+    # Neo4j Graph Database
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "sentinel123"
+    neo4j_database: str = "neo4j"
+    neo4j_enabled: bool = True  # Set to False to use NetworkX fallback
+
     @property
     def sync_database_url(self) -> str:
         """Sync URL for Alembic migrations."""

@@ -15,6 +15,28 @@ services:
       timeout: 3s
       retries: 5
 
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/sentinel123
+      NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*,gds.*"
+      NEO4J_dbms_security_procedures_allowlist: "apoc.*,gds.*"
+    ports:
+      - "7474:7474" # HTTP
+      - "7687:7687" # Bolt
+    volumes:
+      - neo4jdata:/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build: ./backend
     ports:
@@ -22,11 +44,17 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://sentinel:sentinel@db:5432/sentinel
       DB_ECHO: "false"
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: sentinel123
+      NEO4J_ENABLED: "true"
       # LLM_MODEL: gpt-5-mini
       # LLM_PROVIDER: openai
       # OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     depends_on:
       db:
+        condition: service_healthy
+      neo4j:
         condition: service_healthy
 
   frontend:
@@ -40,3 +68,4 @@ services:
 
 volumes:
   pgdata:
+  neo4jdata:
