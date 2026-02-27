@@ -4,9 +4,12 @@ Sentinel API - FastAPI backend for public procurement oversight.
 
 import uuid
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import logging
+
+logger = logging.getLogger(__name__)
 
 from config import settings
 from models import Bid, RiskScore
@@ -55,32 +58,9 @@ async def recompute_app_state(app: FastAPI) -> dict:
         bids=data["bids"],
     )
 
-    # Sync to Neo4j if enabled
-    neo4j_stats = None
-    if settings.neo4j_enabled:
-        try:
-            neo4j_health = await check_neo4j_health()
-            if neo4j_health["status"] == "healthy":
-                neo4j_stats = await sync_graph_to_neo4j(
-                    companies=data["companies"],
-                    directors=data["directors"],
-                    officials=data["officials"],
-                    tenders=data["tenders"],
-                    bids=data["bids"],
-                )
-                print(f"Synced to Neo4j: {neo4j_stats}")
-        except Exception as e:
-            print(f"Neo4j sync failed, using NetworkX fallback: {e}")
-
-    # Detect communities (use Neo4j if available, else NetworkX)
-    if settings.neo4j_enabled and neo4j_stats:
-        try:
-            communities = await detect_communities_neo4j()
-        except Exception as e:
-            print(f"Neo4j community detection failed, using NetworkX: {e}")
-            communities = detect_communities(graph, data["bids"], data["companies"])
-    else:
-        communities = detect_communities(graph, data["bids"], data["companies"])
+    # Detect communities using NetworkX (always available)
+    # Neo4j sync happens in background after initial load
+    communities = detect_communities(graph, data["bids"], data["companies"])
 
     scorer = HybridRiskScorer()
     risk_scores = scorer.score_all(
@@ -113,7 +93,7 @@ async def recompute_app_state(app: FastAPI) -> dict:
     )
 
     s = app.state.app_state
-    result = {
+    return {
         "tenders": len(s.tenders),
         "companies": len(s.companies),
         "nodes": s.graph.number_of_nodes(),
@@ -121,9 +101,42 @@ async def recompute_app_state(app: FastAPI) -> dict:
         "communities": len(s.communities),
         "risk_scores": len(s.risk_scores),
     }
-    if neo4j_stats:
-        result["neo4j_synced"] = neo4j_stats
-    return result
+
+
+async def sync_neo4j_background(app: FastAPI):
+    """
+    Background task to sync graph to Neo4j and update communities.
+    This runs after the main recompute completes, so the API remains responsive.
+    """
+    if not settings.neo4j_enabled:
+        return
+
+    try:
+        neo4j_health = await check_neo4j_health()
+        if neo4j_health["status"] != "healthy":
+            logger.warning("Neo4j not healthy, skipping sync")
+            return
+
+        state = app.state.app_state
+        neo4j_stats = await sync_graph_to_neo4j(
+            companies=state.companies,
+            directors=state.directors,
+            officials=state.officials,
+            tenders=state.tenders,
+            bids=state.bids,
+        )
+        logger.info(f"Neo4j sync complete: {neo4j_stats}")
+
+        # Update communities using Neo4j GDS if available
+        try:
+            communities = await detect_communities_neo4j()
+            state.communities = communities
+            logger.info(f"Updated communities from Neo4j: {len(communities)} clusters")
+        except Exception as e:
+            logger.warning(f"Neo4j community detection failed: {e}")
+
+    except Exception as e:
+        logger.error(f"Neo4j background sync failed: {e}")
 
 
 async def load_data_from_db():
@@ -218,9 +231,23 @@ app.include_router(users_router)
 
 
 @app.post("/api/recompute")
-async def recompute(request: Request, current_user: SupervisorOrAdmin):
-    """Reload data from DB and recompute graph + risk scores. Requires supervisor or admin."""
+async def recompute(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    current_user: SupervisorOrAdmin,
+):
+    """
+    Reload data from DB and recompute graph + risk scores.
+    Neo4j sync runs in background to keep response fast.
+    Requires supervisor or admin.
+    """
     stats = await recompute_app_state(request.app)
+
+    # Schedule Neo4j sync as background task (non-blocking)
+    if settings.neo4j_enabled:
+        background_tasks.add_task(sync_neo4j_background, request.app)
+        stats["neo4j_sync"] = "scheduled"
+
     return {"status": "ok", "stats": stats}
 
 

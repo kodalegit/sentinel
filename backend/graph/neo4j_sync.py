@@ -8,11 +8,14 @@ from typing import Any
 
 from models import Company, Director, PublicOfficial, Tender, Bid, EdgeType
 from graph.neo4j_driver import get_neo4j_session
-from graph.builder import (
-    _normalize_phone,
-    _normalize_address_key,
-    _is_generic_email,
+from graph.normalization import (
+    normalize_phone,
+    normalize_address_key,
+    is_generic_email,
     MAX_SHARED_EDGES_PER_COMPANY,
+    MAX_GROUP_SIZE_ADDRESS,
+    MAX_GROUP_SIZE_PHONE,
+    MAX_GROUP_SIZE_EMAIL,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,10 +28,16 @@ async def sync_graph_to_neo4j(
     tenders: dict[str, Tender],
     bids: list[Bid],
     tender_risks: dict[str, str] | None = None,
+    incremental: bool = False,
 ) -> dict[str, int]:
     """
     Sync all entities from PostgreSQL to Neo4j.
-    Returns counts of created nodes and edges.
+
+    Args:
+        incremental: If True, use MERGE to upsert nodes/edges without clearing.
+                    If False (default), clear and rebuild entire graph.
+
+    Returns counts of created/updated nodes and edges.
     """
     stats = {
         "companies": 0,
@@ -36,29 +45,47 @@ async def sync_graph_to_neo4j(
         "officials": 0,
         "tenders": 0,
         "edges": 0,
+        "mode": "incremental" if incremental else "full_rebuild",
     }
 
     async with get_neo4j_session() as session:
-        # Clear existing graph (full rebuild)
-        await session.run("MATCH (n) DETACH DELETE n")
-        logger.info("Cleared existing Neo4j graph")
-
-        # Create constraints and indexes
+        # Create constraints and indexes (idempotent)
         await _create_constraints(session)
 
-        # Create nodes
-        stats["companies"] = await _create_company_nodes(session, companies)
-        stats["directors"] = await _create_director_nodes(session, directors)
-        stats["officials"] = await _create_official_nodes(session, officials)
-        stats["tenders"] = await _create_tender_nodes(session, tenders, tender_risks)
+        if not incremental:
+            # Full rebuild: clear existing graph
+            await session.run("MATCH (n) DETACH DELETE n")
+            logger.info("Cleared existing Neo4j graph for full rebuild")
 
-        # Create edges
-        edge_count = 0
-        edge_count += await _create_director_edges(session, companies)
-        edge_count += await _create_bid_edges(session, bids)
-        edge_count += await _create_official_relationship_edges(session, officials)
-        edge_count += await _create_shared_attribute_edges(session, companies)
-        stats["edges"] = edge_count
+            # Create nodes
+            stats["companies"] = await _create_company_nodes(session, companies)
+            stats["directors"] = await _create_director_nodes(session, directors)
+            stats["officials"] = await _create_official_nodes(session, officials)
+            stats["tenders"] = await _create_tender_nodes(
+                session, tenders, tender_risks
+            )
+
+            # Create edges
+            edge_count = 0
+            edge_count += await _create_director_edges(session, companies)
+            edge_count += await _create_bid_edges(session, bids)
+            edge_count += await _create_official_relationship_edges(session, officials)
+            edge_count += await _create_shared_attribute_edges(session, companies)
+            stats["edges"] = edge_count
+        else:
+            # Incremental: upsert nodes and edges
+            stats["companies"] = await _upsert_company_nodes(session, companies)
+            stats["directors"] = await _upsert_director_nodes(session, directors)
+            stats["officials"] = await _upsert_official_nodes(session, officials)
+            stats["tenders"] = await _upsert_tender_nodes(
+                session, tenders, tender_risks
+            )
+
+            # For edges, we need to be more careful - only add missing ones
+            edge_count = 0
+            edge_count += await _upsert_director_edges(session, companies)
+            edge_count += await _upsert_bid_edges(session, bids)
+            stats["edges"] = edge_count
 
         logger.info(f"Neo4j sync complete: {stats}")
 
@@ -335,14 +362,14 @@ async def _create_shared_attribute_edges(session, companies: dict[str, Company])
     address_groups: dict[str, list[str]] = defaultdict(list)
     for company in companies.values():
         if company.physical_address:
-            key = _normalize_address_key(company.physical_address)
+            key = normalize_address_key(company.physical_address)
             if key:
                 address_groups[key].append(company.id)
 
     address_edges = []
     edge_count = defaultdict(int)
     for group in address_groups.values():
-        if len(group) < 2 or len(group) > 50:
+        if len(group) < 2 or len(group) > MAX_GROUP_SIZE_ADDRESS:
             continue
         for i, id1 in enumerate(group):
             if edge_count[id1] >= MAX_SHARED_EDGES_PER_COMPANY:
@@ -372,14 +399,14 @@ async def _create_shared_attribute_edges(session, companies: dict[str, Company])
     phone_groups: dict[str, list[str]] = defaultdict(list)
     for company in companies.values():
         if company.phone:
-            norm_phone = _normalize_phone(company.phone)
+            norm_phone = normalize_phone(company.phone)
             if norm_phone:
                 phone_groups[norm_phone].append(company.id)
 
     phone_edges = []
     edge_count = defaultdict(int)
     for group in phone_groups.values():
-        if len(group) < 2 or len(group) > 50:
+        if len(group) < 2 or len(group) > MAX_GROUP_SIZE_PHONE:
             continue
         for i, id1 in enumerate(group):
             if edge_count[id1] >= MAX_SHARED_EDGES_PER_COMPANY:
@@ -410,13 +437,13 @@ async def _create_shared_attribute_edges(session, companies: dict[str, Company])
     for company in companies.values():
         if company.contact_email:
             email = company.contact_email.strip().lower()
-            if email and "@" in email and not _is_generic_email(email):
+            if email and "@" in email and not is_generic_email(email):
                 email_groups[email].append(company.id)
 
     email_edges = []
     edge_count = defaultdict(int)
     for group in email_groups.values():
-        if len(group) < 2 or len(group) > 50:
+        if len(group) < 2 or len(group) > MAX_GROUP_SIZE_EMAIL:
             continue
         for i, id1 in enumerate(group):
             if edge_count[id1] >= MAX_SHARED_EDGES_PER_COMPANY:
@@ -457,6 +484,202 @@ async def _create_shared_attribute_edges(session, companies: dict[str, Company])
 
     logger.info(f"Created {total} shared attribute edges")
     return total
+
+
+async def _upsert_company_nodes(session, companies: dict[str, Company]) -> int:
+    """Upsert Company nodes using MERGE (incremental sync)."""
+    if not companies:
+        return 0
+
+    company_data = [
+        {
+            "id": c.id,
+            "name": c.name,
+            "address": c.address or "",
+            "phone": c.phone or "",
+            "email": c.contact_email or "",
+            "registration_date": (
+                c.registration_date.isoformat() if c.registration_date else None
+            ),
+            "supplier_type": c.supplier_type or "",
+            "physical_address": c.physical_address or "",
+        }
+        for c in companies.values()
+    ]
+
+    result = await session.run(
+        """
+        UNWIND $companies AS c
+        MERGE (comp:Company {id: c.id})
+        SET comp.name = c.name,
+            comp.address = c.address,
+            comp.phone = c.phone,
+            comp.email = c.email,
+            comp.registration_date = c.registration_date,
+            comp.supplier_type = c.supplier_type,
+            comp.physical_address = c.physical_address
+        RETURN count(comp) as count
+    """,
+        companies=company_data,
+    )
+
+    record = await result.single()
+    return record["count"] if record else 0
+
+
+async def _upsert_director_nodes(session, directors: dict[str, Director]) -> int:
+    """Upsert Director nodes using MERGE (incremental sync)."""
+    if not directors:
+        return 0
+
+    director_data = [
+        {
+            "id": d.id,
+            "name": d.name,
+            "id_number": d.id_number or "",
+        }
+        for d in directors.values()
+    ]
+
+    result = await session.run(
+        """
+        UNWIND $directors AS d
+        MERGE (dir:Director {id: d.id})
+        SET dir.name = d.name,
+            dir.id_number = d.id_number
+        RETURN count(dir) as count
+    """,
+        directors=director_data,
+    )
+
+    record = await result.single()
+    return record["count"] if record else 0
+
+
+async def _upsert_official_nodes(session, officials: dict[str, PublicOfficial]) -> int:
+    """Upsert Official nodes using MERGE (incremental sync)."""
+    if not officials:
+        return 0
+
+    official_data = [
+        {
+            "id": o.id,
+            "name": o.name,
+            "department": o.department or "",
+            "position": o.position or "",
+        }
+        for o in officials.values()
+    ]
+
+    result = await session.run(
+        """
+        UNWIND $officials AS o
+        MERGE (off:Official {id: o.id})
+        SET off.name = o.name,
+            off.department = o.department,
+            off.position = o.position
+        RETURN count(off) as count
+    """,
+        officials=official_data,
+    )
+
+    record = await result.single()
+    return record["count"] if record else 0
+
+
+async def _upsert_tender_nodes(
+    session, tenders: dict[str, Tender], tender_risks: dict[str, str] | None = None
+) -> int:
+    """Upsert Tender nodes using MERGE (incremental sync)."""
+    if not tenders:
+        return 0
+
+    tender_risks = tender_risks or {}
+    tender_data = [
+        {
+            "id": t.id,
+            "title": t.title,
+            "reference": t.reference_number or "",
+            "value": float(t.estimated_value) if t.estimated_value else 0.0,
+            "status": t.status or "",
+            "risk_level": tender_risks.get(t.id, "LOW"),
+        }
+        for t in tenders.values()
+    ]
+
+    result = await session.run(
+        """
+        UNWIND $tenders AS t
+        MERGE (ten:Tender {id: t.id})
+        SET ten.title = t.title,
+            ten.reference = t.reference,
+            ten.value = t.value,
+            ten.status = t.status,
+            ten.risk_level = t.risk_level
+        RETURN count(ten) as count
+    """,
+        tenders=tender_data,
+    )
+
+    record = await result.single()
+    return record["count"] if record else 0
+
+
+async def _upsert_director_edges(session, companies: dict[str, Company]) -> int:
+    """Upsert DIRECTED_BY edges using MERGE (incremental sync)."""
+    edges = []
+    for company in companies.values():
+        for director_id in company.director_ids:
+            edges.append({"company_id": company.id, "director_id": director_id})
+
+    if not edges:
+        return 0
+
+    result = await session.run(
+        """
+        UNWIND $edges AS e
+        MATCH (c:Company {id: e.company_id})
+        MATCH (d:Director {id: e.director_id})
+        MERGE (c)-[r:DIRECTED_BY]->(d)
+        RETURN count(r) as count
+    """,
+        edges=edges,
+    )
+
+    record = await result.single()
+    return record["count"] if record else 0
+
+
+async def _upsert_bid_edges(session, bids: list[Bid]) -> int:
+    """Upsert BID_ON edges using MERGE (incremental sync)."""
+    if not bids:
+        return 0
+
+    bid_data = [
+        {
+            "company_id": b.company_id,
+            "tender_id": b.tender_id,
+            "amount": float(b.amount) if b.amount else 0.0,
+            "is_winner": b.is_winner,
+        }
+        for b in bids
+    ]
+
+    result = await session.run(
+        """
+        UNWIND $bids AS b
+        MATCH (c:Company {id: b.company_id})
+        MATCH (t:Tender {id: b.tender_id})
+        MERGE (c)-[r:BID_ON]->(t)
+        SET r.amount = b.amount,
+            r.is_winner = b.is_winner
+        RETURN count(r) as count
+    """,
+        bids=bid_data,
+    )
+
+    record = await result.single()
+    return record["count"] if record else 0
 
 
 async def get_graph_stats_from_neo4j() -> dict[str, Any]:
