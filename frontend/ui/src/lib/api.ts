@@ -378,8 +378,18 @@ export async function ingestEGPContracts(
   return postApi<IngestionResponse>("/api/ingest/egp/contracts", payload);
 }
 
-export async function triggerRecompute(): Promise<RecomputeResponse> {
-  return postApi<RecomputeResponse>("/api/recompute", {});
+export async function triggerRecompute(): Promise<{ status: string; job_id: string }> {
+  return postApi<{ status: string; job_id: string }>("/api/recompute", {});
+}
+
+export async function getRecomputeStatus(jobId: string): Promise<{
+  status: string;
+  stats?: RecomputeResponse["stats"];
+  error?: string;
+}> {
+  return fetchApi<{ status: string; stats?: RecomputeResponse["stats"]; error?: string }>(
+    `/api/recompute/status/${jobId}`
+  );
 }
 
 // --- User Management ---

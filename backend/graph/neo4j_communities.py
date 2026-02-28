@@ -67,7 +67,9 @@ async def _detect_communities_gds(min_cluster_size: int = 2) -> list[Cluster]:
 
         # Group companies by community
         communities: dict[int, list[tuple[str, str]]] = defaultdict(list)
-        async for record in result:
+        # Eagerly consume all records to avoid session buffering issues
+        records = [record async for record in result]
+        for record in records:
             communities[record["communityId"]].append(
                 (record["companyId"], record["companyName"])
             )
@@ -126,7 +128,9 @@ async def _detect_communities_basic() -> list[Cluster]:
 
         adjacency: dict[str, set[str]] = defaultdict(set)
         company_names: dict[str, str] = {}
-        async for record in result:
+        # Eagerly consume all records to avoid session buffering issues
+        records = [record async for record in result]
+        for record in records:
             c1_id = record["c1_id"]
             c2_id = record["c2_id"]
             adjacency[c1_id].add(c2_id)
@@ -221,7 +225,9 @@ async def _get_shared_attributes(session, company_ids: list[str]) -> dict:
     """,
         ids=company_ids,
     )
-    async for record in result:
+    # Eagerly consume all records
+    address_records = [record async for record in result]
+    for record in address_records:
         if record["address"]:
             shared["addresses"].append(
                 {
@@ -240,7 +246,9 @@ async def _get_shared_attributes(session, company_ids: list[str]) -> dict:
     """,
         ids=company_ids,
     )
-    async for record in result:
+    # Eagerly consume all records
+    phone_records = [record async for record in result]
+    for record in phone_records:
         if record["phone"]:
             shared["phones"].append(
                 {
@@ -259,7 +267,9 @@ async def _get_shared_attributes(session, company_ids: list[str]) -> dict:
     """,
         ids=company_ids,
     )
-    async for record in result:
+    # Eagerly consume all records
+    director_records = [record async for record in result]
+    for record in director_records:
         shared["directors"].append(
             {
                 "director_id": record["director"],

@@ -12,6 +12,7 @@ import {
   ingestEGPTenders,
   ingestEGPContracts,
   triggerRecompute,
+  getRecomputeStatus,
 } from "@/lib/api";
 import type { RecomputeResponse } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -119,15 +120,43 @@ export default function DataSourcesPage() {
 
   const handleRecompute = async () => {
     setRecomputing(true);
-    addLog("info", "Recomputing graph, communities, and risk scores...");
+    addLog("info", "Starting recomputation (this may take a moment)...");
     try {
-      const result = await triggerRecompute();
-      setLastStats(result.stats);
-      addLog(
-        "success",
-        `Recomputation complete — ${result.stats.tenders} tenders, ${result.stats.nodes} nodes, ${result.stats.edges} edges, ${result.stats.communities} communities`
-      );
-      invalidateAll();
+      // Trigger the recompute job
+      const { job_id } = await triggerRecompute();
+      addLog("info", `Job ${job_id.slice(0, 8)}... queued, waiting for completion...`);
+
+      // Poll for job completion (max 60 attempts, 2 second delay = ~2 minutes)
+      let attempts = 0;
+      const maxAttempts = 60;
+      const pollDelay = 2000;
+
+      while (attempts < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, pollDelay));
+        const status = await getRecomputeStatus(job_id);
+        attempts++;
+
+        if (status.status === "done" && status.stats) {
+          setLastStats(status.stats);
+          addLog(
+            "success",
+            `Recomputation complete — ${status.stats.tenders} tenders, ${status.stats.nodes} nodes, ${status.stats.edges} edges, ${status.stats.communities} communities`
+          );
+          invalidateAll();
+          return;
+        }
+
+        if (status.status === "failed") {
+          throw new Error(status.error || "Recomputation failed");
+        }
+
+        // Still running, continue polling
+        if (attempts % 5 === 0) {
+          addLog("info", `Still processing... (${attempts * 2}s elapsed)`);
+        }
+      }
+
+      throw new Error("Recomputation timed out after 2 minutes");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       addLog("error", `Recomputation failed: ${msg}`);
