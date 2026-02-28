@@ -16,7 +16,7 @@ services:
       retries: 5
 
   neo4j:
-    image: neo4j:5-community
+    image: neo4j:5.26.20-community
     environment:
       NEO4J_AUTH: neo4j/sentinel123
       NEO4J_PLUGINS: '["apoc", "graph-data-science"]'

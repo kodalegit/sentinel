@@ -5,7 +5,7 @@
 
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useFullGraph, useCommunities, useCommunityGraph, useGraphStats } from "@/hooks/useTenders";
 import { ShadowGraph } from "@/components/ShadowGraph";
 import { AuthGuard } from "@/components/AuthGuard";
@@ -63,7 +63,7 @@ function GraphExplorerContent() {
   const showStatsView = isLargeGraph && !forceLoadFull && viewMode === "full";
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="h-screen flex flex-col overflow-hidden">
       {/* Page header */}
       <header className="shrink-0 border-b border-border/70 bg-card/70 backdrop-blur-sm z-30">
         <div className="px-6 lg:px-10">
@@ -107,9 +107,9 @@ function GraphExplorerContent() {
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Cluster sidebar */}
-        <aside className="w-80 shrink-0 border-r border-border/60 bg-card/70 flex flex-col">
+        <aside className="w-80 shrink-0 min-h-0 border-r border-border/60 bg-card/70 flex flex-col">
           <div className="p-5 border-b border-border/60">
             <h2 className="text-[11px] font-semibold uppercase tracking-[0.25em] text-muted-foreground flex items-center gap-2">
               <Users size={14} className="text-primary" />
@@ -120,7 +120,7 @@ function GraphExplorerContent() {
             </p>
           </div>
 
-          <ScrollArea className="flex-1">
+          <ScrollArea className="flex-1 h-full">
             <div className="p-3 space-y-2">
               {clustersLoading ? (
                 <div className="flex items-center justify-center py-12">
@@ -145,7 +145,7 @@ function GraphExplorerContent() {
         </aside>
 
         {/* Graph area */}
-        <main className="flex-1 relative">
+        <main className="flex-1 min-h-0 overflow-hidden relative">
           {isLoading ? (
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="text-center">

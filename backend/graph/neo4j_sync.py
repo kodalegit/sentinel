@@ -68,7 +68,7 @@ async def sync_graph_to_neo4j(
             # Create edges
             edge_count = 0
             edge_count += await _create_director_edges(session, companies)
-            edge_count += await _create_bid_edges(session, bids)
+            edge_count += await _create_bid_edges(session, bids, tenders)
             edge_count += await _create_official_relationship_edges(session, officials)
             edge_count += await _create_shared_attribute_edges(session, companies)
             stats["edges"] = edge_count
@@ -84,7 +84,7 @@ async def sync_graph_to_neo4j(
             # For edges, we need to be more careful - only add missing ones
             edge_count = 0
             edge_count += await _upsert_director_edges(session, companies)
-            edge_count += await _upsert_bid_edges(session, bids)
+            edge_count += await _upsert_bid_edges(session, bids, tenders)
             stats["edges"] = edge_count
 
         logger.info(f"Neo4j sync complete: {stats}")
@@ -160,7 +160,7 @@ async def _create_director_nodes(session, directors: dict[str, Director]) -> int
         {
             "id": d.id,
             "name": d.name,
-            "id_number": d.id_number or "",
+            "id_number": d.national_id or "",
         }
         for d in directors.values()
     ]
@@ -229,7 +229,7 @@ async def _create_tender_nodes(
         {
             "id": t.id,
             "title": t.title,
-            "value": float(t.value) if t.value else 0.0,
+            "value": float(t.estimated_value) if getattr(t, 'estimated_value', None) else 0.0,
             "status": t.status or "",
             "procurement_method": t.procurement_method or "",
             "risk_level": tender_risks.get(t.id, "LOW"),
@@ -287,17 +287,19 @@ async def _create_director_edges(session, companies: dict[str, Company]) -> int:
     return record["count"] if record else 0
 
 
-async def _create_bid_edges(session, bids: list[Bid]) -> int:
+async def _create_bid_edges(session, bids: list[Bid], tenders: dict[str, Tender] = None) -> int:
     """Create BID_ON edges between companies and tenders."""
     if not bids:
         return 0
+        
+    tenders = tenders or {}
 
     bid_data = [
         {
             "company_id": b.company_id,
             "tender_id": b.tender_id,
             "amount": float(b.amount) if b.amount else 0.0,
-            "is_winner": b.is_winner,
+            "is_winner": (tenders.get(b.tender_id).awarded_to == b.company_id) if tenders.get(b.tender_id) else False,
         }
         for b in bids
     ]
@@ -324,12 +326,12 @@ async def _create_official_relationship_edges(
     """Create relationship edges between officials and directors."""
     edges = []
     for official in officials.values():
-        for rel in official.relationships:
+        for director_id, rel_type in official.related_persons.items():
             edges.append(
                 {
                     "official_id": official.id,
-                    "director_id": rel.director_id,
-                    "relationship_type": rel.relationship_type,
+                    "director_id": director_id,
+                    "relationship_type": getattr(rel_type, "value", str(rel_type)),
                 }
             )
 
@@ -536,7 +538,7 @@ async def _upsert_director_nodes(session, directors: dict[str, Director]) -> int
         {
             "id": d.id,
             "name": d.name,
-            "id_number": d.id_number or "",
+            "id_number": d.national_id or "",
         }
         for d in directors.values()
     ]
@@ -650,17 +652,19 @@ async def _upsert_director_edges(session, companies: dict[str, Company]) -> int:
     return record["count"] if record else 0
 
 
-async def _upsert_bid_edges(session, bids: list[Bid]) -> int:
+async def _upsert_bid_edges(session, bids: list[Bid], tenders: dict[str, Tender] = None) -> int:
     """Upsert BID_ON edges using MERGE (incremental sync)."""
     if not bids:
         return 0
+        
+    tenders = tenders or {}
 
     bid_data = [
         {
             "company_id": b.company_id,
             "tender_id": b.tender_id,
             "amount": float(b.amount) if b.amount else 0.0,
-            "is_winner": b.is_winner,
+            "is_winner": (tenders.get(b.tender_id).awarded_to == b.company_id) if tenders.get(b.tender_id) else False,
         }
         for b in bids
     ]
