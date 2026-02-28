@@ -229,9 +229,12 @@ Without an LLM key, the system falls back to structured template explanations.
 - [x] **Neo4j Hybrid Architecture** (GDS algorithms, PostgreSQL sync, graceful fallback)
 - [x] **Graph Performance Optimization** (O(n) edge detection, pagination, large graph handling)
 
+- [x] **Investigation Workflow Hardening** (case assignment, supervisor dashboard, case timeline)
+- [x] **System Robustness** (Async job tracking, Pytest core logic suite, JWT guards)
+
 **Upcoming (Week 6):**
 
-- [ ] Investigation workflow hardening (case assignment, supervisor dashboard, case timeline)
+- [ ] LLM Agentic Analysis (Case Summaries, Evidence Q&A)
 - [ ] CSV/PDF ingestion for additional data sources
 
 ---

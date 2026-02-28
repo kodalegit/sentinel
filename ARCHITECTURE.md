@@ -225,20 +225,25 @@ The original design used Redis + ARQ worker for async recomputation after data i
 
 1. **Ingestion endpoints** (`/api/ingest/ppip/sync`, `/api/ingest/egp/tenders`, `/api/ingest/egp/contracts`) persist data to PostgreSQL and return immediately.
 2. **User triggers recomputation** via the Data Sources page (`/sources`) by clicking "Recompute Analysis".
-3. **POST /api/recompute** calls `recompute_app_state()` which:
+3. **POST /api/recompute** returns `202 Accepted` immediately with a `job_id` and fires a background task which:
    - Reloads all data from PostgreSQL
    - Rebuilds the procurement graph
    - Detects communities
    - Computes risk scores
+   - Syncs the updated graph state to Neo4j
    - Updates the in-memory `AppState` singleton
-   - Returns recomputation stats
+4. **Polling endpoints**: Clients poll `GET /api/recompute/status/{job_id}` for completion.
 
 **Rationale:**
 
 - **Batching**: Users can ingest multiple datasets before recomputing, avoiding expensive analysis on every small ingestion.
 - **Control**: Users decide when recomputation runs (e.g., after business hours).
-- **Simplicity**: Removes Redis + ARQ worker complexity from the architecture.
+- **Non-blocking UX**: Recomputation runs as an async background job with status polling, preventing HTTP timeouts on large datasets.
 - **Transparency**: Activity log shows recomputation history and stats.
+
+### Testing Strategy
+
+- **Core Logic Unit Tests**: `tests/test_risk_engine.py` and `tests/test_ml_features.py` isolate the critical path logic (risk rules, ML feature extraction). They use deterministic Pydantic fixtures and NetworkX graphs to verify calculations with zero database or network dependencies.
 
 ### Kenya-Specific Schema Evolution
 
