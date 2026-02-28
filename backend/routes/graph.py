@@ -1,7 +1,9 @@
 """Graph exploration routes."""
 
+import networkx as nx
 from fastapi import APIRouter, HTTPException, Query
 
+from config import settings
 from models import GraphData, GraphNode, GraphEdge
 from state import State
 from graph.builder import (
@@ -12,6 +14,13 @@ from graph.communities import (
     get_cluster_subgraph,
     find_shortest_path,
 )
+from graph.neo4j_communities import (
+    find_shortest_path_neo4j,
+    get_entity_neighborhood_neo4j,
+    get_cluster_subgraph_neo4j,
+)
+from graph.neo4j_driver import check_neo4j_health
+from graph.neo4j_sync import get_graph_stats_from_neo4j
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
 
@@ -20,31 +29,60 @@ MAX_GRAPH_NODES = 500
 MAX_GRAPH_EDGES = 2000
 
 
+async def _neo4j_or_networkx(neo4j_coro, networkx_fn, *args, **kwargs):
+    """Try Neo4j first; fall back to the NetworkX function on failure."""
+    if settings.neo4j_enabled:
+        try:
+            health = await check_neo4j_health()
+            if health["status"] == "healthy":
+                result = await neo4j_coro
+                if result is not None:
+                    return result
+        except Exception:
+            pass
+    return networkx_fn(*args, **kwargs)
+
+
 @router.get("/stats")
-def get_graph_stats(state: State):
-    """Get graph statistics without loading full graph data."""
+async def get_graph_stats(state: State):
+    """Get graph statistics. Uses Neo4j counts when available, falls back to NetworkX."""
     G = state.graph
 
-    # Count nodes by type
-    node_types = {}
+    # Count edges by relationship from NetworkX (always available, used for type breakdowns)
+    node_types: dict[str, int] = {}
     for _, attrs in G.nodes(data=True):
         ntype = attrs.get("type", "UNKNOWN")
         node_types[ntype] = node_types.get(ntype, 0) + 1
 
-    # Count edges by relationship
-    edge_types = {}
+    edge_types: dict[str, int] = {}
     for _, _, attrs in G.edges(data=True):
         etype = attrs.get("relationship", "UNKNOWN")
         edge_types[etype] = edge_types.get(etype, 0) + 1
 
+    total_nodes = G.number_of_nodes()
+    total_edges = G.number_of_edges()
+
+    # Neo4j-first for total counts — GDS graph may include indexes/projections not in NetworkX
+    neo4j_available = False
+    if settings.neo4j_enabled:
+        try:
+            health = await check_neo4j_health()
+            if health["status"] == "healthy":
+                neo4j_stats = await get_graph_stats_from_neo4j()
+                total_nodes = neo4j_stats.get("total_nodes", total_nodes)
+                total_edges = neo4j_stats.get("total_relationships", total_edges)
+                neo4j_available = True
+        except Exception:
+            pass
+
     return {
-        "total_nodes": G.number_of_nodes(),
-        "total_edges": G.number_of_edges(),
+        "total_nodes": total_nodes,
+        "total_edges": total_edges,
         "node_types": node_types,
         "edge_types": edge_types,
         "communities": len(state.communities),
-        "is_large": G.number_of_nodes() > MAX_GRAPH_NODES
-        or G.number_of_edges() > MAX_GRAPH_EDGES,
+        "is_large": total_nodes > MAX_GRAPH_NODES or total_edges > MAX_GRAPH_EDGES,
+        "source": "neo4j" if neo4j_available else "networkx",
     }
 
 
@@ -71,8 +109,6 @@ def get_full_graph(
 
     # Otherwise, return a limited subset
     # Prioritize high-risk tenders and their connected entities
-    import networkx as nx
-
     selected_nodes = set()
 
     # First, add high-risk tender nodes
@@ -153,7 +189,7 @@ def get_communities(
 
 
 @router.get("/communities/{cluster_id}", response_model=GraphData)
-def get_community_graph(
+async def get_community_graph(
     cluster_id: str,
     state: State,
     include_tenders: bool = Query(True),
@@ -164,6 +200,23 @@ def get_community_graph(
     if not cluster:
         raise HTTPException(status_code=404, detail="Cluster not found")
 
+    # Neo4j-first: richer multi-hop sub-graph from the graph DB
+    if settings.neo4j_enabled:
+        try:
+            health = await check_neo4j_health()
+            if health["status"] == "healthy":
+                neo4j_result = await get_cluster_subgraph_neo4j(
+                    cluster.company_ids, include_tenders, include_officials
+                )
+                if neo4j_result and neo4j_result.get("nodes"):
+                    return GraphData(
+                        nodes=[GraphNode(**n) for n in neo4j_result["nodes"]],
+                        edges=[GraphEdge(**e) for e in neo4j_result["edges"]],
+                    )
+        except Exception:
+            pass  # Fall through to NetworkX
+
+    # NetworkX fallback
     subgraph = get_cluster_subgraph(
         state.graph, cluster.company_ids, include_tenders, include_officials
     )
@@ -171,12 +224,24 @@ def get_community_graph(
 
 
 @router.get("/path")
-def get_path(
+async def get_path(
     state: State,
     source: str = Query(..., description="Source entity ID"),
     target: str = Query(..., description="Target entity ID"),
 ):
     """Find shortest path between two entities in the graph."""
+    # Neo4j-first
+    if settings.neo4j_enabled:
+        try:
+            health = await check_neo4j_health()
+            if health["status"] == "healthy":
+                result = await find_shortest_path_neo4j(source, target)
+                if result:
+                    return result
+        except Exception:
+            pass
+
+    # NetworkX fallback
     result = find_shortest_path(state.graph, source, target)
     if result is None:
         raise HTTPException(status_code=404, detail="No path found between entities")
@@ -184,12 +249,27 @@ def get_path(
 
 
 @router.get("/entity/{entity_id}", response_model=GraphData)
-def get_entity_neighborhood(
+async def get_entity_neighborhood(
     entity_id: str,
     state: State,
     depth: int = Query(2, ge=1, le=3),
 ):
     """Get k-hop neighborhood around any entity."""
+    # Neo4j-first
+    if settings.neo4j_enabled:
+        try:
+            health = await check_neo4j_health()
+            if health["status"] == "healthy":
+                result = await get_entity_neighborhood_neo4j(entity_id, depth)
+                if result and result.get("nodes"):
+                    return GraphData(
+                        nodes=[GraphNode(**n) for n in result["nodes"]],
+                        edges=[GraphEdge(**e) for e in result["edges"]],
+                    )
+        except Exception:
+            pass
+
+    # NetworkX fallback
     if entity_id not in state.graph:
         raise HTTPException(status_code=404, detail="Entity not found in graph")
 

@@ -5,6 +5,7 @@ that prevents LLM hallucination.
 """
 
 from dataclasses import dataclass, asdict
+from datetime import date
 from typing import Optional
 
 import networkx as nx
@@ -66,20 +67,18 @@ def build_evidence_pack(
 
     # Key metrics
     price_deviation = 0.0
-    if tender.awarded_amount and tender.estimated_value > 0:
+    if tender.awarded_amount and tender.estimated_value and tender.estimated_value > 0:
         price_deviation = (
             (tender.awarded_amount - tender.estimated_value) / tender.estimated_value * 100
         )
 
     company_age_days = None
     if winning_company:
-        from datetime import date
         if isinstance(winning_company.registration_date, date) and isinstance(tender.deadline, date):
             company_age_days = (tender.deadline - winning_company.registration_date).days
 
     timeline_days = None
     if isinstance(tender.published_date, date) and isinstance(tender.deadline, date):
-        from datetime import date
         timeline_days = (tender.deadline - tender.published_date).days
 
     bid_amounts = [b.amount for b in bids]
@@ -97,19 +96,22 @@ def build_evidence_pack(
     }
 
     # Graph paths (connections between winner and officials)
+    # Uses NetworkX graph that is always available in AppState.
+    # The /api/graph/path endpoint serves real-time Neo4j paths;
+    # here we pre-compute the path once for LLM context.
     graph_paths = []
     if tender.awarded_to and tender.procurement_officer_id:
         if tender.awarded_to in graph and tender.procurement_officer_id in graph:
             try:
                 path = nx.shortest_path(graph, tender.awarded_to, tender.procurement_officer_id)
-                path_details = []
-                for nid in path:
-                    attrs = graph.nodes.get(nid, {})
-                    path_details.append({
+                path_details = [
+                    {
                         "id": nid,
-                        "type": attrs.get("type", "UNKNOWN"),
-                        "label": attrs.get("label", nid),
-                    })
+                        "type": graph.nodes.get(nid, {}).get("type", "UNKNOWN"),
+                        "label": graph.nodes.get(nid, {}).get("label", nid),
+                    }
+                    for nid in path
+                ]
                 graph_paths.append({
                     "from": path_details[0]["label"],
                     "to": path_details[-1]["label"],
@@ -132,3 +134,53 @@ def build_evidence_pack(
         graph_paths=graph_paths,
         recommendations=recommendations,
     )
+
+
+async def build_evidence_pack_async(
+    tender: Tender,
+    risk: RiskScore,
+    bids: list[Bid],
+    companies: dict[str, Company],
+    graph: nx.Graph,
+) -> EvidencePack:
+    """
+    Build an evidence pack with Neo4j-first path resolution.
+    Falls back to the sync NetworkX version on failure.
+
+    Use this variant in async routes (e.g. /explain) so the conflict-of-interest
+    path uses Neo4j's index-free adjacency instead of an in-memory BFS.
+    """
+    from config import settings
+    from graph.neo4j_driver import check_neo4j_health
+    from graph.neo4j_communities import find_shortest_path_neo4j
+
+    # Start with the synchronous base pack (no graph paths yet)
+    pack = build_evidence_pack(tender, risk, bids, companies, graph)
+
+    # Attempt to upgrade the graph paths using Neo4j
+    if (
+        settings.neo4j_enabled
+        and tender.awarded_to
+        and tender.procurement_officer_id
+        and not pack.graph_paths  # Only hit Neo4j if NetworkX found nothing
+    ):
+        try:
+            health = await check_neo4j_health()
+            if health["status"] == "healthy":
+                path_result = await find_shortest_path_neo4j(
+                    tender.awarded_to, tender.procurement_officer_id
+                )
+                if path_result and path_result.get("nodes"):
+                    nodes = path_result["nodes"]
+                    pack.graph_paths = [
+                        {
+                            "from": nodes[0]["label"],
+                            "to": nodes[-1]["label"],
+                            "via": [n["label"] for n in nodes[1:-1]],
+                            "length": path_result["length"],
+                        }
+                    ]
+        except Exception:
+            pass  # Keep the NetworkX result (which may be empty)
+
+    return pack

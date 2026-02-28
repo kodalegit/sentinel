@@ -2,18 +2,38 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
-from models import GraphData
+from config import settings
+from models import GraphData, GraphNode, GraphEdge
 from state import State
 from graph.builder import get_tender_subgraph, graph_to_frontend_format
+from graph.neo4j_communities import get_entity_neighborhood_neo4j
+from graph.neo4j_driver import check_neo4j_health
 
 router = APIRouter(prefix="/api", tags=["tenders"])
 
 
 @router.get("/tenders/{tender_id}/graph", response_model=GraphData)
-def get_tender_graph(tender_id: str, state: State, depth: int = Query(2, ge=1, le=3)):
+async def get_tender_graph(
+    tender_id: str, state: State, depth: int = Query(2, ge=1, le=3)
+):
     """Get subgraph of entities connected to a specific tender."""
     if tender_id not in state.tenders:
         raise HTTPException(status_code=404, detail="Tender not found")
 
+    # Neo4j-first: index-free adjacency is ideal for k-hop tender subgraphs
+    if settings.neo4j_enabled:
+        try:
+            health = await check_neo4j_health()
+            if health["status"] == "healthy":
+                result = await get_entity_neighborhood_neo4j(tender_id, depth)
+                if result and result.get("nodes"):
+                    return GraphData(
+                        nodes=[GraphNode(**n) for n in result["nodes"]],
+                        edges=[GraphEdge(**e) for e in result["edges"]],
+                    )
+        except Exception:
+            pass  # Fall through to NetworkX
+
+    # NetworkX fallback
     subgraph = get_tender_subgraph(state.graph, tender_id, depth=depth)
     return graph_to_frontend_format(subgraph)

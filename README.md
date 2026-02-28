@@ -30,21 +30,24 @@ Sentinel transforms opaque tender data into actionable intelligence through:
 │                      Backend (FastAPI)                           │
 │  ┌─────────┐  ┌──────────┐  ┌──────┐  ┌─────┐  ┌──────────┐  │
 │  │ Routes  │  │ Risk     │  │ Graph│  │ LLM │  │ Cases    │  │
-│  │ (~20)   │  │ Engine   │  │      │  │     │  │ CRUD     │  │
+│  │ (~25)   │  │ Engine   │  │      │  │     │  │ CRUD     │  │
 │  └─────────┘  └──────────┘  └──────┘  └─────┘  └──────────┘  │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │ AppState (typed singleton: tenders, graph, risks)        │  │
 │  └──────────────────────────────────────────────────────────┘  │
 └────────────────────────────┬────────────────────────────────────┘
                              │
-┌────────────────────────────┴────────────────────────────────────┐
-│                    PostgreSQL 16                                 │
-│  ┌────────────────────────────────────────────────────────┐   │
-│  │ Core: Tenders, Bids, Companies, Directors, Officials    │   │
-│  │ Risk: Risk Assessments (versioned)                        │   │
-│  │ Cases: Cases, Notes, Events, Evidence Links, Notifications │   │
-│  └────────────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────────────┘
+         ┌───────────────────┴───────────────────┐
+         │                                       │
+         ▼                                       ▼
+┌─────────────────────────────┐   ┌─────────────────────────────┐
+│       PostgreSQL 16           │   │       Neo4j 5               │
+│  (Source of Truth)            │   │  (Graph Analytics)          │
+├─────────────────────────────┤   ├─────────────────────────────┤
+│ Tenders, Companies, Bids     │   │ GDS: Louvain, PageRank     │
+│ Cases, Users, Audit Log     │   │ APOC: Path finding         │
+│ Risk Assessments             │   │ Community detection        │
+└─────────────────────────────┘   └─────────────────────────────┘
 ```
 
 ---
@@ -97,7 +100,7 @@ sentinel/
 | Frontend   | Next.js 16, TypeScript, TailwindCSS v4, shadcn/ui, React Flow        |
 | Backend    | FastAPI, Python 3.12, Pydantic Settings                              |
 | Database   | PostgreSQL 16, async SQLAlchemy, Alembic                             |
-| Graph      | NetworkX, Louvain community detection                                |
+| Graph      | Neo4j 5 (GDS + APOC) with NetworkX fallback                          |
 | ML         | scikit-learn (Isolation Forest)                                      |
 | LLM        | LangChain v1, LangGraph, provider-agnostic (OpenAI/Anthropic/Ollama) |
 | Deployment | Docker Compose, Railway                                              |
@@ -124,6 +127,7 @@ docker compose up
 # Frontend: http://localhost:3000
 # Backend API: http://localhost:8000
 # API Docs: http://localhost:8000/docs
+# Neo4j Browser: http://localhost:7474
 ```
 
 ### Local Development
@@ -180,10 +184,12 @@ Without an LLM key, the system falls back to structured template explanations.
 
 ### Graph Analytics
 
+- **Hybrid architecture**: PostgreSQL (source of truth) + Neo4j (analytics)
 - **Shadow graph**: Companies, directors, officials, bids as nodes
-- **Community detection**: Louvain algorithm reveals bidding rings
-- **Path finding**: Shortest paths between any two entities
+- **Community detection**: Neo4j GDS Louvain with NetworkX fallback
+- **Path finding**: Neo4j shortest paths with sub-millisecond traversals
 - **Cluster-first UX**: Ranked suspicious communities, progressive disclosure
+- **Performance**: Hash-based edge detection (O(n) vs O(n²)), edge limits per entity
 
 ### LLM Intelligence
 
@@ -206,13 +212,13 @@ Without an LLM key, the system falls back to structured template explanations.
 
 ---
 
-## Current Status (Week 4)
+## Current Status (Week 5)
 
 **Complete:**
 
 - [x] PostgreSQL backend with async SQLAlchemy + Alembic migrations
 - [x] Hybrid risk engine (rules + Isolation Forest)
-- [x] Graph analytics (NetworkX + Louvain)
+- [x] Graph analytics (Neo4j + NetworkX fallback)
 - [x] LLM intelligence (LangGraph agent, evidence packs)
 - [x] Case management (5-state workflow, typed notes, 7 API endpoints)
 - [x] UI overhaul (shadcn/ui components, dashboard, graph explorer, cases page)
@@ -220,10 +226,15 @@ Without an LLM key, the system falls back to structured template explanations.
 - [x] Backend refactor (Pydantic settings, modular routes, typed AppState)
 - [x] **Authentication & User Management** (JWT auth, role-based access, admin user management)
 - [x] **PPIP/e-GP Data Ingestion** (connectors, provenance, multi-signal detection)
+- [x] **Neo4j Hybrid Architecture** (GDS algorithms, PostgreSQL sync, graceful fallback)
+- [x] **Graph Performance Optimization** (O(n) edge detection, pagination, large graph handling)
 
-**Upcoming (Week 5):**
+- [x] **Investigation Workflow Hardening** (case assignment, supervisor dashboard, case timeline)
+- [x] **System Robustness** (Async job tracking, Pytest core logic suite, JWT guards)
 
-- [ ] Investigation workflow hardening (case assignment, supervisor dashboard, case timeline)
+**Upcoming (Week 6):**
+
+- [ ] LLM Agentic Analysis (Case Summaries, Evidence Q&A)
 - [ ] CSV/PDF ingestion for additional data sources
 
 ---

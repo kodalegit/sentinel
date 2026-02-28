@@ -11,7 +11,7 @@ from models import (
     TenderDetail,
 )
 from state import State
-from intelligence.evidence import build_evidence_pack
+from intelligence.evidence import build_evidence_pack, build_evidence_pack_async
 from intelligence.agent import get_agent
 
 router = APIRouter(prefix="/api", tags=["tenders"])
@@ -77,7 +77,7 @@ def get_tender_detail(tender_id: str, state: State):
 
 
 @router.get("/tenders/{tender_id}/evidence")
-def get_evidence_pack(tender_id: str, state: State):
+async def get_evidence_pack(tender_id: str, state: State):
     """Get structured evidence pack for a tender."""
     if tender_id not in state.tenders:
         raise HTTPException(status_code=404, detail="Tender not found")
@@ -88,7 +88,7 @@ def get_evidence_pack(tender_id: str, state: State):
     )
     tender_bids = state.bids_by_tender.get(tender_id, [])
 
-    pack = build_evidence_pack(tender, risk, tender_bids, state.companies, state.graph)
+    pack = await build_evidence_pack_async(tender, risk, tender_bids, state.companies, state.graph)
     return pack.to_dict()
 
 
@@ -104,21 +104,9 @@ async def explain_tender_risk(tender_id: str, state: State):
     )
     tender_bids = state.bids_by_tender.get(tender_id, [])
 
-    pack = build_evidence_pack(tender, risk, tender_bids, state.companies, state.graph)
+    # Use async variant so Neo4j paths are resolved before LLM prompt is built
+    pack = await build_evidence_pack_async(tender, risk, tender_bids, state.companies, state.graph)
     agent = get_agent()
     result = await agent.explain(pack)
     return result
 
-
-@router.get("/companies/{company_id}")
-def get_company(company_id: str, state: State):
-    """Get company details."""
-    if company_id not in state.companies:
-        raise HTTPException(status_code=404, detail="Company not found")
-
-    company = state.companies[company_id]
-    company_directors = [
-        state.directors[did] for did in company.director_ids if did in state.directors
-    ]
-
-    return {"company": company, "directors": company_directors}

@@ -159,6 +159,19 @@ async def get_case_stats(
     return await repo.get_case_stats(db)
 
 
+# --- M3: Supervisor Workload ---
+
+
+@router.get("/cases/workload", response_model=list[WorkloadItem])
+async def get_workload(
+    current_user: SupervisorOrAdmin,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get case workload per assignee. Supervisors only."""
+    workload = await repo.get_supervisor_workload(db)
+    return [WorkloadItem(**w) for w in workload]
+
+
 @router.get("/cases/{case_id}", response_model=CaseWithTender)
 async def get_case_detail(
     case_id: str,
@@ -742,19 +755,6 @@ async def record_decision(
         risk_score=risk.overall,
         risk_category=risk.category,
     )
-
-
-# --- M3: Supervisor Workload ---
-
-
-@router.get("/cases/workload", response_model=list[WorkloadItem])
-async def get_workload(
-    current_user: SupervisorOrAdmin,
-    db: AsyncSession = Depends(get_db),
-):
-    """Get case workload per assignee. Supervisors only."""
-    workload = await repo.get_supervisor_workload(db)
-    return [WorkloadItem(**w) for w in workload]
 
 
 # --- M3: Notifications ---
