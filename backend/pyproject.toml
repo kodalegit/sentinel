@@ -25,4 +25,5 @@ dependencies = [
     "passlib[bcrypt]>=1.7.4",
     "bcrypt>=4.0.0,<5.0.0",
     "neo4j>=5.0.0",
+    "pytest>=9.0.2",
 ]
