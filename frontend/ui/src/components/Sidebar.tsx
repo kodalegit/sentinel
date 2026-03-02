@@ -18,6 +18,8 @@ import {
   Users,
   ChevronDown,
   Bell,
+  BookOpen,
+  Settings,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useState } from "react";
@@ -179,21 +181,49 @@ export function Sidebar() {
           </div>
         )}
 
-        {/* Admin: User Management link */}
+        {/* Admin links */}
         {isAdmin && (
-          <Link
-            href="/admin/users"
-            className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
-              pathname.startsWith("/admin/users")
-                ? "bg-sidebar-accent text-sidebar-foreground"
-                : "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
-            }`}
-          >
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg">
-              <Users size={18} strokeWidth={1.5} />
-            </span>
-            <span>User Management</span>
-          </Link>
+          <>
+            <Link
+              href="/admin/users"
+              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
+                pathname.startsWith("/admin/users")
+                  ? "bg-sidebar-accent text-sidebar-foreground"
+                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
+              }`}
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg">
+                <Users size={18} strokeWidth={1.5} />
+              </span>
+              <span>User Management</span>
+            </Link>
+            <Link
+              href="/admin/knowledge"
+              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
+                pathname.startsWith("/admin/knowledge")
+                  ? "bg-sidebar-accent text-sidebar-foreground"
+                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
+              }`}
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg">
+                <BookOpen size={18} strokeWidth={1.5} />
+              </span>
+              <span>Knowledge Base</span>
+            </Link>
+            <Link
+              href="/admin/settings"
+              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
+                pathname.startsWith("/admin/settings")
+                  ? "bg-sidebar-accent text-sidebar-foreground"
+                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
+              }`}
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg">
+                <Settings size={18} strokeWidth={1.5} />
+              </span>
+              <span>Agent Settings</span>
+            </Link>
+          </>
         )}
 
         {/* Theme toggle */}

@@ -17,6 +17,7 @@ import {
   recordDecision,
   getAssignableUsers,
 } from "@/lib/api";
+import { CaseChat } from "@/components/CaseChat";
 import { AuthGuard } from "@/components/AuthGuard";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -402,6 +403,11 @@ function CaseDetailContent() {
                   ))}
                 </div>
               )}
+            </section>
+
+            {/* AI Assistant Chat */}
+            <section className="rounded-2xl border border-border/70 bg-card overflow-hidden">
+              <CaseChat caseId={caseId} />
             </section>
           </div>
 
