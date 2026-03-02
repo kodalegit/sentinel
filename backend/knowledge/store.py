@@ -1,10 +1,11 @@
 """Knowledge store for vector similarity search using pgvector."""
 
+import json
 import uuid
 from dataclasses import dataclass
 from typing import Optional
 
-from sqlalchemy import select, func, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import KnowledgeDocumentDB, KnowledgeChunkDB
@@ -57,23 +58,26 @@ class KnowledgeStore:
         embeddings = await embed_texts(texts)
 
         for chunk, embedding in zip(chunks, embeddings):
+            # Convert embedding to PostgreSQL array literal format
             embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+            chunk_id = uuid.uuid4()
 
+            # Use proper SQL with explicit cast - avoid named parameter issues with ::vector cast
             await self.db.execute(
                 text(
                     """
-                    INSERT INTO knowledge_chunks 
+                    INSERT INTO knowledge_chunks
                     (id, document_id, content, chunk_index, page_number, chunk_metadata, embedding)
-                    VALUES (:id, :document_id, :content, :chunk_index, :page_number, :metadata, :embedding::vector)
+                    VALUES (:id, :document_id, :content, :chunk_index, :page_number, :metadata, CAST(:embedding AS vector))
                     """
                 ),
                 {
-                    "id": uuid.uuid4(),
+                    "id": chunk_id,
                     "document_id": document_id,
                     "content": chunk.content,
                     "chunk_index": chunk.chunk_index,
                     "page_number": chunk.page_number,
-                    "metadata": chunk.metadata,
+                    "metadata": json.dumps(chunk.metadata or {}),
                     "embedding": embedding_str,
                 },
             )
@@ -114,7 +118,7 @@ class KnowledgeStore:
         result = await self.db.execute(
             text(
                 f"""
-                SELECT 
+                SELECT
                     c.id as chunk_id,
                     c.document_id,
                     d.title as document_title,
@@ -122,12 +126,12 @@ class KnowledgeStore:
                     d.source_url,
                     c.content,
                     c.page_number,
-                    1 - (c.embedding <=> :embedding::vector) as score
+                    1 - (c.embedding <=> CAST(:embedding AS vector)) as score
                 FROM knowledge_chunks c
                 JOIN knowledge_documents d ON c.document_id = d.id
                 WHERE c.embedding IS NOT NULL
                 {category_filter}
-                ORDER BY c.embedding <=> :embedding::vector
+                ORDER BY c.embedding <=> CAST(:embedding AS vector)
                 LIMIT :k
                 """
             ),

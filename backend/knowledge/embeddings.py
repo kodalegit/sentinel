@@ -34,9 +34,20 @@ def get_embedding_model(
         return _embedding_model
 
     if provider == "openai":
-        _embedding_model = OpenAIEmbeddings(model=model)
+        if not settings.openai_api_key:
+            raise RuntimeError(
+                "OpenAI embeddings require OPENAI_API_KEY (or openai_api_key in settings)."
+            )
+
+        kwargs: dict[str, str] = {
+            "model": model,
+            "api_key": settings.openai_api_key,
+        }
+        if settings.llm_base_url:
+            kwargs["base_url"] = settings.llm_base_url
+        _embedding_model = OpenAIEmbeddings(**kwargs)
     else:
-        _embedding_model = OpenAIEmbeddings(model=model)
+        raise ValueError(f"Unsupported embedding provider: {provider}")
 
     return _embedding_model
 
