@@ -43,12 +43,15 @@ from routes.ingest import router as ingest_router
 from routes.auth import router as auth_router
 from routes.users import router as users_router
 from routes.companies import router as companies_router
+from routes.intelligence import router as intelligence_router
+from routes.settings import router as settings_router
 from auth.dependencies import SupervisorOrAdmin, CurrentUser
 
 
 # ---------------------------------------------------------------------------
 # Recompute job tracking (in-memory; survives until next restart)
 # ---------------------------------------------------------------------------
+
 
 class JobStatus(str, Enum):
     PENDING = "pending"
@@ -230,8 +233,7 @@ async def lifespan(app: FastAPI):
     DEFAULT_SECRET = "sentinel-dev-secret-key-change-in-production"
     if settings.jwt_secret_key == DEFAULT_SECRET:
         logger.warning(
-            "\n" + "=" * 70 +
-            "\nWARNING: Using default JWT secret key. "
+            "\n" + "=" * 70 + "\nWARNING: Using default JWT secret key. "
             "Set JWT_SECRET_KEY in production!\n" + "=" * 70
         )
 
@@ -280,6 +282,8 @@ app.include_router(ingest_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(companies_router)
+app.include_router(intelligence_router)
+app.include_router(settings_router)
 
 
 async def _run_recompute_job(job_id: str, app: FastAPI):
@@ -339,6 +343,7 @@ async def recompute_status(
     job = _recompute_jobs.get(job_id)
     if not job:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
@@ -348,10 +353,7 @@ async def list_recompute_jobs(
     current_user: SupervisorOrAdmin,
 ):
     """List recent recompute jobs (most recent first, last 20)."""
-    jobs = [
-        {"job_id": jid, **jdata}
-        for jid, jdata in _recompute_jobs.items()
-    ]
+    jobs = [{"job_id": jid, **jdata} for jid, jdata in _recompute_jobs.items()]
     # Sort by queued_at descending
     jobs.sort(key=lambda j: j.get("queued_at", ""), reverse=True)
     return {"jobs": jobs[:20]}
@@ -380,11 +382,19 @@ async def health_check():
 
     # LLM (check if any LLM API key env-var is set, without actually calling the API)
     import os
+
     llm_configured = any(
         os.environ.get(k)
-        for k in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]
+        for k in [
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+        ]
     )
-    llm_status = "configured" if llm_configured else "no_api_key (template fallback active)"
+    llm_status = (
+        "configured" if llm_configured else "no_api_key (template fallback active)"
+    )
 
     overall = "healthy" if pg_status == "healthy" else "degraded"
 

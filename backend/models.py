@@ -465,3 +465,131 @@ class DashboardStats(BaseModel):
     pending_review: int
     total_value: float  # KES
     flagged_today: int
+
+
+# =============================================================================
+# M5: Knowledge Base, Chat, and Agent Settings
+# =============================================================================
+
+
+class KnowledgeDocumentCategory(str, Enum):
+    LAW = "LAW"
+    CASE_LAW = "CASE_LAW"
+    REGULATION = "REGULATION"
+    GUIDELINE = "GUIDELINE"
+
+
+class KnowledgeDocument(BaseModel):
+    id: str
+    title: str
+    description: Optional[str] = None
+    category: KnowledgeDocumentCategory
+    source_url: Optional[str] = None
+    file_name: Optional[str] = None
+    chunk_count: int = 0
+    uploaded_by: Optional[str] = None
+    created_at: datetime
+
+
+class KnowledgeDocumentCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    category: KnowledgeDocumentCategory
+    source_url: Optional[str] = None
+
+
+class KnowledgeChunk(BaseModel):
+    id: str
+    document_id: str
+    content: str
+    chunk_index: int
+    page_number: Optional[int] = None
+    chunk_metadata: Optional[dict] = None
+
+
+class KnowledgeStats(BaseModel):
+    total_documents: int
+    total_chunks: int
+    by_category: dict[str, int]
+
+
+class ChatThread(BaseModel):
+    id: str
+    case_id: str
+    user_id: str
+    title: Optional[str] = None
+    message_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatMessage(BaseModel):
+    id: str
+    thread_id: str
+    role: str
+    content: str
+    citations: Optional[list[dict]] = None
+    created_at: datetime
+
+
+class ChatRequest(BaseModel):
+    message: str
+    thread_id: Optional[str] = None
+
+
+class ChatStreamEvent(BaseModel):
+    type: str  # "token", "citation", "done", "error"
+    content: Optional[str] = None
+    citations: Optional[list[dict]] = None
+    thread_id: Optional[str] = None
+    message_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class Citation(BaseModel):
+    marker: int
+    doc_id: str
+    title: str
+    source_url: Optional[str] = None
+    category: str
+    excerpt: str
+    page: Optional[int] = None
+    chunk_id: str
+
+
+class CaseSummaryResponse(BaseModel):
+    summary: str
+    citations: list[Citation] = Field(default_factory=list)
+    key_findings: list[str] = Field(default_factory=list)
+
+
+class NextStepsResponse(BaseModel):
+    suggestions: list[str] = Field(default_factory=list)
+    citations: list[Citation] = Field(default_factory=list)
+
+
+class AgentSetting(BaseModel):
+    key: str
+    value: str
+    updated_by: Optional[str] = None
+    updated_at: datetime
+
+
+class AgentSettingsUpdate(BaseModel):
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_api_key: Optional[str] = None
+    llm_base_url: Optional[str] = None
+    llm_temperature: Optional[float] = None
+    embedding_provider: Optional[str] = None
+    embedding_model: Optional[str] = None
+
+
+class AgentSettingsResponse(BaseModel):
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_api_key_set: bool = False
+    llm_base_url: Optional[str] = None
+    llm_temperature: Optional[float] = None
+    embedding_provider: Optional[str] = None
+    embedding_model: Optional[str] = None

@@ -646,3 +646,141 @@ class AuditLogDB(Base):
         Index("ix_audit_entity", "entity_type", "entity_id"),
         Index("ix_audit_created", "created_at"),
     )
+
+
+# =============================================================================
+# M5: Knowledge Base, Chat, and Agent Settings
+# =============================================================================
+
+
+class KnowledgeDocumentDB(Base):
+    """Stores metadata for uploaded legal documents (PPADA, case law, etc.)."""
+
+    __tablename__ = "knowledge_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    category: Mapped[str] = mapped_column(String(30), nullable=False)
+    source_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    file_name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    uploaded_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+    uploaded_by: Mapped[Optional["UserDB"]] = relationship()
+    chunks: Mapped[list["KnowledgeChunkDB"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+
+
+class KnowledgeChunkDB(Base):
+    """Chunked text from documents with vector embeddings for similarity search."""
+
+    __tablename__ = "knowledge_chunks"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_documents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    chunk_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+    document: Mapped["KnowledgeDocumentDB"] = relationship(back_populates="chunks")
+
+    __table_args__ = (Index("ix_knowledge_chunks_document", "document_id"),)
+
+
+class ChatThreadDB(Base):
+    """Conversation thread scoped to a case and user."""
+
+    __tablename__ = "chat_threads"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("cases.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+    case: Mapped["CaseDB"] = relationship()
+    user: Mapped["UserDB"] = relationship()
+    messages: Mapped[list["ChatMessageDB"]] = relationship(
+        back_populates="thread", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (Index("ix_chat_threads_case_user", "case_id", "user_id"),)
+
+
+class ChatMessageDB(Base):
+    """Individual message within a chat thread."""
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    thread_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_threads.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+    thread: Mapped["ChatThreadDB"] = relationship(back_populates="messages")
+
+    __table_args__ = (Index("ix_chat_messages_thread", "thread_id"),)
+
+
+class AgentSettingDB(Base):
+    """Key-value store for agent configuration (LLM provider, model, etc.)."""
+
+    __tablename__ = "agent_settings"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+    updated_by: Mapped[Optional["UserDB"]] = relationship()

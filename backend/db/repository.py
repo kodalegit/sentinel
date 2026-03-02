@@ -27,6 +27,11 @@ from db.models import (
     CaseEvidenceLinkDB,
     CaseNotificationDB,
     UserDB,
+    KnowledgeDocumentDB,
+    KnowledgeChunkDB,
+    ChatThreadDB,
+    ChatMessageDB,
+    AgentSettingDB,
 )
 
 
@@ -659,3 +664,257 @@ async def create_audit_log(
     db.add(log)
     await db.flush()
     return log
+
+
+# =============================================================================
+# M5: Knowledge Base
+# =============================================================================
+
+
+async def get_knowledge_documents(db: AsyncSession) -> list[KnowledgeDocumentDB]:
+    """Get all knowledge documents with chunk counts."""
+    result = await db.execute(
+        select(KnowledgeDocumentDB)
+        .options(selectinload(KnowledgeDocumentDB.uploaded_by))
+        .order_by(KnowledgeDocumentDB.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_knowledge_document(
+    db: AsyncSession, document_id: uuid.UUID
+) -> KnowledgeDocumentDB | None:
+    """Get a single knowledge document by ID."""
+    result = await db.execute(
+        select(KnowledgeDocumentDB)
+        .options(selectinload(KnowledgeDocumentDB.uploaded_by))
+        .where(KnowledgeDocumentDB.id == document_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def create_knowledge_document(
+    db: AsyncSession,
+    title: str,
+    category: str,
+    uploaded_by_id: uuid.UUID,
+    description: str | None = None,
+    source_url: str | None = None,
+    file_name: str | None = None,
+) -> KnowledgeDocumentDB:
+    """Create a new knowledge document."""
+    doc = KnowledgeDocumentDB(
+        title=title,
+        description=description,
+        category=category,
+        source_url=source_url,
+        file_name=file_name,
+        uploaded_by_id=uploaded_by_id,
+    )
+    db.add(doc)
+    await db.flush()
+    return doc
+
+
+async def delete_knowledge_document(db: AsyncSession, document_id: uuid.UUID) -> bool:
+    """Delete a knowledge document (chunks cascade delete)."""
+    doc = await db.get(KnowledgeDocumentDB, document_id)
+    if not doc:
+        return False
+    await db.delete(doc)
+    await db.flush()
+    return True
+
+
+async def get_knowledge_stats(db: AsyncSession) -> dict:
+    """Get knowledge base statistics."""
+    doc_count = await db.execute(select(func.count(KnowledgeDocumentDB.id)))
+    chunk_count = await db.execute(select(func.count(KnowledgeChunkDB.id)))
+
+    category_result = await db.execute(
+        select(
+            KnowledgeDocumentDB.category, func.count(KnowledgeDocumentDB.id)
+        ).group_by(KnowledgeDocumentDB.category)
+    )
+    by_category = {row[0]: row[1] for row in category_result.fetchall()}
+
+    return {
+        "total_documents": doc_count.scalar_one(),
+        "total_chunks": chunk_count.scalar_one(),
+        "by_category": by_category,
+    }
+
+
+async def get_document_chunks(
+    db: AsyncSession, document_id: uuid.UUID
+) -> list[KnowledgeChunkDB]:
+    """Get all chunks for a document."""
+    result = await db.execute(
+        select(KnowledgeChunkDB)
+        .where(KnowledgeChunkDB.document_id == document_id)
+        .order_by(KnowledgeChunkDB.chunk_index)
+    )
+    return list(result.scalars().all())
+
+
+# =============================================================================
+# M5: Chat Threads & Messages
+# =============================================================================
+
+
+async def get_chat_threads(
+    db: AsyncSession, case_id: uuid.UUID, user_id: uuid.UUID
+) -> list[ChatThreadDB]:
+    """Get all chat threads for a case/user pair."""
+    result = await db.execute(
+        select(ChatThreadDB)
+        .where(ChatThreadDB.case_id == case_id, ChatThreadDB.user_id == user_id)
+        .order_by(ChatThreadDB.updated_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_chat_thread(
+    db: AsyncSession, thread_id: uuid.UUID
+) -> ChatThreadDB | None:
+    """Get a single chat thread by ID."""
+    result = await db.execute(
+        select(ChatThreadDB)
+        .options(selectinload(ChatThreadDB.messages))
+        .where(ChatThreadDB.id == thread_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def create_chat_thread(
+    db: AsyncSession,
+    case_id: uuid.UUID,
+    user_id: uuid.UUID,
+    title: str | None = None,
+) -> ChatThreadDB:
+    """Create a new chat thread."""
+    thread = ChatThreadDB(
+        case_id=case_id,
+        user_id=user_id,
+        title=title,
+    )
+    db.add(thread)
+    await db.flush()
+    return thread
+
+
+async def get_thread_messages(
+    db: AsyncSession, thread_id: uuid.UUID, limit: int | None = None
+) -> list[ChatMessageDB]:
+    """Get messages for a thread, optionally limited to last N."""
+    query = (
+        select(ChatMessageDB)
+        .where(ChatMessageDB.thread_id == thread_id)
+        .order_by(ChatMessageDB.created_at.asc())
+    )
+    if limit:
+        subquery = (
+            select(ChatMessageDB.id)
+            .where(ChatMessageDB.thread_id == thread_id)
+            .order_by(ChatMessageDB.created_at.desc())
+            .limit(limit)
+        )
+        query = (
+            select(ChatMessageDB)
+            .where(ChatMessageDB.id.in_(subquery))
+            .order_by(ChatMessageDB.created_at.asc())
+        )
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
+async def add_chat_message(
+    db: AsyncSession,
+    thread_id: uuid.UUID,
+    role: str,
+    content: str,
+    citations: list[dict] | None = None,
+) -> ChatMessageDB:
+    """Add a message to a chat thread."""
+    from datetime import datetime, timezone
+
+    message = ChatMessageDB(
+        thread_id=thread_id,
+        role=role,
+        content=content,
+        citations=citations,
+    )
+    db.add(message)
+
+    thread = await db.get(ChatThreadDB, thread_id)
+    if thread:
+        thread.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    await db.flush()
+    return message
+
+
+async def get_thread_message_count(db: AsyncSession, thread_id: uuid.UUID) -> int:
+    """Get the number of messages in a thread."""
+    result = await db.execute(
+        select(func.count(ChatMessageDB.id)).where(ChatMessageDB.thread_id == thread_id)
+    )
+    return result.scalar_one()
+
+
+# =============================================================================
+# M5: Agent Settings
+# =============================================================================
+
+
+async def get_agent_settings(db: AsyncSession) -> dict[str, str]:
+    """Get all agent settings as a dictionary."""
+    result = await db.execute(select(AgentSettingDB))
+    settings = result.scalars().all()
+    return {s.key: s.value for s in settings}
+
+
+async def get_agent_setting(db: AsyncSession, key: str) -> str | None:
+    """Get a single agent setting by key."""
+    result = await db.execute(select(AgentSettingDB).where(AgentSettingDB.key == key))
+    setting = result.scalar_one_or_none()
+    return setting.value if setting else None
+
+
+async def set_agent_setting(
+    db: AsyncSession,
+    key: str,
+    value: str,
+    updated_by_id: uuid.UUID | None = None,
+) -> AgentSettingDB:
+    """Set an agent setting (upsert)."""
+    from datetime import datetime, timezone
+
+    result = await db.execute(select(AgentSettingDB).where(AgentSettingDB.key == key))
+    setting = result.scalar_one_or_none()
+
+    if setting:
+        setting.value = value
+        setting.updated_by_id = updated_by_id
+        setting.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    else:
+        setting = AgentSettingDB(
+            key=key,
+            value=value,
+            updated_by_id=updated_by_id,
+        )
+        db.add(setting)
+
+    await db.flush()
+    return setting
+
+
+async def delete_agent_setting(db: AsyncSession, key: str) -> bool:
+    """Delete an agent setting."""
+    result = await db.execute(select(AgentSettingDB).where(AgentSettingDB.key == key))
+    setting = result.scalar_one_or_none()
+    if not setting:
+        return False
+    await db.delete(setting)
+    await db.flush()
+    return True
