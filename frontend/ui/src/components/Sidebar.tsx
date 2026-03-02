@@ -22,7 +22,7 @@ import {
   Settings,
 } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { getNotificationCount, getNotifications, markNotificationRead } from "@/lib/api";
@@ -46,8 +46,15 @@ export function Sidebar() {
   const { theme, setTheme } = useTheme();
   const { user, logout, isAdmin } = useAuth();
   const router = useRouter();
+  const [mounted, setMounted] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const isDarkTheme = mounted && theme === "dark";
 
   // M3: Notification queries
   const { data: notificationCount } = useQuery({
@@ -232,9 +239,9 @@ export function Sidebar() {
           className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground transition-all duration-200"
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-lg">
-            {theme === "dark" ? <Sun size={18} strokeWidth={1.5} /> : <Moon size={18} strokeWidth={1.5} />}
+            {isDarkTheme ? <Sun size={18} strokeWidth={1.5} /> : <Moon size={18} strokeWidth={1.5} />}
           </span>
-          <span>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
+          <span>{isDarkTheme ? "Light Mode" : "Dark Mode"}</span>
         </button>
 
         {/* User info + logout */}

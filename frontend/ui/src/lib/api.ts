@@ -498,11 +498,11 @@ export function getRiskBorderColor(category: RiskCategory): string {
 // =============================================================================
 
 export async function getKnowledgeDocuments(): Promise<KnowledgeDocument[]> {
-  return fetchApi<KnowledgeDocument[]>("/knowledge/documents");
+  return fetchApi<KnowledgeDocument[]>("/api/knowledge/documents");
 }
 
 export async function getKnowledgeDocument(id: string): Promise<KnowledgeDocument> {
-  return fetchApi<KnowledgeDocument>(`/knowledge/documents/${id}`);
+  return fetchApi<KnowledgeDocument>(`/api/knowledge/documents/${id}`);
 }
 
 export async function uploadKnowledgeDocument(
@@ -519,7 +519,7 @@ export async function uploadKnowledgeDocument(
   if (description) formData.append("description", description);
   if (sourceUrl) formData.append("source_url", sourceUrl);
 
-  const response = await fetch(`${API_BASE}/knowledge/documents`, {
+  const response = await fetch(`${API_BASE}/api/knowledge/documents`, {
     method: "POST",
     headers: getAuthHeaders(),
     body: formData,
@@ -534,7 +534,7 @@ export async function uploadKnowledgeDocument(
 }
 
 export async function deleteKnowledgeDocument(id: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/knowledge/documents/${id}`, {
+  const response = await fetch(`${API_BASE}/api/knowledge/documents/${id}`, {
     method: "DELETE",
     headers: getAuthHeaders(),
   });
@@ -544,11 +544,11 @@ export async function deleteKnowledgeDocument(id: string): Promise<void> {
 }
 
 export async function getKnowledgeStats(): Promise<KnowledgeStats> {
-  return fetchApi<KnowledgeStats>("/knowledge/stats");
+  return fetchApi<KnowledgeStats>("/api/knowledge/stats");
 }
 
 export async function getDocumentChunks(documentId: string): Promise<KnowledgeChunk[]> {
-  return fetchApi<KnowledgeChunk[]>(`/knowledge/documents/${documentId}/chunks`);
+  return fetchApi<KnowledgeChunk[]>(`/api/knowledge/documents/${documentId}/chunks`);
 }
 
 // =============================================================================
@@ -556,11 +556,11 @@ export async function getDocumentChunks(documentId: string): Promise<KnowledgeCh
 // =============================================================================
 
 export async function getChatThreads(caseId: string): Promise<ChatThread[]> {
-  return fetchApi<ChatThread[]>(`/cases/${caseId}/chat/threads`);
+  return fetchApi<ChatThread[]>(`/api/cases/${caseId}/chat/threads`);
 }
 
 export async function getThreadMessages(caseId: string, threadId: string): Promise<ChatMessage[]> {
-  return fetchApi<ChatMessage[]>(`/cases/${caseId}/chat/threads/${threadId}/messages`);
+  return fetchApi<ChatMessage[]>(`/api/cases/${caseId}/chat/threads/${threadId}/messages`);
 }
 
 export async function* streamChat(
@@ -568,7 +568,7 @@ export async function* streamChat(
   message: string,
   threadId?: string
 ): AsyncGenerator<ChatStreamEvent> {
-  const response = await fetch(`${API_BASE}/cases/${caseId}/chat/stream`, {
+  const response = await fetch(`${API_BASE}/api/cases/${caseId}/chat/stream`, {
     method: "POST",
     headers: {
       ...getAuthHeaders(),
@@ -609,11 +609,11 @@ export async function* streamChat(
 }
 
 export async function generateCaseSummary(caseId: string): Promise<CaseSummaryResponse> {
-  return postApi<CaseSummaryResponse>(`/cases/${caseId}/summary`, {});
+  return postApi<CaseSummaryResponse>(`/api/cases/${caseId}/summary`, {});
 }
 
 export async function suggestNextSteps(caseId: string): Promise<NextStepsResponse> {
-  return postApi<NextStepsResponse>(`/cases/${caseId}/next-steps`, {});
+  return postApi<NextStepsResponse>(`/api/cases/${caseId}/next-steps`, {});
 }
 
 // =============================================================================
@@ -621,11 +621,11 @@ export async function suggestNextSteps(caseId: string): Promise<NextStepsRespons
 // =============================================================================
 
 export async function getAgentSettings(): Promise<AgentSettings> {
-  return fetchApi<AgentSettings>("/settings/llm");
+  return fetchApi<AgentSettings>("/api/settings/llm");
 }
 
 export async function updateAgentSettings(settings: AgentSettingsUpdate): Promise<AgentSettings> {
-  const response = await fetch(`${API_BASE}/settings/llm`, {
+  const response = await fetch(`${API_BASE}/api/settings/llm`, {
     method: "PATCH",
     headers: {
       ...getAuthHeaders(),
@@ -649,5 +649,5 @@ export async function testLLMConnection(): Promise<{
   response?: string;
   error?: string;
 }> {
-  return postApi("/settings/llm/test", {});
+  return postApi("/api/settings/llm/test", {});
 }
