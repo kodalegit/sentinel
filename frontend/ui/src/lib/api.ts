@@ -24,8 +24,6 @@ import type {
   ChatThread,
   ChatMessage,
   ChatStreamEvent,
-  CaseSummaryResponse,
-  NextStepsResponse,
   AgentSettings,
   AgentSettingsUpdate,
 } from "./types";
@@ -563,10 +561,15 @@ export async function getThreadMessages(caseId: string, threadId: string): Promi
   return fetchApi<ChatMessage[]>(`/api/cases/${caseId}/chat/threads/${threadId}/messages`);
 }
 
+export type StreamAction = "chat" | "summary" | "next_steps" | "risk_analysis";
+
 export async function* streamChat(
   caseId: string,
   message: string,
-  threadId?: string
+  options?: {
+    threadId?: string;
+    action?: StreamAction;
+  }
 ): AsyncGenerator<ChatStreamEvent> {
   const response = await fetch(`${API_BASE}/api/cases/${caseId}/chat/stream`, {
     method: "POST",
@@ -574,7 +577,11 @@ export async function* streamChat(
       ...getAuthHeaders(),
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ message, thread_id: threadId }),
+    body: JSON.stringify({
+      message,
+      thread_id: options?.threadId,
+      action: options?.action || "chat",
+    }),
   });
 
   if (!response.ok) {
@@ -606,14 +613,6 @@ export async function* streamChat(
       }
     }
   }
-}
-
-export async function generateCaseSummary(caseId: string): Promise<CaseSummaryResponse> {
-  return postApi<CaseSummaryResponse>(`/api/cases/${caseId}/summary`, {});
-}
-
-export async function suggestNextSteps(caseId: string): Promise<NextStepsResponse> {
-  return postApi<NextStepsResponse>(`/api/cases/${caseId}/next-steps`, {});
 }
 
 // =============================================================================

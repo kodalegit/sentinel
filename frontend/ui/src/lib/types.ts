@@ -360,6 +360,7 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   citations: Citation[] | null;
+  events: ChatStreamEvent[] | null;
   created_at: string;
 }
 
@@ -374,25 +375,46 @@ export interface Citation {
   chunk_id: string;
 }
 
+export type ChatStreamEventType =
+  | "token"
+  | "reasoning"
+  | "tool_start"
+  | "tool_end"
+  | "citation"
+  | "done"
+  | "error";
+
 export interface ChatStreamEvent {
-  type: "token" | "done" | "error";
+  type: ChatStreamEventType;
+  // token
+  delta?: string;
+  // reasoning
   content?: string;
+  step?: number;
+  // tool_start / tool_end
+  tool?: string;
+  tool_call_id?: string;
+  input?: Record<string, unknown>;
+  summary?: string;
+  // citation
+  marker?: number;
+  doc_id?: string;
+  title?: string;
+  source_url?: string | null;
+  category?: string;
+  excerpt?: string;
+  page?: number | null;
+  chunk_id?: string;
+  // done
   citations?: Citation[];
   thread_id?: string;
-  message_id?: string;
-  error?: string;
+  // error
+  message?: string;
+  code?: string;
+  recoverable?: boolean;
 }
 
-export interface CaseSummaryResponse {
-  summary: string;
-  citations: Citation[];
-  key_findings: string[];
-}
-
-export interface NextStepsResponse {
-  suggestions: string[];
-  citations: Citation[];
-}
+export type ChatAction = "chat" | "summary" | "next_steps" | "risk_analysis";
 
 export interface AgentSettings {
   llm_provider: string | null;
