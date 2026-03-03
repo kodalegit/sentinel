@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # LLM
     llm_model: str = "gpt-5-mini"
     llm_provider: str = "openai"
-    llm_temperature: float = 0
+    llm_temperature: float = 0.7
     llm_base_url: Optional[str] = None
 
     # LLM API Keys (for various providers)

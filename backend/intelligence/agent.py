@@ -8,16 +8,32 @@ Supports OpenAI, Anthropic, Google, and local models via config.
 
 import re
 import uuid
-from typing import Optional, Literal, Any
+from typing import Optional, Literal, Any, AsyncGenerator
 from dataclasses import dataclass, field
 
 from langchain.chat_models import init_chat_model
 from langchain.tools import tool
 from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
 from config import settings
 from intelligence.evidence import EvidencePack
+from intelligence.streaming import (
+    AgentStreamFSM,
+    AgentState,
+    StreamEvent,
+    TokenEvent,
+    ReasoningEvent,
+    ToolStartEvent,
+    ToolEndEvent,
+    CitationEvent,
+    DoneEvent,
+    ErrorEvent,
+    get_prompt_for_action,
+)
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = """You are Sentinel AI, an investigation assistant for Kenyan public procurement oversight.
@@ -145,14 +161,20 @@ def search_legal_knowledge(
         return await store.similarity_search(query, category=category.upper(), k=5)
 
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
+        try:
+            results = asyncio.run(_search())
+        except RuntimeError as loop_error:
+            # If this tool is invoked while an event loop is already running
+            # in the current thread, run the coroutine in a worker thread.
+            if "asyncio.run() cannot be called from a running event loop" not in str(
+                loop_error
+            ):
+                raise
+
             import concurrent.futures
 
-            with concurrent.futures.ThreadPoolExecutor() as pool:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 results = pool.submit(asyncio.run, _search()).result()
-        else:
-            results = asyncio.run(_search())
     except Exception as e:
         return f"Search error: {str(e)[:100]}", []
     # Format content for model
@@ -342,9 +364,22 @@ class InvestigationAgent:
             }
             if settings.llm_base_url:
                 kwargs["base_url"] = settings.llm_base_url
+
+            provider = settings.llm_provider.lower()
+            if provider == "openai" and settings.openai_api_key:
+                kwargs["api_key"] = settings.openai_api_key
+            elif provider == "anthropic" and settings.anthropic_api_key:
+                kwargs["api_key"] = settings.anthropic_api_key
+            elif provider in {"google", "google_genai"} and settings.google_api_key:
+                kwargs["api_key"] = settings.google_api_key
+
             self.llm = init_chat_model(**kwargs)
         except Exception:
             # No valid credentials or provider — LLM stays None, template fallback used
+            logger.exception(
+                "Failed to initialize LLM",
+                extra={"provider": settings.llm_provider, "model": settings.llm_model},
+            )
             self.llm = None
 
     def _init_agent(self):
@@ -502,161 +537,137 @@ Use the search_case_evidence tool to get the full risk analysis, then provide yo
                 "evidence_pack": evidence_pack.to_dict(),
             }
 
-    async def chat(
+    def _summarize_tool_output(self, tool_name: str, result: str) -> str:
+        """Create a brief summary of tool output for UI display."""
+        if len(result) <= 150:
+            return result
+        return result[:150] + "..."
+
+    async def stream(
         self,
         message: str,
+        action: str = "chat",
         history: list[dict] | None = None,
-    ) -> tuple[str, list[dict]]:
+    ) -> AsyncGenerator[StreamEvent, None]:
         """
-        Chat with the agent about a case.
+        Stream agent response with real-time events.
 
-        Args:
-            message: User message
-            history: Previous messages [{"role": "user"|"assistant", "content": "..."}]
-
-        Returns:
-            Tuple of (response_text, citations)
+        Yields StreamEvent instances: reasoning, tool_start, tool_end,
+        citation, token, done, error.
         """
         if self.agent is None:
-            return (
-                "I'm sorry, the AI assistant is not configured. Please contact an administrator.",
-                [],
+            yield ErrorEvent(
+                message="AI assistant not configured.", code="NOT_CONFIGURED"
             )
+            return
+
+        fsm = AgentStreamFSM()
+        final_content = ""
+        emitted_citations: set[int] = set()
+        ctx = get_agent_context()
+        if ctx:
+            ctx.artifacts = []
 
         try:
-            # Build messages from history
             messages = []
             if history:
                 for msg in history:
-                    if msg["role"] == "user":
-                        messages.append({"role": "user", "content": msg["content"]})
-                    else:
-                        messages.append(
-                            {"role": "assistant", "content": msg["content"]}
-                        )
+                    role = "user" if msg["role"] == "user" else "assistant"
+                    messages.append({"role": role, "content": msg["content"]})
 
-            messages.append({"role": "user", "content": message})
+            prompt = get_prompt_for_action(action, message)
+            messages.append({"role": "user", "content": prompt})
 
-            # Clear artifacts for this conversation turn
-            ctx = get_agent_context()
-            if ctx:
-                ctx.artifacts = []
-
-            result = await self.agent.ainvoke({"messages": messages})
-
-            # Extract response
-            response_text = ""
-            if "messages" in result:
-                for msg in reversed(result["messages"]):
-                    if hasattr(msg, "content") and isinstance(msg.content, str):
-                        response_text = msg.content
-                        break
-
-            # Extract citations
-            artifacts = ctx.artifacts if ctx else []
-            citations = self._extract_citations(response_text, artifacts)
-
-            return response_text, citations
-
-        except Exception as e:
-            return f"I encountered an error: {str(e)[:100]}", []
-
-    async def generate_summary(self) -> tuple[str, list[dict], list[str]]:
-        """
-        Generate a case summary.
-
-        Returns:
-            Tuple of (summary_text, citations, key_findings)
-        """
-        if self.agent is None:
-            return "AI assistant not configured.", [], []
-
-        try:
-            ctx = get_agent_context()
-            if ctx:
-                ctx.artifacts = []
-
-            prompt = """Generate an executive summary of this investigation case.
-
-Use the search_case_evidence tool to gather all relevant information, then provide:
-1. A concise executive summary (2-3 paragraphs)
-2. Key findings as bullet points
-3. Recommended next steps
-
-Cite all sources using [N] markers."""
-
-            result = await self.agent.ainvoke(
-                {"messages": [{"role": "user", "content": prompt}]}
+            stream = self.agent.astream(
+                {"messages": messages},
+                stream_mode=["updates", "messages"],
             )
 
-            response_text = ""
-            if "messages" in result:
-                for msg in reversed(result["messages"]):
-                    if hasattr(msg, "content") and isinstance(msg.content, str):
-                        response_text = msg.content
-                        break
+            try:
+                async for mode, chunk in stream:
+                    if mode == "updates":
+                        for node_name, node_data in chunk.items():
+                            if node_data is None:
+                                continue
+                            node_messages = node_data.get("messages", [])
+                            if not node_messages:
+                                continue
+                            msg = node_messages[-1]
 
-            artifacts = ctx.artifacts if ctx else []
-            citations = self._extract_citations(response_text, artifacts)
+                            if node_name == "model":
+                                state, data = fsm.on_model_update(msg)
 
-            # Extract key findings (lines starting with - or *)
-            key_findings = []
-            for line in response_text.split("\n"):
-                line = line.strip()
-                if line.startswith("- ") or line.startswith("* "):
-                    key_findings.append(line[2:])
+                                if state == AgentState.PLANNING:
+                                    if data.get("turn_text"):
+                                        yield ReasoningEvent(
+                                            content=data["turn_text"],
+                                            step=data["step"],
+                                        )
+                                    for tc in data.get("tool_calls", []):
+                                        yield ToolStartEvent(
+                                            tool=tc["name"],
+                                            tool_call_id=tc["id"],
+                                            input=tc["args"],
+                                        )
 
-            return response_text, citations, key_findings[:10]
+                                elif state == AgentState.STREAMING_ANSWER:
+                                    if data.get("emit_text"):
+                                        final_content = data["emit_text"]
+
+                            elif node_name == "tools":
+                                _state, data = fsm.on_tool_update(msg)
+                                tool_name = data.get("tool_name", "unknown")
+                                result = data.get("result", "")
+
+                                yield ToolEndEvent(
+                                    tool=tool_name,
+                                    tool_call_id=data.get("tool_call_id", ""),
+                                    summary=self._summarize_tool_output(
+                                        tool_name, result
+                                    ),
+                                )
+
+                                if ctx:
+                                    for i, artifact in enumerate(ctx.artifacts):
+                                        marker = i + 1
+                                        if marker not in emitted_citations:
+                                            emitted_citations.add(marker)
+                                            yield CitationEvent(
+                                                marker=marker,
+                                                doc_id=artifact.doc_id,
+                                                title=artifact.title,
+                                                category=artifact.category,
+                                                excerpt=artifact.excerpt,
+                                                chunk_id=artifact.chunk_id,
+                                                source_url=artifact.source_url,
+                                                page=artifact.page,
+                                            )
+
+                                fsm.reset_turn()
+
+                    elif mode == "messages":
+                        token_chunk, metadata = chunk
+                        _state, data = fsm.on_message_token(token_chunk, metadata)
+
+                        if data.get("token"):
+                            yield TokenEvent(delta=data["token"])
+                            final_content += data["token"]
+                            fsm.accumulate_final(data["token"])
+
+            finally:
+                await stream.aclose()
 
         except Exception as e:
-            return f"Error generating summary: {str(e)[:100]}", [], []
+            logger.exception("Agent stream error")
+            yield ErrorEvent(message=f"Error: {str(e)[:200]}", code="AGENT_ERROR")
 
-    async def suggest_next_steps(self) -> tuple[list[str], list[dict]]:
-        """
-        Suggest next investigation steps.
+        fsm.mark_done()
 
-        Returns:
-            Tuple of (suggestions, citations)
-        """
-        if self.agent is None:
-            return ["Configure AI assistant to get suggestions."], []
-
-        try:
-            ctx = get_agent_context()
-            if ctx:
-                ctx.artifacts = []
-
-            prompt = """Based on the current case evidence and Kenyan procurement law, suggest the next steps for this investigation.
-
-Use search_case_evidence to understand the case, and search_legal_knowledge to find relevant legal requirements.
-
-Provide 3-5 specific, actionable next steps. Cite relevant laws or evidence."""
-
-            result = await self.agent.ainvoke(
-                {"messages": [{"role": "user", "content": prompt}]}
-            )
-
-            response_text = ""
-            if "messages" in result:
-                for msg in reversed(result["messages"]):
-                    if hasattr(msg, "content") and isinstance(msg.content, str):
-                        response_text = msg.content
-                        break
-
-            artifacts = ctx.artifacts if ctx else []
-            citations = self._extract_citations(response_text, artifacts)
-
-            # Extract numbered steps
-            suggestions = []
-            for line in response_text.split("\n"):
-                line = line.strip()
-                if re.match(r"^\d+\.\s", line):
-                    suggestions.append(re.sub(r"^\d+\.\s*", "", line))
-
-            return suggestions[:5] if suggestions else [response_text], citations
-
-        except Exception as e:
-            return [f"Error: {str(e)[:100]}"], []
+        artifacts = ctx.artifacts if ctx else []
+        citations = self._extract_citations(
+            final_content or fsm.get_final_content(), artifacts
+        )
+        yield DoneEvent(citations=citations)
 
 
 # Singleton instance

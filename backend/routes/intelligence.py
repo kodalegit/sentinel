@@ -10,16 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
     KnowledgeDocument,
-    KnowledgeDocumentCreate,
     KnowledgeDocumentCategory,
     KnowledgeChunk,
     KnowledgeStats,
     ChatThread,
     ChatMessage,
     ChatRequest,
-    CaseSummaryResponse,
-    NextStepsResponse,
-    Citation,
 )
 from state import State
 from db.config import get_db
@@ -29,6 +25,15 @@ from intelligence.agent import (
     get_agent,
     set_agent_context,
     AgentContext,
+)
+from intelligence.streaming import (
+    TokenEvent,
+    ReasoningEvent,
+    ToolStartEvent,
+    ToolEndEvent,
+    CitationEvent,
+    DoneEvent,
+    ErrorEvent,
 )
 from knowledge.loader import chunk_pdf_document
 from knowledge.store import get_knowledge_store
@@ -140,7 +145,9 @@ async def delete_knowledge_document(
     await db.commit()
 
 
-@router.get("/knowledge/documents/{document_id}/chunks", response_model=list[KnowledgeChunk])
+@router.get(
+    "/knowledge/documents/{document_id}/chunks", response_model=list[KnowledgeChunk]
+)
 async def get_document_chunks(
     document_id: str,
     current_user: CurrentUser,
@@ -183,9 +190,7 @@ async def get_case_chat_threads(
     db: AsyncSession = Depends(get_db),
 ):
     """Get all chat threads for a case (current user only)."""
-    threads = await repo.get_chat_threads(
-        db, _uuid.UUID(case_id), current_user.id
-    )
+    threads = await repo.get_chat_threads(db, _uuid.UUID(case_id), current_user.id)
     result = []
     for t in threads:
         msg_count = await repo.get_thread_message_count(db, t.id)
@@ -203,7 +208,10 @@ async def get_case_chat_threads(
     return result
 
 
-@router.get("/cases/{case_id}/chat/threads/{thread_id}/messages", response_model=list[ChatMessage])
+@router.get(
+    "/cases/{case_id}/chat/threads/{thread_id}/messages",
+    response_model=list[ChatMessage],
+)
 async def get_thread_messages(
     case_id: str,
     thread_id: str,
@@ -225,21 +233,33 @@ async def get_thread_messages(
             role=m.role,
             content=m.content,
             citations=m.citations,
+            events=m.events,
             created_at=m.created_at,
         )
         for m in messages
     ]
 
 
+class ChatStreamRequest(ChatRequest):
+    """Chat request with action type."""
+
+    action: str = "chat"
+
+
 @router.post("/cases/{case_id}/chat/stream")
 async def chat_stream(
     case_id: str,
-    body: ChatRequest,
+    body: ChatStreamRequest,
     state: State,
     current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ):
-    """Stream a chat response with SSE."""
+    """
+    Unified streaming endpoint for all agent interactions.
+
+    Actions: chat, summary, next_steps, risk_analysis.
+    All actions stream through the same event protocol.
+    """
     case_db = await repo.get_case(db, _uuid.UUID(case_id))
     if not case_db:
         raise HTTPException(status_code=404, detail="Case not found")
@@ -261,7 +281,7 @@ async def chat_stream(
     await repo.add_chat_message(db, thread_id, "user", body.message)
 
     history = []
-    if body.thread_id:
+    if body.thread_id and thread_id:
         messages = await repo.get_thread_messages(db, thread_id, limit=20)
         for m in messages[:-1]:
             history.append({"role": m.role, "content": m.content})
@@ -280,22 +300,62 @@ async def chat_stream(
     agent = get_agent()
 
     async def generate():
+        final_content = ""
+        final_citations: list[dict] = []
+        events_log: list[dict] = []
+
         try:
-            response_text, citations = await agent.chat(body.message, history)
+            async for event in agent.stream(
+                message=body.message,
+                action=body.action,
+                history=history,
+            ):
+                event_dict = event.to_dict()
 
-            for i in range(0, len(response_text), 20):
-                chunk = response_text[i : i + 20]
-                yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
+                if isinstance(event, TokenEvent):
+                    final_content += event.delta
+                    yield f"data: {json.dumps(event_dict)}\n\n"
 
-            await repo.add_chat_message(
-                db, thread_id, "assistant", response_text, citations=citations
-            )
-            await db.commit()
+                elif isinstance(event, ReasoningEvent):
+                    events_log.append(event_dict)
+                    yield f"data: {json.dumps(event_dict)}\n\n"
 
-            yield f"data: {json.dumps({'type': 'done', 'citations': citations, 'thread_id': str(thread_id)})}\n\n"
+                elif isinstance(event, ToolStartEvent):
+                    events_log.append(event_dict)
+                    yield f"data: {json.dumps(event_dict)}\n\n"
+
+                elif isinstance(event, ToolEndEvent):
+                    events_log.append(event_dict)
+                    yield f"data: {json.dumps(event_dict)}\n\n"
+
+                elif isinstance(event, CitationEvent):
+                    events_log.append(event_dict)
+                    yield f"data: {json.dumps(event_dict)}\n\n"
+
+                elif isinstance(event, DoneEvent):
+                    final_citations = event.citations
+
+                elif isinstance(event, ErrorEvent):
+                    yield f"data: {json.dumps(event_dict)}\n\n"
+                    if not event.recoverable:
+                        return
+
+            # Persist assistant message with events for auditability
+            if thread_id and final_content:
+                await repo.add_chat_message(
+                    db,
+                    thread_id,
+                    "assistant",
+                    final_content,
+                    citations=final_citations,
+                    events=events_log if events_log else None,
+                )
+                await db.commit()
+
+            yield f"data: {json.dumps({'type': 'done', 'citations': final_citations, 'thread_id': str(thread_id) if thread_id else None})}\n\n"
 
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'error': str(e)[:200]})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)[:200], 'code': 'STREAM_ERROR', 'recoverable': False})}\n\n"
 
     return StreamingResponse(
         generate(),
@@ -303,70 +363,6 @@ async def chat_stream(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
         },
-    )
-
-
-@router.post("/cases/{case_id}/summary", response_model=CaseSummaryResponse)
-async def generate_case_summary(
-    case_id: str,
-    state: State,
-    current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
-):
-    """Generate an AI summary of the case."""
-    case_db = await repo.get_case(db, _uuid.UUID(case_id))
-    if not case_db:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    tender_id = str(case_db.tender_id) if case_db.tender_id else None
-
-    set_agent_context(
-        AgentContext(
-            case_id=case_id,
-            tender_id=tender_id,
-            db_session=db,
-            app_state=state,
-        )
-    )
-
-    agent = get_agent()
-    summary_text, citations, key_findings = await agent.generate_summary()
-
-    return CaseSummaryResponse(
-        summary=summary_text,
-        citations=[Citation(**c) for c in citations],
-        key_findings=key_findings,
-    )
-
-
-@router.post("/cases/{case_id}/next-steps", response_model=NextStepsResponse)
-async def suggest_next_steps(
-    case_id: str,
-    state: State,
-    current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
-):
-    """Get AI-suggested next steps for the investigation."""
-    case_db = await repo.get_case(db, _uuid.UUID(case_id))
-    if not case_db:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    tender_id = str(case_db.tender_id) if case_db.tender_id else None
-
-    set_agent_context(
-        AgentContext(
-            case_id=case_id,
-            tender_id=tender_id,
-            db_session=db,
-            app_state=state,
-        )
-    )
-
-    agent = get_agent()
-    suggestions, citations = await agent.suggest_next_steps()
-
-    return NextStepsResponse(
-        suggestions=suggestions,
-        citations=[Citation(**c) for c in citations],
     )
