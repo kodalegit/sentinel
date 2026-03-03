@@ -529,43 +529,13 @@ class ChatMessage(BaseModel):
     role: str
     content: str
     citations: Optional[list[dict]] = None
+    events: Optional[list[dict]] = None
     created_at: datetime
 
 
 class ChatRequest(BaseModel):
     message: str
     thread_id: Optional[str] = None
-
-
-class ChatStreamEvent(BaseModel):
-    type: str  # "token", "citation", "done", "error"
-    content: Optional[str] = None
-    citations: Optional[list[dict]] = None
-    thread_id: Optional[str] = None
-    message_id: Optional[str] = None
-    error: Optional[str] = None
-
-
-class Citation(BaseModel):
-    marker: int
-    doc_id: str
-    title: str
-    source_url: Optional[str] = None
-    category: str
-    excerpt: str
-    page: Optional[int] = None
-    chunk_id: str
-
-
-class CaseSummaryResponse(BaseModel):
-    summary: str
-    citations: list[Citation] = Field(default_factory=list)
-    key_findings: list[str] = Field(default_factory=list)
-
-
-class NextStepsResponse(BaseModel):
-    suggestions: list[str] = Field(default_factory=list)
-    citations: list[Citation] = Field(default_factory=list)
 
 
 class AgentSetting(BaseModel):

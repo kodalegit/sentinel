@@ -834,6 +834,7 @@ async def add_chat_message(
     role: str,
     content: str,
     citations: list[dict] | None = None,
+    events: list[dict] | None = None,
 ) -> ChatMessageDB:
     """Add a message to a chat thread."""
     from datetime import datetime, timezone
@@ -843,6 +844,7 @@ async def add_chat_message(
         role=role,
         content=content,
         citations=citations,
+        events=events,
     )
     db.add(message)
 
