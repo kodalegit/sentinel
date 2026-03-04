@@ -11,11 +11,10 @@ import {
 import type { ChatMessage, Citation, ChatStreamEvent } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Collapsible,
   CollapsibleContent,
@@ -37,8 +36,8 @@ import {
   FileText,
   Brain,
   CheckCircle2,
-  Wrench,
   Terminal,
+  BookOpen,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -50,153 +49,201 @@ interface CaseChatProps {
   className?: string;
 }
 
-interface ToolEvent {
-  type: "start" | "end";
+// A merged tool record: one entry per toolCallId, transitions from running→complete
+interface ToolRecord {
   tool: string;
   toolCallId: string;
+  status: "running" | "complete";
   input?: Record<string, unknown>;
   summary?: string;
 }
 
+// Interleaved stream items for Claude-style inline display
+type StreamItem =
+  | { kind: "reasoning"; text: string }
+  | { kind: "tool"; record: ToolRecord };
+
 interface StreamingState {
   content: string;
-  reasoning: string;
-  currentStep: number;
-  toolEvents: ToolEvent[];
+  items: StreamItem[];
   citations: Map<number, Citation>;
   isComplete: boolean;
 }
 
 const initialStreamingState: StreamingState = {
   content: "",
-  reasoning: "",
-  currentStep: 0,
-  toolEvents: [],
+  items: [],
   citations: new Map(),
   isComplete: false,
 };
+
+// Helper to extract query from tool input
+function getToolQuery(tool: string, input?: Record<string, unknown>): string | null {
+  if (!input) return null;
+  // Most tools have a 'query' param
+  if (typeof input.query === "string") return input.query;
+  // Fallback to first string value
+  for (const val of Object.values(input)) {
+    if (typeof val === "string" && val.length > 0 && val.length < 200) return val;
+  }
+  return null;
+}
+
+// Truncate summary for collapsed view
+function truncateSummary(text: string, maxLen = 120): string {
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen).trimEnd() + "…";
+}
 
 // ---------------------------------------------------------------------------
 // Small components
 // ---------------------------------------------------------------------------
 
-function CitationBadge({ citation }: { citation: Citation }) {
-  return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-mono rounded bg-primary/10 text-primary cursor-help">
-            [{citation.marker}]
-            {citation.source_url && (
-              <a
-                href={citation.source_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:underline"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            )}
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="top" className="max-w-sm border-border bg-popover/95 backdrop-blur-sm shadow-xl">
-          <p className="font-semibold text-xs tracking-wide uppercase text-muted-foreground">{citation.category || "SOURCE"}</p>
-          <p className="font-medium text-sm mt-1">{citation.title}</p>
-          <p className="text-xs text-muted-foreground mt-2 border-l-2 border-primary pl-2 italic">{citation.excerpt}</p>
-          {citation.page && (
-            <p className="text-xs font-mono text-muted-foreground mt-2">Page {citation.page}</p>
-          )}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-}
-
 function ToolIcon({ tool }: { tool: string }) {
   switch (tool) {
     case "search_legal_knowledge":
-      return <FileText className="h-3 w-3 text-emerald-500" />;
+      return <FileText className="h-3.5 w-3.5 text-emerald-500" />;
     case "search_case_evidence":
-      return <Search className="h-3 w-3 text-amber-500" />;
+      return <Search className="h-3.5 w-3.5 text-amber-500" />;
     case "get_risk_analysis":
-      return <Brain className="h-3 w-3 text-purple-500" />;
+      return <Brain className="h-3.5 w-3.5 text-purple-500" />;
     default:
-      return <Terminal className="h-3 w-3 text-sky-500" />;
+      return <Terminal className="h-3.5 w-3.5 text-sky-500" />;
   }
 }
 
-function toolLabel(name: string) {
-  return name.replace(/_/g, " ").toUpperCase();
+function toolDisplayName(name: string) {
+  const map: Record<string, string> = {
+    search_legal_knowledge: "Searching legal knowledge",
+    search_case_evidence: "Searching case evidence",
+    get_risk_analysis: "Analyzing risk factors",
+    search_graph_connections: "Searching graph connections",
+  };
+  return map[name] || name.replace(/_/g, " ");
 }
 
 // ---------------------------------------------------------------------------
-// Collapsible events section (used for real-time streaming tool calls)
+// Sources popover — shown at the end of a message with citations
 // ---------------------------------------------------------------------------
 
-function StreamingToolSection({
-  toolEvents,
-  reasoning,
-  step,
-}: {
-  toolEvents: ToolEvent[];
-  reasoning: string;
-  step: number;
-}) {
-  const [open, setOpen] = useState(true);
-  if (toolEvents.length === 0 && !reasoning) return null;
-
-  const completedCount = toolEvents.filter((e) => e.type === "end").length;
-  const totalCount = new Set(toolEvents.map((e) => e.toolCallId)).size;
-  const hasRunning = toolEvents.some((e) => e.type === "start" && !toolEvents.find((te) => te.toolCallId === e.toolCallId && te.type === "end"));
+function SourcesButton({ citations }: { citations: Citation[] }) {
+  if (citations.length === 0) return null;
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="mb-4 bg-muted/40 border border-border/50 rounded-md overflow-hidden">
-      <CollapsibleTrigger className="flex items-center gap-2 text-xs font-mono text-muted-foreground hover:bg-muted/80 transition-colors w-full px-3 py-2 border-b border-border/20">
-        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <Wrench className="h-3 w-3" />
-        <span className="flex-1 text-left">
-          {hasRunning ? "EXECUTING TOOLS" : "TOOLS EXECUTED"} : {completedCount}/{totalCount}
-          {step > 0 && ` [STEP ${step}]`}
-        </span>
-        {hasRunning && <Loader2 className="h-3 w-3 animate-spin" />}
-      </CollapsibleTrigger>
-      
-      <CollapsibleContent className="p-3 space-y-3">
-        {reasoning && (
-          <div className="text-xs text-muted-foreground italic border-l-2 border-primary/40 pl-3 py-1">
-            &quot;{reasoning}&quot;
-          </div>
-        )}
-        
-        {toolEvents.map((event, i) => (
-          <div key={`${event.toolCallId}-${i}`} className="text-xs group">
-            <div className="flex items-center gap-2 mb-1.5 font-mono text-muted-foreground">
-              <ToolIcon tool={event.tool} />
-              <span className="font-semibold text-foreground/80">{toolLabel(event.tool)}</span>
-              {event.type === "start" && !toolEvents.find((te) => te.toolCallId === event.toolCallId && te.type === "end") && (
-                <span className="flex gap-1 items-center bg-primary/10 text-primary px-1.5 py-0.5 rounded text-[10px]">
-                  <Loader2 className="h-2.5 w-2.5 animate-spin" /> RUNNING
+    <Popover>
+      <PopoverTrigger asChild>
+        <button className="inline-flex items-center gap-1.5 mt-4 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted border border-border/60 rounded-lg transition-colors">
+          <BookOpen className="h-3.5 w-3.5" />
+          Sources
+          <span className="ml-0.5 text-[10px] font-mono opacity-70">({citations.length})</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        side="top"
+        className="w-80 max-h-72 overflow-y-auto p-0 border-border bg-popover shadow-xl"
+      >
+        <div className="px-3 py-2 border-b border-border/60 bg-muted/30">
+          <p className="text-[10px] font-mono font-semibold uppercase tracking-widest text-muted-foreground">
+            Referenced Sources
+          </p>
+        </div>
+        <div className="divide-y divide-border/40">
+          {citations.map((c) => (
+            <div key={c.marker} className="px-3 py-2.5 hover:bg-muted/30 transition-colors">
+              <div className="flex items-start gap-2">
+                <span className="shrink-0 flex items-center justify-center h-5 w-5 rounded bg-primary/10 text-primary text-[10px] font-mono font-bold mt-0.5">
+                  {c.marker}
                 </span>
-              )}
-              {event.type === "end" && (
-                <span className="flex gap-1 items-center text-green-600 bg-green-500/10 px-1.5 py-0.5 rounded text-[10px]">
-                  <CheckCircle2 className="h-2.5 w-2.5" /> OK
-                </span>
-              )}
-            </div>
-            
-            {event.type === "end" && event.summary && (
-              <div className="pl-5">
-                <div className="font-mono text-[11px] bg-background/50 border border-border/50 rounded p-2 text-muted-foreground whitespace-pre-wrap max-w-full overflow-x-auto">
-                  {event.summary}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-xs font-medium truncate">{c.title}</p>
+                    {c.source_url && (
+                      <a
+                        href={c.source_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0 text-muted-foreground hover:text-primary"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                  </div>
+                  <p className="text-[10px] font-mono uppercase text-muted-foreground/70 tracking-wide mt-0.5">
+                    {c.category || "source"}
+                    {c.page ? ` · p.${c.page}` : ""}
+                  </p>
+                  {c.excerpt && (
+                    <p className="text-[11px] text-muted-foreground mt-1 line-clamp-2 leading-relaxed">
+                      {c.excerpt}
+                    </p>
+                  )}
                 </div>
               </div>
+            </div>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Inline tool card (Claude-style) — used during streaming
+// ---------------------------------------------------------------------------
+
+function ToolCard({ record }: { record: ToolRecord }) {
+  const [expanded, setExpanded] = useState(false);
+  const isRunning = record.status === "running";
+  const query = getToolQuery(record.tool, record.input);
+
+  return (
+    <div className="my-2 rounded-lg border border-border/50 bg-muted/20 overflow-hidden transition-all">
+      <button
+        onClick={() => !isRunning && record.summary && setExpanded(!expanded)}
+        disabled={isRunning || !record.summary}
+        className="flex items-start gap-2 w-full px-3 py-2 text-xs text-muted-foreground hover:bg-muted/40 transition-colors text-left"
+      >
+        <div className="shrink-0 mt-0.5">
+          <ToolIcon tool={record.tool} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-foreground/80">
+              {toolDisplayName(record.tool)}
+            </span>
+            {isRunning ? (
+              <Loader2 className="h-3 w-3 animate-spin text-primary" />
+            ) : (
+              <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" />
             )}
           </div>
-        ))}
-      </CollapsibleContent>
-    </Collapsible>
+          {/* Show query while running */}
+          {query && isRunning && (
+            <p className="text-[11px] text-muted-foreground/70 mt-1 truncate">
+              &quot;{query}&quot;
+            </p>
+          )}
+          {/* Show truncated result when complete (collapsed) */}
+          {!isRunning && record.summary && !expanded && (
+            <p className="text-[11px] text-muted-foreground/60 mt-1 line-clamp-1">
+              {truncateSummary(record.summary)}
+            </p>
+          )}
+        </div>
+        {!isRunning && record.summary && (
+          <ChevronDown className={`h-3 w-3 shrink-0 mt-0.5 transition-transform ${expanded ? "rotate-180" : ""}`} />
+        )}
+      </button>
+      {expanded && record.summary && (
+        <div className="px-3 pb-2.5 pt-0">
+          <div className="font-mono text-[11px] bg-background/60 border border-border/40 rounded p-2 text-muted-foreground whitespace-pre-wrap max-w-full overflow-x-auto leading-relaxed">
+            {record.summary}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -208,47 +255,43 @@ function PersistedEventsSection({ events }: { events: ChatStreamEvent[] }) {
   const [open, setOpen] = useState(false);
   if (!events || events.length === 0) return null;
 
-  const toolCount = events.filter((e) => e.type === "tool_end").length;
+  // Deduplicate: only show tool_end events (which have summaries)
+  const toolEndEvents = events.filter((e) => e.type === "tool_end");
   const reasoningEvents = events.filter((e) => e.type === "reasoning");
+  const totalOps = toolEndEvents.length;
+
+  if (totalOps === 0 && reasoningEvents.length === 0) return null;
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="mb-4 bg-muted/20 border border-border/30 rounded-md overflow-hidden">
-      <CollapsibleTrigger className="flex items-center gap-2 text-xs font-mono text-muted-foreground hover:bg-muted/60 transition-colors w-full px-3 py-2">
+    <Collapsible open={open} onOpenChange={setOpen} className="my-2">
+      <CollapsibleTrigger className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full py-1">
         {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <Wrench className="h-3 w-3" />
-        <span className="flex-1 text-left">
-          TOOL CHAIN : {toolCount} OP{toolCount !== 1 ? "s" : ""}
-          {reasoningEvents.length > 0 && ` | ${reasoningEvents.length} STATE${reasoningEvents.length !== 1 ? "s" : ""}`}
+        <span className="font-medium">
+          Analyzed {totalOps} source{totalOps !== 1 ? "s" : ""}
         </span>
       </CollapsibleTrigger>
-      
-      <CollapsibleContent className="p-3 bg-muted/30 border-t border-border/20 space-y-3">
+
+      <CollapsibleContent className="mt-1 space-y-1">
+        {/* Interleave reasoning and tools in order */}
         {events.map((event, i) => {
-          if (event.type === "reasoning") {
+          if (event.type === "reasoning" && event.content) {
             return (
-              <div key={i} className="text-xs text-muted-foreground/80 italic border-l-2 border-primary/30 pl-3">
+              <p key={i} className="text-xs text-muted-foreground/70 italic pl-5 py-0.5">
                 {event.content}
-              </div>
+              </p>
             );
           }
           if (event.type === "tool_end") {
             return (
-              <div key={i} className="text-xs group">
-                <div className="flex items-center gap-2 font-mono text-muted-foreground mb-1">
-                  <ToolIcon tool={event.tool || ""} />
-                  <span className="font-semibold text-foreground/80">{toolLabel(event.tool || "unknown")}</span>
-                  <span className="text-green-600 bg-green-500/10 px-1 py-0.5 rounded text-[10px] flex items-center gap-1">
-                    <CheckCircle2 className="h-2 w-2" /> OK
-                  </span>
-                </div>
-                {event.summary && (
-                  <div className="pl-5">
-                    <div className="font-mono text-[11px] bg-background/60 border border-border/40 rounded p-2.5 text-muted-foreground whitespace-pre-wrap max-w-full overflow-x-auto shadow-sm">
-                      {event.summary}
-                    </div>
-                  </div>
-                )}
-              </div>
+              <ToolCard
+                key={i}
+                record={{
+                  tool: event.tool || "unknown",
+                  toolCallId: event.tool_call_id || String(i),
+                  status: "complete",
+                  summary: event.summary,
+                }}
+              />
             );
           }
           return null;
@@ -271,44 +314,40 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       {/* Avatar */}
       <div
         className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border shadow-sm ${
-          isUser 
-            ? "bg-foreground text-background border-foreground" 
+          isUser
+            ? "bg-foreground text-background border-foreground"
             : "bg-primary/10 text-primary border-primary/20"
         }`}
       >
         {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
       </div>
-      
+
       {/* Content */}
       <div className={`flex flex-col max-w-[85%] ${isUser ? "items-end" : "items-start"}`}>
         <span className="text-[10px] font-mono font-medium text-muted-foreground mb-1.5 tracking-wider uppercase">
           {isUser ? "Investigator" : "Sentinel AI"}
         </span>
-        
+
         <div
           className={`px-5 py-3.5 shadow-sm text-[14px] leading-relaxed ${
-            isUser 
-              ? "bg-foreground text-background rounded-l-2xl rounded-tr-2xl" 
+            isUser
+              ? "bg-foreground text-background rounded-l-2xl rounded-tr-2xl"
               : "bg-card border border-border/80 rounded-r-2xl rounded-tl-2xl shadow-sm"
           }`}
         >
-          {/* Tool Events */}
+          {/* Persisted tool events — collapsed */}
           {!isUser && message.events && message.events.length > 0 && (
             <PersistedEventsSection events={message.events} />
           )}
-          
+
           {/* Text Content */}
           <div className={`whitespace-pre-wrap ${isUser ? "text-background/90" : "text-foreground/90"}`}>
             {message.content}
           </div>
-          
-          {/* Citations */}
-          {citationsList.length > 0 && (
-            <div className={`mt-4 pt-3 border-t flex flex-wrap gap-1.5 ${isUser ? "border-background/20" : "border-border/60"}`}>
-              {citationsList.map((c: Citation) => (
-                <CitationBadge key={c.marker} citation={c} />
-              ))}
-            </div>
+
+          {/* Sources button (replaces inline citation badges) */}
+          {!isUser && citationsList.length > 0 && (
+            <SourcesButton citations={citationsList} />
           )}
         </div>
       </div>
@@ -327,6 +366,7 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
   const [streamingState, setStreamingState] = useState<StreamingState>(initialStreamingState);
   const [isStreaming, setIsStreaming] = useState(false);
   const [showThreads, setShowThreads] = useState(false);
+  const [pendingUserMessage, setPendingUserMessage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const finalContentRef = useRef("");
 
@@ -348,8 +388,11 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, streamingState.content, streamingState.toolEvents, scrollToBottom]);
+  }, [messages, streamingState.content, streamingState.items, scrollToBottom]);
 
+  // -----------------------------------------------------------------------
+  // Stream event handler — builds interleaved items array
+  // -----------------------------------------------------------------------
   const handleStreamEvent = useCallback((event: ChatStreamEvent) => {
     setStreamingState((prev) => {
       const next = { ...prev };
@@ -360,30 +403,40 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
           finalContentRef.current += event.delta || "";
           break;
 
-        case "reasoning":
-          next.reasoning = event.content || "";
-          next.currentStep = event.step || 0;
+        case "reasoning": {
+          // Append reasoning as an interleaved item
+          const text = event.content || "";
+          if (text) {
+            next.items = [...prev.items, { kind: "reasoning", text }];
+          }
           break;
+        }
 
-        case "tool_start":
-          next.toolEvents = [
-            ...prev.toolEvents,
-            {
-              type: "start",
-              tool: event.tool || "unknown",
-              toolCallId: event.tool_call_id || "",
-              input: event.input,
-            },
-          ];
+        case "tool_start": {
+          // Add a new tool record in "running" state
+          const record: ToolRecord = {
+            tool: event.tool || "unknown",
+            toolCallId: event.tool_call_id || "",
+            status: "running",
+            input: event.input,
+          };
+          next.items = [...prev.items, { kind: "tool", record }];
           break;
+        }
 
-        case "tool_end":
-          next.toolEvents = prev.toolEvents.map((te) =>
-            te.toolCallId === event.tool_call_id
-              ? { ...te, type: "end" as const, summary: event.summary }
-              : te
-          );
+        case "tool_end": {
+          // Update the existing tool record to "complete"
+          next.items = prev.items.map((item) => {
+            if (item.kind === "tool" && item.record.toolCallId === event.tool_call_id) {
+              return {
+                ...item,
+                record: { ...item.record, status: "complete" as const, summary: event.summary },
+              };
+            }
+            return item;
+          });
           break;
+        }
 
         case "citation":
           if (event.marker !== undefined) {
@@ -448,6 +501,7 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
       } finally {
         setIsStreaming(false);
         setStreamingState(initialStreamingState);
+        setPendingUserMessage(null);
       }
     },
     [caseId, activeThreadId, queryClient, refetchMessages, handleStreamEvent]
@@ -457,6 +511,7 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
     if (!input.trim() || isStreaming) return;
     const userMessage = input.trim();
     setInput("");
+    setPendingUserMessage(userMessage);
     await runStream(userMessage, "chat");
   };
 
@@ -466,6 +521,16 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
   };
 
   const activeThreadTitle = threads.find((t) => t.id === activeThreadId)?.title || "Current Session";
+
+  // Check if there are any tool items currently running
+  const hasRunningTools = streamingState.items.some(
+    (item) => item.kind === "tool" && item.record.status === "running"
+  );
+  const hasAnyItems = streamingState.items.length > 0;
+  // Show waiting indicator: streaming but no content and no items yet, OR all tools done but no content yet
+  const showWaitingIndicator = isStreaming && !streamingState.content && !hasAnyItems;
+  // Show "processing" indicator after tools complete but before answer starts
+  const showProcessingIndicator = isStreaming && !streamingState.content && hasAnyItems && !hasRunningTools;
 
   return (
     <div className={`flex flex-col min-h-0 bg-background relative overflow-hidden ${className}`}>
@@ -483,7 +548,7 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
             </div>
           </div>
         </div>
-        
+
         <div className="flex items-center gap-2 text-muted-foreground">
           <Button
             variant="ghost"
@@ -505,9 +570,9 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
           >
             <ListChecks className="h-4 w-4" />
           </Button>
-          
+
           <div className="h-4 w-px bg-border/80 mx-1"></div>
-          
+
           <div className="relative">
             <Button
               variant="outline"
@@ -517,7 +582,7 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
             >
               History <ChevronDown className={`ml-1 h-3 w-3 transition-transform ${showThreads ? "rotate-180" : ""}`} />
             </Button>
-            
+
             {showThreads && (
               <div className="absolute right-0 top-full mt-2 w-72 rounded-xl border border-border shadow-2xl bg-card z-50 overflow-hidden">
                 <div className="p-2 border-b bg-muted/30">
@@ -534,8 +599,8 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
                 <div className="max-h-[300px] overflow-y-auto">
                   {threads.length === 0 ? (
                     <div className="p-6 text-sm text-muted-foreground text-center flex flex-col items-center gap-2">
-                       <MessageSquare className="h-8 w-8 opacity-20" />
-                       No past threads
+                      <MessageSquare className="h-8 w-8 opacity-20" />
+                      No past threads
                     </div>
                   ) : (
                     <div className="p-1">
@@ -547,8 +612,8 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
                             setShowThreads(false);
                           }}
                           className={`w-full px-3 py-2.5 text-left text-sm rounded-md transition-colors ${
-                            activeThreadId === thread.id 
-                              ? "bg-primary/10 text-primary border border-primary/20" 
+                            activeThreadId === thread.id
+                              ? "bg-primary/10 text-primary border border-primary/20"
                               : "hover:bg-muted/60 border border-transparent"
                           }`}
                         >
@@ -593,12 +658,31 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
               </div>
             </div>
           )}
-          
+
           {messages.map((msg) => (
             <MessageBubble key={msg.id} message={msg} />
           ))}
 
-          {/* Streaming Response Bubble */}
+          {/* Optimistic user message — shown immediately while streaming */}
+          {pendingUserMessage && (
+            <div className="flex gap-4 w-full flex-row-reverse">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border shadow-sm bg-foreground text-background border-foreground">
+                <User className="h-4 w-4" />
+              </div>
+              <div className="flex flex-col max-w-[85%] items-end">
+                <span className="text-[10px] font-mono font-medium text-muted-foreground mb-1.5 tracking-wider uppercase">
+                  Investigator
+                </span>
+                <div className="px-5 py-3.5 shadow-sm text-[14px] leading-relaxed bg-foreground text-background rounded-l-2xl rounded-tr-2xl">
+                  <div className="whitespace-pre-wrap text-background/90">
+                    {pendingUserMessage}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Streaming Response — Claude-style interleaved layout */}
           {isStreaming && (
             <div className="flex gap-4 w-full">
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-primary/20 bg-primary/10 text-primary shadow-sm">
@@ -608,35 +692,50 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
                 <span className="text-[10px] font-mono font-medium text-muted-foreground mb-1.5 tracking-wider uppercase">
                   Sentinel AI
                 </span>
-                
+
                 <div className="w-full px-5 py-3.5 text-[14px] leading-relaxed bg-card border border-border/80 rounded-r-2xl rounded-tl-2xl shadow-sm">
-                  <StreamingToolSection
-                    toolEvents={streamingState.toolEvents}
-                    reasoning={streamingState.reasoning}
-                    step={streamingState.currentStep}
-                  />
-                  
-                  {streamingState.content ? (
-                    <div className="whitespace-pre-wrap text-foreground/90">
-                      {streamingState.content}
-                      <span className="inline-block w-2 h-4 bg-primary/70 animate-pulse ml-[2px] align-middle rounded-sm" />
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-3 text-sm text-muted-foreground font-mono">
+                  {/* Waiting indicator — before any events arrive */}
+                  {showWaitingIndicator && (
+                    <div className="flex items-center gap-3 text-sm text-muted-foreground">
                       <span className="relative flex h-3 w-3">
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
                         <span className="relative inline-flex rounded-full h-3 w-3 bg-primary"></span>
                       </span>
-                      Computing response...
+                      Thinking...
                     </div>
                   )}
-                  
-                  {streamingState.citations.size > 0 && (
-                    <div className="mt-4 pt-3 border-t border-border/60 flex flex-wrap gap-1.5">
-                      {Array.from(streamingState.citations.values()).map((c) => (
-                        <CitationBadge key={c.marker} citation={c} />
-                      ))}
+
+                  {/* Interleaved reasoning + tool cards */}
+                  {streamingState.items.map((item, i) => {
+                    if (item.kind === "reasoning") {
+                      return (
+                        <p key={i} className="text-xs text-muted-foreground/80 italic my-2 leading-relaxed">
+                          {item.text}
+                        </p>
+                      );
+                    }
+                    return <ToolCard key={item.record.toolCallId} record={item.record} />;
+                  })}
+
+                  {/* Processing indicator — after tools complete but before answer */}
+                  {showProcessingIndicator && (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground mt-3 pt-2 border-t border-border/30">
+                      <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                      <span>Generating response...</span>
                     </div>
+                  )}
+
+                  {/* Streamed answer text */}
+                  {streamingState.content && (
+                    <div className="whitespace-pre-wrap text-foreground/90 mt-1">
+                      {streamingState.content}
+                      <span className="inline-block w-2 h-4 bg-primary/70 animate-pulse ml-[2px] align-middle rounded-sm" />
+                    </div>
+                  )}
+
+                  {/* Sources button — only after streaming is complete */}
+                  {streamingState.isComplete && streamingState.citations.size > 0 && (
+                    <SourcesButton citations={Array.from(streamingState.citations.values())} />
                   )}
                 </div>
               </div>
@@ -660,7 +759,7 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   handleSend();
                 }
@@ -669,12 +768,12 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
               disabled={isStreaming}
               rows={1}
               className="flex-1 max-h-32 min-h-[44px] py-3 text-sm resize-none bg-transparent focus:outline-none placeholder:text-muted-foreground/50 disabled:opacity-50"
-              style={{ overflowY: 'auto' }}
+              style={{ overflowY: "auto" }}
             />
             <div className="flex shrink-0 items-center justify-center p-1">
-              <Button 
-                type="submit" 
-                size="icon" 
+              <Button
+                type="submit"
+                size="icon"
                 disabled={!input.trim() || isStreaming}
                 className="h-9 w-9 rounded-lg"
               >
