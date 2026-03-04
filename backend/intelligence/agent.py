@@ -132,7 +132,7 @@ def _format_graph_paths(paths: list[dict]) -> str:
 
 
 @tool(response_format="content_and_artifact")
-def search_legal_knowledge(
+async def search_legal_knowledge(
     query: str,
     category: Literal["law", "case_law", "regulation", "guideline"],
 ) -> tuple[str, list[dict]]:
@@ -152,30 +152,18 @@ def search_legal_knowledge(
     ctx = get_agent_context()
     if not ctx or not ctx.db_session:
         return "Knowledge base not available.", []
+
     # Import here to avoid circular imports
     from knowledge.store import get_knowledge_store
-    import asyncio
-
-    async def _search():
-        store = get_knowledge_store(ctx.db_session)
-        return await store.similarity_search(query, category=category.upper(), k=5)
 
     try:
-        try:
-            results = asyncio.run(_search())
-        except RuntimeError as loop_error:
-            # If this tool is invoked while an event loop is already running
-            # in the current thread, run the coroutine in a worker thread.
-            if "asyncio.run() cannot be called from a running event loop" not in str(
-                loop_error
-            ):
-                raise
-
-            import concurrent.futures
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                results = pool.submit(asyncio.run, _search()).result()
+        store = get_knowledge_store(ctx.db_session)
+        results = await store.similarity_search(query, category=category.upper(), k=5)
     except Exception as e:
+        logger.exception(
+            "search_legal_knowledge failed",
+            extra={"category": category, "query_prefix": query[:120]},
+        )
         return f"Search error: {str(e)[:100]}", []
     # Format content for model
     content_parts = []
