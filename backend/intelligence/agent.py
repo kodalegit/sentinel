@@ -580,9 +580,9 @@ Use the search_case_evidence tool to get the full risk analysis, then provide yo
                             node_messages = node_data.get("messages", [])
                             if not node_messages:
                                 continue
-                            msg = node_messages[-1]
 
                             if node_name == "model":
+                                msg = node_messages[-1]
                                 state, data = fsm.on_model_update(msg)
 
                                 if state == AgentState.PLANNING:
@@ -603,17 +603,19 @@ Use the search_case_evidence tool to get the full risk analysis, then provide yo
                                         final_content = data["emit_text"]
 
                             elif node_name == "tools":
-                                _state, data = fsm.on_tool_update(msg)
-                                tool_name = data.get("tool_name", "unknown")
-                                result = data.get("result", "")
+                                # Process ALL tool messages (parallel calls)
+                                for msg in node_messages:
+                                    _state, data = fsm.on_tool_update(msg)
+                                    tool_name = data.get("tool_name", "unknown")
+                                    result = data.get("result", "")
 
-                                yield ToolEndEvent(
-                                    tool=tool_name,
-                                    tool_call_id=data.get("tool_call_id", ""),
-                                    summary=self._summarize_tool_output(
-                                        tool_name, result
-                                    ),
-                                )
+                                    yield ToolEndEvent(
+                                        tool=tool_name,
+                                        tool_call_id=data.get("tool_call_id", ""),
+                                        summary=self._summarize_tool_output(
+                                            tool_name, result
+                                        ),
+                                    )
 
                                 if ctx:
                                     for i, artifact in enumerate(ctx.artifacts):

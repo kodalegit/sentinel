@@ -2,10 +2,12 @@
 
 import json
 import uuid as _uuid
+import re
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
+from langchain_core.prompts import ChatPromptTemplate
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
@@ -33,6 +35,7 @@ from intelligence.streaming import (
     ToolEndEvent,
     CitationEvent,
     DoneEvent,
+    TitleEvent,
     ErrorEvent,
 )
 from knowledge.loader import chunk_pdf_document
@@ -264,14 +267,18 @@ async def chat_stream(
     if not case_db:
         raise HTTPException(status_code=404, detail="Case not found")
 
+    agent = get_agent()
+
     thread_id = None
+    is_new_thread = False
     if body.thread_id:
         thread = await repo.get_chat_thread(db, _uuid.UUID(body.thread_id))
         if not thread or thread.user_id != current_user.id:
             raise HTTPException(status_code=404, detail="Thread not found")
         thread_id = thread.id
     else:
-        title = body.message[:80] if len(body.message) > 80 else body.message
+        is_new_thread = True
+        title = await _generate_thread_title(agent, body.message, body.action)
         thread = await repo.create_chat_thread(
             db, _uuid.UUID(case_id), current_user.id, title=title
         )
@@ -279,6 +286,7 @@ async def chat_stream(
         await db.flush()
 
     await repo.add_chat_message(db, thread_id, "user", body.message)
+    await db.commit()
 
     history = []
     if body.thread_id and thread_id:
@@ -297,14 +305,16 @@ async def chat_stream(
         )
     )
 
-    agent = get_agent()
-
     async def generate():
         final_content = ""
         final_citations: list[dict] = []
         events_log: list[dict] = []
 
         try:
+            if is_new_thread and thread.title:
+                title_event = TitleEvent(title=thread.title)
+                yield f"data: {json.dumps(title_event.to_dict())}\n\n"
+
             async for event in agent.stream(
                 message=body.message,
                 action=body.action,
@@ -350,6 +360,7 @@ async def chat_stream(
                     citations=final_citations,
                     events=events_log if events_log else None,
                 )
+
                 await db.commit()
 
             yield f"data: {json.dumps({'type': 'done', 'citations': final_citations, 'thread_id': str(thread_id) if thread_id else None})}\n\n"
@@ -366,3 +377,56 @@ async def chat_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+def _derive_thread_title(message: str, action: str) -> str:
+    """Derive a concise thread title from the first user message."""
+    normalized = " ".join((message or "").split()).strip().strip('"').strip("'")
+    if normalized:
+        if len(normalized) <= 72:
+            return normalized
+        return normalized[:69].rstrip(" ,.;:!?") + "…"
+
+    action_titles = {
+        "summary": "Case Summary",
+        "next_steps": "Next Steps",
+        "risk_analysis": "Risk Analysis",
+    }
+    return action_titles.get(action, "New Thread")
+
+
+async def _generate_thread_title(agent, user_message: str, action: str) -> str:
+    """Generate a concise thread title from the first user message using the LLM."""
+    fallback = _derive_thread_title(user_message, action)
+    if not user_message or not agent or not getattr(agent, "llm", None):
+        return fallback
+
+    truncated_query = user_message[:500]
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You generate concise, descriptive titles for chat conversations. "
+                "Capture the main intent of the user's initial query in 3-7 words. "
+                "Use clear, user-friendly language. Return only the title text.",
+            ),
+            ("human", "{query}"),
+        ]
+    )
+
+    try:
+        prompt_messages = prompt.format_messages(query=truncated_query)
+        response = await agent.llm.ainvoke(prompt_messages)
+        content = response.content
+        if isinstance(content, list):
+            content = " ".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in content
+            )
+
+        title = re.sub(r"\s+", " ", str(content).strip()).strip('"').strip("'")
+        if not title:
+            return fallback
+        return title[:80]
+    except Exception:
+        return fallback

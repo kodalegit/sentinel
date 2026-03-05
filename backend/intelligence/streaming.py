@@ -138,6 +138,15 @@ class DoneEvent(StreamEvent):
 
 
 @dataclass
+class TitleEvent(StreamEvent):
+    title: str
+    type: str = field(default="title")
+
+    def to_dict(self) -> dict:
+        return {"type": self.type, "title": self.title}
+
+
+@dataclass
 class ErrorEvent(StreamEvent):
     message: str
     code: str = "AGENT_ERROR"

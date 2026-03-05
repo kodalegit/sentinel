@@ -381,6 +381,7 @@ export type ChatStreamEventType =
   | "tool_start"
   | "tool_end"
   | "citation"
+  | "title"
   | "done"
   | "error";
 
@@ -405,6 +406,7 @@ export interface ChatStreamEvent {
   excerpt?: string;
   page?: number | null;
   chunk_id?: string;
+  // title (for new threads)
   // done
   citations?: Citation[];
   thread_id?: string;
