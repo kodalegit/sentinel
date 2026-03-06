@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback, memo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { ChatMessage, Citation, ChatStreamEvent } from "@/lib/types";
 import { useStreamChat, type ToolRecord } from "@/hooks/useStreamChat";
+import { useChatScroll } from "@/hooks/useChatScroll";
 import { OptimizedMarkdown } from "@/components/OptimizedMarkdown";
 import { Button } from "@/components/ui/button";
 import {
@@ -333,7 +334,6 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
   const [showThreads, setShowThreads] = useState(false);
   const [threadToDelete, setThreadToDelete] = useState<string | null>(null);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const syncingFromUrlRef = useRef(false);
   const lastSeenUrlThreadIdRef = useRef<string | null | undefined>(undefined);
   const router = useRouter();
@@ -358,6 +358,25 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
     runStream,
   } = useStreamChat(caseId);
 
+  const {
+    containerRef,
+    userAnchorRef,
+    showScrollToBottom,
+    scrollToBottom,
+    onScroll,
+    markShouldAnchor,
+    markInitialScroll,
+    messagesBeforeCanvas,
+    messagesInsideCanvas,
+    usePersistedAnchor,
+  } = useChatScroll({
+    messages,
+    pendingUserMessage,
+    streamingState,
+    isStreaming,
+    activeThreadId,
+  });
+
   const updateThreadUrl = useCallback(
     (threadId: string | null, mode: "push" | "replace" = "push") => {
       const params = new URLSearchParams(searchParams.toString());
@@ -376,13 +395,6 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
     [pathname, router, searchParams],
   );
 
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, []);
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, streamingState.content, streamingState.items, scrollToBottom]);
 
   useEffect(() => {
     if (!threadsLoaded) {
@@ -411,6 +423,7 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
       return;
     }
     syncingFromUrlRef.current = true;
+    markInitialScroll(normalizedThreadId);
     selectThread(normalizedThreadId);
   }, [
     threadsLoaded,
@@ -442,11 +455,13 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
     if (!input.trim() || isStreaming) return;
     const userMessage = input.trim();
     setInput("");
+    markShouldAnchor();
     await runStream(userMessage, "chat");
   };
 
   const handleSuggestedQuery = useCallback(
     (message: string) => {
+      markShouldAnchor();
       runStream(message, "chat");
     },
     [runStream],
@@ -476,21 +491,23 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
     <div className={`flex flex-col min-h-0 bg-background relative overflow-hidden ${className}`}>
       {/* Header Bar */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-border/60 bg-card/60 shrink-0 backdrop-blur-md z-10">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center p-1.5 bg-primary/10 text-primary rounded-md">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center justify-center p-1.5 bg-primary/10 text-primary rounded-md shrink-0">
             <Brain className="h-4 w-4" />
           </div>
-          <div>
-            <h2 className="text-sm font-semibold tracking-tight">Sentinel Analyst</h2>
-            <div
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">Sentinel Analyst</span>
+              <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+            </div>
+            <h2
               key={activeThreadTitle}
-              className={`flex items-center gap-1.5 text-[10px] uppercase font-mono tracking-widest text-muted-foreground mt-0.5 ${
+              className={`text-sm font-semibold tracking-tight truncate ${
                 dynamicTitle ? "animate-in fade-in duration-500" : ""
               }`}
             >
-              <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              ACTIVE : {activeThreadId ? activeThreadTitle : "NEW SESSION"}
-            </div>
+              {activeThreadId ? activeThreadTitle : "New session"}
+            </h2>
           </div>
         </div>
 
@@ -510,7 +527,10 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
             variant="ghost"
             size="icon"
             className="h-8 w-8 hover:bg-muted"
-            onClick={() => runStream("Generate a case summary", "summary")}
+            onClick={() => {
+              markShouldAnchor();
+              runStream("Generate a case summary", "summary");
+            }}
             disabled={isStreaming}
             title="Generate Case Summary"
           >
@@ -520,7 +540,10 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
             variant="ghost"
             size="icon"
             className="h-8 w-8 hover:bg-muted"
-            onClick={() => runStream("Suggest next steps", "next_steps")}
+            onClick={() => {
+              markShouldAnchor();
+              runStream("Suggest next steps", "next_steps");
+            }}
             disabled={isStreaming}
             title="Suggest Next Steps"
           >
@@ -605,8 +628,27 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
         </div>
       </div>
 
+      {showScrollToBottom && (
+        <div className="absolute bottom-32 left-1/2 z-20 -translate-x-1/2 sm:bottom-36">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-9 rounded-full border-border/70 bg-background/95 px-3 shadow-lg backdrop-blur"
+            onClick={() => scrollToBottom("smooth")}
+          >
+            <ChevronDown className="mr-1.5 h-4 w-4" />
+            <span className="text-xs">Scroll to bottom</span>
+          </Button>
+        </div>
+      )}
+
       {/* Messages Area */}
-      <div className="flex-1 min-h-0 overflow-y-auto w-full">
+      <div
+        ref={containerRef}
+        onScroll={onScroll}
+        className="flex-1 min-h-0 overflow-y-auto w-full"
+      >
         <div className="max-w-4xl mx-auto w-full p-4 sm:p-6 md:p-8 space-y-8 pb-4">
           {messages.length === 0 && !streamingState.content && !isStreaming && (
             <div className="flex flex-col items-center justify-center pt-20 pb-10 text-center opacity-80 zoom-in-95 animate-in duration-500 fade-in">
@@ -631,65 +673,87 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
             </div>
           )}
 
-          {messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} />
-          ))}
+          {messagesBeforeCanvas.map((msg, index) => {
+            const isAnchoredPersistedUser =
+              usePersistedAnchor && index === messagesBeforeCanvas.length - 1;
 
-          {/* Optimistic user message — shown immediately while streaming */}
-          {pendingUserMessage && (
-            <UserMessageBubble content={pendingUserMessage} />
-          )}
+            return (
+              <div key={msg.id}>
+                {isAnchoredPersistedUser && <div ref={userAnchorRef} aria-hidden="true" className="h-0" />}
+                <MessageBubble message={msg} />
+              </div>
+            );
+          })}
 
-          {(isStreaming || streamingState.content) && (
-            <div className="w-full px-1 sm:px-2 animate-in fade-in duration-300">
-              <div className="max-w-3xl space-y-3 text-[15px] leading-7 text-foreground/90">
-                {showWaitingIndicator && (
-                  <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                    <span className="relative flex h-3 w-3">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-3 w-3 bg-primary"></span>
-                    </span>
-                    Thinking...
-                  </div>
-                )}
+          {(pendingUserMessage || isStreaming || streamingState.content) && (
+            <div className="min-h-[45vh] sm:min-h-[50vh]">
+              {pendingUserMessage && (
+                <div>
+                  <div ref={userAnchorRef} aria-hidden="true" className="h-0" />
+                  <UserMessageBubble content={pendingUserMessage} />
+                </div>
+              )}
 
-                {streamingState.items.map((item, i) => {
-                  if (item.kind === "reasoning") {
-                    return (
-                      <p key={i} className="text-xs text-muted-foreground/80 italic leading-relaxed">
-                        {item.text}
-                      </p>
-                    );
-                  }
-                  return <ToolCard key={item.record.toolCallId} record={item.record} />;
-                })}
+              {messagesInsideCanvas.map((msg) => (
+                <MessageBubble key={msg.id} message={msg} />
+              ))}
 
-                {showProcessingIndicator && (
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground pt-1">
-                    <Loader2 className="h-3 w-3 animate-spin text-primary" />
-                    <span>Generating response...</span>
-                  </div>
-                )}
+              {(isStreaming || streamingState.content) && (
+                <div className="w-full px-1 sm:px-2 animate-in fade-in duration-300">
+                  <div className="max-w-3xl space-y-3 text-[15px] leading-7 text-foreground/90">
+                    {showWaitingIndicator && (
+                      <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                        <span className="relative flex h-3 w-3">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-3 w-3 bg-primary"></span>
+                        </span>
+                        Thinking...
+                      </div>
+                    )}
 
-                {streamingState.content && (
-                  <div className="mt-1">
-                    <OptimizedMarkdown
-                      content={streamingState.content}
-                      citations={streamingState.citations}
-                    />
-                    {!streamingState.isComplete && (
-                      <span className="inline-block w-2 h-4 bg-primary/70 animate-pulse ml-[2px] align-middle rounded-sm" />
+                    {streamingState.items.map((item, i) => {
+                      if (item.kind === "reasoning") {
+                        return (
+                          <p key={i} className="text-xs text-muted-foreground/80 italic leading-relaxed">
+                            {item.text}
+                          </p>
+                        );
+                      }
+                      return <ToolCard key={item.record.toolCallId} record={item.record} />;
+                    })}
+
+                    {showProcessingIndicator && (
+                      <div className="flex items-center gap-2.5 pt-1 text-xs text-muted-foreground/85">
+                        <div className="flex items-center gap-1">
+                          <span className="h-1.5 w-1.5 rounded-full bg-primary/80 animate-bounce [animation-delay:-0.2s]"></span>
+                          <span className="h-1.5 w-1.5 rounded-full bg-primary/70 animate-bounce [animation-delay:-0.1s]"></span>
+                          <span className="h-1.5 w-1.5 rounded-full bg-primary/60 animate-bounce"></span>
+                        </div>
+                        <span>Preparing final answer</span>
+                      </div>
+                    )}
+
+                    {streamingState.content && (
+                      <div className="mt-1">
+                        <OptimizedMarkdown
+                          content={streamingState.content}
+                          citations={streamingState.citations}
+                        />
+                        {!streamingState.isComplete && (
+                          <span className="inline-block w-2 h-4 bg-primary/70 animate-pulse ml-[2px] align-middle rounded-sm" />
+                        )}
+                      </div>
+                    )}
+
+                    {streamingState.isComplete && streamingState.citations.size > 0 && (
+                      <SourcesButton citations={Array.from(streamingState.citations.values())} />
                     )}
                   </div>
-                )}
-
-                {streamingState.isComplete && streamingState.citations.size > 0 && (
-                  <SourcesButton citations={Array.from(streamingState.citations.values())} />
-                )}
-              </div>
+                </div>
+              )}
             </div>
           )}
-          <div ref={messagesEndRef} className="h-1" />
+          <div className="h-1" />
         </div>
       </div>
 

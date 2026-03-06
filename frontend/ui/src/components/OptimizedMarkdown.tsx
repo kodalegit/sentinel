@@ -18,6 +18,46 @@ interface OptimizedMarkdownProps {
 
 const CITATION_LINK_PREFIX = "citation://";
 
+type CitationTone = {
+  button: string;
+  badge: string;
+  link: string;
+};
+
+function getCitationTone(category?: string | null): CitationTone {
+  const normalized = (category || "").toUpperCase();
+
+  if (normalized.includes("RISK")) {
+    return {
+      button: "bg-amber-500/12 text-amber-700 hover:bg-amber-500/18 dark:bg-amber-400/18 dark:text-amber-200 dark:hover:bg-amber-400/24",
+      badge: "bg-amber-500/12 text-amber-700 dark:bg-amber-400/18 dark:text-amber-200",
+      link: "text-muted-foreground hover:text-amber-700 dark:hover:text-amber-200",
+    };
+  }
+
+  if (normalized.includes("CASE_LAW") || normalized.includes("LAW") || normalized.includes("REGULATION") || normalized.includes("GUIDELINE") || normalized.includes("LEGAL")) {
+    return {
+      button: "bg-emerald-500/12 text-emerald-700 hover:bg-emerald-500/18 dark:bg-emerald-400/18 dark:text-emerald-200 dark:hover:bg-emerald-400/24",
+      badge: "bg-emerald-500/12 text-emerald-700 dark:bg-emerald-400/18 dark:text-emerald-200",
+      link: "text-muted-foreground hover:text-emerald-700 dark:hover:text-emerald-200",
+    };
+  }
+
+  if (normalized.includes("CASE_RECORD") || normalized.includes("TENDER") || normalized.includes("DOCUMENT")) {
+    return {
+      button: "bg-sky-500/12 text-sky-700 hover:bg-sky-500/18 dark:bg-sky-400/18 dark:text-sky-200 dark:hover:bg-sky-400/24",
+      badge: "bg-sky-500/12 text-sky-700 dark:bg-sky-400/18 dark:text-sky-200",
+      link: "text-muted-foreground hover:text-sky-700 dark:hover:text-sky-200",
+    };
+  }
+
+  return {
+    button: "bg-primary/10 text-primary hover:bg-primary/18 dark:bg-primary/20 dark:hover:bg-primary/30",
+    badge: "bg-primary/10 text-primary",
+    link: "text-muted-foreground hover:text-primary",
+  };
+}
+
 function citationUrlTransform(url: string): string {
   if (url.startsWith(CITATION_LINK_PREFIX)) {
     return url;
@@ -77,13 +117,15 @@ function InlineCitation({ marker, citation }: { marker: number; citation?: Citat
     );
   }
 
+  const tone = getCitationTone(citation.category);
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <button
           type="button"
           aria-label={`View citation ${marker}`}
-          className="mx-0.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] bg-primary/10 px-1 align-baseline font-sans text-[10px] font-medium leading-none text-primary shadow-sm transition-colors hover:bg-primary/20 dark:bg-primary/20 dark:hover:bg-primary/30"
+          className={`mx-0.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] px-1 align-baseline font-sans text-[10px] font-medium leading-none shadow-sm transition-colors ${tone.button}`}
         >
           {marker}
         </button>
@@ -98,14 +140,14 @@ function InlineCitation({ marker, citation }: { marker: number; citation?: Citat
           <p className="text-xs font-semibold leading-snug text-foreground">
             {citation.title || `Source ${marker}`}
           </p>
-          
+
           <div className="space-y-1.5">
             <div>
-              <span className="inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+              <span className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium ${tone.badge}`}>
                 {citation.category || "Source"}
               </span>
             </div>
-            
+
             {citation.page && (
               <p className="text-[11px] text-muted-foreground">
                 Page {citation.page}
@@ -118,7 +160,7 @@ function InlineCitation({ marker, citation }: { marker: number; citation?: Citat
               href={citation.source_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors"
+              className={`inline-flex items-center gap-1.5 text-[11px] font-medium transition-colors ${tone.link}`}
             >
               View source
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
