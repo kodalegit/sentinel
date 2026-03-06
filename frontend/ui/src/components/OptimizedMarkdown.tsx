@@ -18,6 +18,27 @@ interface OptimizedMarkdownProps {
 
 const CITATION_LINK_PREFIX = "citation://";
 
+function citationUrlTransform(url: string): string {
+  if (url.startsWith(CITATION_LINK_PREFIX)) {
+    return url;
+  }
+  // Inline the safe-protocol check from react-markdown's defaultUrlTransform
+  const colon = url.indexOf(":");
+  const questionMark = url.indexOf("?");
+  const numberSign = url.indexOf("#");
+  const slash = url.indexOf("/");
+  if (
+    colon === -1 ||
+    (slash !== -1 && colon > slash) ||
+    (questionMark !== -1 && colon > questionMark) ||
+    (numberSign !== -1 && colon > numberSign) ||
+    /^(https?|ircs?|mailto|xmpp)$/i.test(url.slice(0, colon))
+  ) {
+    return url;
+  }
+  return "";
+}
+
 function normalizeCitations(
   citations?: Citation[] | Map<number, Citation>,
 ): Map<number, Citation> {
@@ -48,12 +69,10 @@ function linkifyCitationMarkers(markdown: string): string {
 }
 
 function InlineCitation({ marker, citation }: { marker: number; citation?: Citation }) {
-  const label = `[${marker}]`;
-
   if (!citation) {
     return (
-      <span className="mx-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-[6px] border border-border/70 bg-muted/70 px-1.5 align-baseline font-mono text-[10px] font-semibold leading-none text-amber-700 dark:text-amber-300">
-        {label}
+      <span className="mx-0.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] border border-border/70 bg-muted/70 px-1 align-baseline font-sans text-[10px] font-medium leading-none text-muted-foreground">
+        {marker}
       </span>
     );
   }
@@ -64,43 +83,49 @@ function InlineCitation({ marker, citation }: { marker: number; citation?: Citat
         <button
           type="button"
           aria-label={`View citation ${marker}`}
-          className="mx-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-[6px] border border-border/70 bg-muted/80 px-1.5 align-baseline font-mono text-[10px] font-semibold leading-none text-amber-700 shadow-sm transition-colors hover:bg-muted dark:text-amber-300"
+          className="mx-0.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] bg-primary/10 px-1 align-baseline font-sans text-[10px] font-medium leading-none text-primary shadow-sm transition-colors hover:bg-primary/20 dark:bg-primary/20 dark:hover:bg-primary/30"
         >
-          {label}
+          {marker}
         </button>
       </TooltipTrigger>
       <TooltipContent
         side="top"
-        align="start"
-        sideOffset={8}
-        className="max-w-[18rem] rounded-xl border border-border/80 bg-popover px-3 py-2.5 text-left text-popover-foreground shadow-xl [&>svg]:hidden"
+        align="center"
+        sideOffset={6}
+        className="max-w-[16rem] rounded-lg border border-border/80 bg-popover/95 px-3.5 py-3 text-left text-popover-foreground shadow-xl backdrop-blur-md"
       >
-        <div className="space-y-2">
-          <div className="space-y-1">
-            <div className="flex items-center gap-1.5">
-              <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-[6px] bg-amber-500/10 px-1.5 font-mono text-[10px] font-semibold leading-none text-amber-700 dark:text-amber-300">
-                {marker}
+        <div className="space-y-2.5">
+          <p className="text-xs font-semibold leading-snug text-foreground">
+            {citation.title || `Source ${marker}`}
+          </p>
+          
+          <div className="space-y-1.5">
+            <div>
+              <span className="inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                {citation.category || "Source"}
               </span>
-              <p className="min-w-0 text-xs font-semibold leading-snug">{citation.title || `Source ${marker}`}</p>
             </div>
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-              {citation.category || "source"}
-              {citation.page ? ` · Page ${citation.page}` : ""}
-            </p>
+            
+            {citation.page && (
+              <p className="text-[11px] text-muted-foreground">
+                Page {citation.page}
+              </p>
+            )}
           </div>
-
-          {citation.excerpt && (
-            <p className="text-[11px] leading-relaxed text-muted-foreground">{citation.excerpt}</p>
-          )}
 
           {citation.source_url && (
             <a
               href={citation.source_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex text-[11px] font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              className="inline-flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors"
             >
               View source
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <line x1="10" y1="14" x2="21" y2="3"></line>
+              </svg>
             </a>
           )}
         </div>
@@ -198,7 +223,7 @@ const MemoizedMarkdownBlock = memo(
 
     return (
       <div className="prose prose-slate dark:prose-invert max-w-none text-sm leading-relaxed">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents} urlTransform={citationUrlTransform}>
           {content}
         </ReactMarkdown>
       </div>
