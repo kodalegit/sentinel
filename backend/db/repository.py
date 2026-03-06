@@ -803,6 +803,17 @@ async def create_chat_thread(
     return thread
 
 
+async def delete_chat_thread(db: AsyncSession, thread_id: uuid.UUID) -> bool:
+    """Delete a chat thread by ID."""
+    thread = await db.get(ChatThreadDB, thread_id)
+    if not thread:
+        return False
+
+    await db.delete(thread)
+    await db.flush()
+    return True
+
+
 async def get_thread_messages(
     db: AsyncSession, thread_id: uuid.UUID, limit: int | None = None
 ) -> list[ChatMessageDB]:

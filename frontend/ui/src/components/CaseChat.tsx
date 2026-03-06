@@ -1,20 +1,25 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  getChatThreads,
-  getThreadMessages,
-  streamChat,
-  type StreamAction,
-} from "@/lib/api";
+import { useState, useRef, useEffect, useCallback, memo } from "react";
 import type { ChatMessage, Citation, ChatStreamEvent } from "@/lib/types";
+import { useStreamChat, type ToolRecord } from "@/hooks/useStreamChat";
+import { OptimizedMarkdown } from "@/components/OptimizedMarkdown";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Collapsible,
   CollapsibleContent,
@@ -24,8 +29,6 @@ import {
   MessageSquare,
   Send,
   Loader2,
-  Bot,
-  User,
   Sparkles,
   ListChecks,
   ExternalLink,
@@ -36,6 +39,7 @@ import {
   FileText,
   Brain,
   CheckCircle2,
+  Trash2,
   Terminal,
   BookOpen,
 } from "lucide-react";
@@ -49,47 +53,16 @@ interface CaseChatProps {
   className?: string;
 }
 
-// A merged tool record: one entry per toolCallId, transitions from running→complete
-interface ToolRecord {
-  tool: string;
-  toolCallId: string;
-  status: "running" | "complete";
-  input?: Record<string, unknown>;
-  summary?: string;
-}
-
-// Interleaved stream items for Claude-style inline display
-type StreamItem =
-  | { kind: "reasoning"; text: string }
-  | { kind: "tool"; record: ToolRecord };
-
-interface StreamingState {
-  content: string;
-  items: StreamItem[];
-  citations: Map<number, Citation>;
-  isComplete: boolean;
-}
-
-const initialStreamingState: StreamingState = {
-  content: "",
-  items: [],
-  citations: new Map(),
-  isComplete: false,
-};
-
 // Helper to extract query from tool input
-function getToolQuery(tool: string, input?: Record<string, unknown>): string | null {
+function getToolQuery(input?: Record<string, unknown>): string | null {
   if (!input) return null;
-  // Most tools have a 'query' param
   if (typeof input.query === "string") return input.query;
-  // Fallback to first string value
   for (const val of Object.values(input)) {
     if (typeof val === "string" && val.length > 0 && val.length < 200) return val;
   }
   return null;
 }
 
-// Truncate summary for collapsed view
 function truncateSummary(text: string, maxLen = 120): string {
   if (text.length <= maxLen) return text;
   return text.slice(0, maxLen).trimEnd() + "…";
@@ -193,10 +166,10 @@ function SourcesButton({ citations }: { citations: Citation[] }) {
 // Inline tool card (Claude-style) — used during streaming
 // ---------------------------------------------------------------------------
 
-function ToolCard({ record }: { record: ToolRecord }) {
+const ToolCard = memo(function ToolCard({ record }: { record: ToolRecord }) {
   const [expanded, setExpanded] = useState(false);
   const isRunning = record.status === "running";
-  const query = getToolQuery(record.tool, record.input);
+  const query = getToolQuery(record.input);
 
   return (
     <div className="my-2 rounded-lg border border-border/50 bg-muted/20 overflow-hidden transition-all">
@@ -219,8 +192,8 @@ function ToolCard({ record }: { record: ToolRecord }) {
               <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" />
             )}
           </div>
-          {/* Show query while running */}
-          {query && isRunning && (
+          {/* Show query input for the tool call */}
+          {query && (
             <p className="text-[11px] text-muted-foreground/70 mt-1 truncate">
               &quot;{query}&quot;
             </p>
@@ -245,7 +218,7 @@ function ToolCard({ record }: { record: ToolRecord }) {
       )}
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Persisted events section (collapsed when loading existing chat)
@@ -255,7 +228,14 @@ function PersistedEventsSection({ events }: { events: ChatStreamEvent[] }) {
   const [open, setOpen] = useState(false);
   if (!events || events.length === 0) return null;
 
-  // Deduplicate: only show tool_end events (which have summaries)
+  // Build a map of tool_start inputs keyed by tool_call_id
+  const toolInputMap = new Map<string, Record<string, unknown>>();
+  for (const e of events) {
+    if (e.type === "tool_start" && e.tool_call_id && e.input) {
+      toolInputMap.set(e.tool_call_id, e.input);
+    }
+  }
+
   const toolEndEvents = events.filter((e) => e.type === "tool_end");
   const reasoningEvents = events.filter((e) => e.type === "reasoning");
   const totalOps = toolEndEvents.length;
@@ -272,7 +252,6 @@ function PersistedEventsSection({ events }: { events: ChatStreamEvent[] }) {
       </CollapsibleTrigger>
 
       <CollapsibleContent className="mt-1 space-y-1">
-        {/* Interleave reasoning and tools in order */}
         {events.map((event, i) => {
           if (event.type === "reasoning" && event.content) {
             return (
@@ -282,6 +261,9 @@ function PersistedEventsSection({ events }: { events: ChatStreamEvent[] }) {
             );
           }
           if (event.type === "tool_end") {
+            const input = event.tool_call_id
+              ? toolInputMap.get(event.tool_call_id)
+              : undefined;
             return (
               <ToolCard
                 key={i}
@@ -290,6 +272,7 @@ function PersistedEventsSection({ events }: { events: ChatStreamEvent[] }) {
                   toolCallId: event.tool_call_id || String(i),
                   status: "complete",
                   summary: event.summary,
+                  input,
                 }}
               />
             );
@@ -302,85 +285,69 @@ function PersistedEventsSection({ events }: { events: ChatStreamEvent[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Message bubble
+// Message bubble (memoized)
 // ---------------------------------------------------------------------------
 
-function MessageBubble({ message }: { message: ChatMessage }) {
-  const isUser = message.role === "user";
-  const citationsList = message.citations || [];
-
+function UserMessageBubble({ content }: { content: string }) {
   return (
-    <div className={`flex gap-4 w-full ${isUser ? "flex-row-reverse" : ""}`}>
-      {/* Avatar */}
-      <div
-        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border shadow-sm ${
-          isUser
-            ? "bg-foreground text-background border-foreground"
-            : "bg-primary/10 text-primary border-primary/20"
-        }`}
-      >
-        {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
-      </div>
-
-      {/* Content */}
-      <div className={`flex flex-col max-w-[85%] ${isUser ? "items-end" : "items-start"}`}>
-        <span className="text-[10px] font-mono font-medium text-muted-foreground mb-1.5 tracking-wider uppercase">
-          {isUser ? "Investigator" : "Sentinel AI"}
-        </span>
-
-        <div
-          className={`px-5 py-3.5 shadow-sm text-[14px] leading-relaxed ${
-            isUser
-              ? "bg-foreground text-background rounded-l-2xl rounded-tr-2xl"
-              : "bg-card border border-border/80 rounded-r-2xl rounded-tl-2xl shadow-sm"
-          }`}
-        >
-          {/* Persisted tool events — collapsed */}
-          {!isUser && message.events && message.events.length > 0 && (
-            <PersistedEventsSection events={message.events} />
-          )}
-
-          {/* Text Content */}
-          <div className={`whitespace-pre-wrap ${isUser ? "text-background/90" : "text-foreground/90"}`}>
-            {message.content}
-          </div>
-
-          {/* Sources button (replaces inline citation badges) */}
-          {!isUser && citationsList.length > 0 && (
-            <SourcesButton citations={citationsList} />
-          )}
-        </div>
+    <div className="flex justify-end w-full">
+      <div className="max-w-[75%] rounded-3xl bg-muted px-4 py-3 text-[14px] leading-relaxed text-foreground shadow-sm">
+        <div className="whitespace-pre-wrap">{content}</div>
       </div>
     </div>
   );
 }
+
+const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMessage }) {
+  const isUser = message.role === "user";
+  const citationsList = message.citations || [];
+
+  if (isUser) {
+    return <UserMessageBubble content={message.content} />;
+  }
+
+  return (
+    <div className="w-full px-1 sm:px-2">
+      <div className="max-w-3xl space-y-3 text-[15px] leading-7 text-foreground/90">
+        {message.events && message.events.length > 0 && (
+          <PersistedEventsSection events={message.events} />
+        )}
+
+        <OptimizedMarkdown content={message.content} />
+
+        {citationsList.length > 0 && <SourcesButton citations={citationsList} />}
+      </div>
+    </div>
+  );
+});
 
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
 export function CaseChat({ caseId, className = "" }: CaseChatProps) {
-  const queryClient = useQueryClient();
   const [input, setInput] = useState("");
-  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
-  const [streamingState, setStreamingState] = useState<StreamingState>(initialStreamingState);
-  const [isStreaming, setIsStreaming] = useState(false);
   const [showThreads, setShowThreads] = useState(false);
-  const [pendingUserMessage, setPendingUserMessage] = useState<string | null>(null);
+  const [threadToDelete, setThreadToDelete] = useState<string | null>(null);
+  const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const finalContentRef = useRef("");
 
-  const { data: threads = [] } = useQuery({
-    queryKey: ["chat-threads", caseId],
-    queryFn: () => getChatThreads(caseId),
-  });
-
-  const { data: messages = [], refetch: refetchMessages } = useQuery({
-    queryKey: ["chat-messages", caseId, activeThreadId],
-    queryFn: () =>
-      activeThreadId ? getThreadMessages(caseId, activeThreadId) : Promise.resolve([]),
-    enabled: !!activeThreadId,
-  });
+  const {
+    threads,
+    messages,
+    activeThreadId,
+    activeThreadTitle,
+    streamingState,
+    isStreaming,
+    pendingUserMessage,
+    dynamicTitle,
+    showWaitingIndicator,
+    showProcessingIndicator,
+    selectThread,
+    deleteThread,
+    runStream,
+    handleNewThread: handleNewThreadBase,
+  } = useStreamChat(caseId);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -390,147 +357,39 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
     scrollToBottom();
   }, [messages, streamingState.content, streamingState.items, scrollToBottom]);
 
-  // -----------------------------------------------------------------------
-  // Stream event handler — builds interleaved items array
-  // -----------------------------------------------------------------------
-  const handleStreamEvent = useCallback((event: ChatStreamEvent) => {
-    setStreamingState((prev) => {
-      const next = { ...prev };
-
-      switch (event.type) {
-        case "token":
-          next.content += event.delta || "";
-          finalContentRef.current += event.delta || "";
-          break;
-
-        case "reasoning": {
-          // Append reasoning as an interleaved item
-          const text = event.content || "";
-          if (text) {
-            next.items = [...prev.items, { kind: "reasoning", text }];
-          }
-          break;
-        }
-
-        case "tool_start": {
-          // Add a new tool record in "running" state
-          const record: ToolRecord = {
-            tool: event.tool || "unknown",
-            toolCallId: event.tool_call_id || "",
-            status: "running",
-            input: event.input,
-          };
-          next.items = [...prev.items, { kind: "tool", record }];
-          break;
-        }
-
-        case "tool_end": {
-          // Update the existing tool record to "complete"
-          next.items = prev.items.map((item) => {
-            if (item.kind === "tool" && item.record.toolCallId === event.tool_call_id) {
-              return {
-                ...item,
-                record: { ...item.record, status: "complete" as const, summary: event.summary },
-              };
-            }
-            return item;
-          });
-          break;
-        }
-
-        case "citation":
-          if (event.marker !== undefined) {
-            const newCitations = new Map(prev.citations);
-            newCitations.set(event.marker, {
-              marker: event.marker,
-              doc_id: event.doc_id || "",
-              title: event.title || "",
-              source_url: event.source_url || null,
-              category: event.category || "",
-              excerpt: event.excerpt || "",
-              page: event.page || null,
-              chunk_id: event.chunk_id || "",
-            });
-            next.citations = newCitations;
-          }
-          break;
-
-        case "done":
-          next.isComplete = true;
-          if (event.citations) {
-            const newCitations = new Map(prev.citations);
-            for (const c of event.citations) {
-              newCitations.set(c.marker, c);
-            }
-            next.citations = newCitations;
-          }
-          break;
-
-        case "error":
-          console.error("Stream error:", event.message);
-          break;
-      }
-
-      return next;
-    });
-  }, []);
-
-  const runStream = useCallback(
-    async (message: string, action: StreamAction) => {
-      setIsStreaming(true);
-      setStreamingState(initialStreamingState);
-      finalContentRef.current = "";
-
-      try {
-        for await (const event of streamChat(caseId, message, {
-          threadId: activeThreadId || undefined,
-          action,
-        })) {
-          handleStreamEvent(event);
-
-          if (event.type === "done") {
-            if (event.thread_id && !activeThreadId) {
-              setActiveThreadId(event.thread_id);
-            }
-            queryClient.invalidateQueries({ queryKey: ["chat-threads", caseId] });
-            refetchMessages();
-          }
-        }
-      } catch (error) {
-        console.error("Stream error:", error);
-      } finally {
-        setIsStreaming(false);
-        setStreamingState(initialStreamingState);
-        setPendingUserMessage(null);
-      }
-    },
-    [caseId, activeThreadId, queryClient, refetchMessages, handleStreamEvent]
-  );
-
   const handleSend = async () => {
     if (!input.trim() || isStreaming) return;
     const userMessage = input.trim();
     setInput("");
-    setPendingUserMessage(userMessage);
     await runStream(userMessage, "chat");
   };
 
-  const handleNewThread = () => {
-    setActiveThreadId(null);
-    setShowThreads(false);
-  };
-
-  const activeThreadTitle = threads.find((t) => t.id === activeThreadId)?.title || "Current Session";
-
-  // Check if there are any tool items currently running
-  const hasRunningTools = streamingState.items.some(
-    (item) => item.kind === "tool" && item.record.status === "running"
+  const handleSuggestedQuery = useCallback(
+    (message: string) => {
+      runStream(message, "chat");
+    },
+    [runStream],
   );
-  const hasAnyItems = streamingState.items.length > 0;
-  // Show waiting indicator: streaming but no content and no items yet, OR all tools done but no content yet
-  const showWaitingIndicator = isStreaming && !streamingState.content && !hasAnyItems;
-  // Show "processing" indicator after tools complete but before answer starts
-  const showProcessingIndicator = isStreaming && !streamingState.content && hasAnyItems && !hasRunningTools;
+
+  const handleNewThread = useCallback(() => {
+    handleNewThreadBase();
+    setShowThreads(false);
+  }, [handleNewThreadBase]);
+
+  const handleDeleteThread = useCallback(
+    async (threadId: string) => {
+      try {
+        setDeletingThreadId(threadId);
+        await deleteThread(threadId);
+      } catch (error) {
+        console.error("Failed to delete chat thread:", error);
+      } finally {
+        setDeletingThreadId(null);
+        setThreadToDelete(null);
+      }
+    },
+    [deleteThread],
+  );
 
   return (
     <div className={`flex flex-col min-h-0 bg-background relative overflow-hidden ${className}`}>
@@ -542,7 +401,12 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
           </div>
           <div>
             <h2 className="text-sm font-semibold tracking-tight">Sentinel Analyst</h2>
-            <div className="flex items-center gap-1.5 text-[10px] uppercase font-mono tracking-widest text-muted-foreground mt-0.5">
+            <div
+              key={activeThreadTitle}
+              className={`flex items-center gap-1.5 text-[10px] uppercase font-mono tracking-widest text-muted-foreground mt-0.5 ${
+                dynamicTitle ? "animate-in fade-in duration-500" : ""
+              }`}
+            >
               <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
               ACTIVE : {activeThreadId ? activeThreadTitle : "NEW SESSION"}
             </div>
@@ -551,10 +415,21 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
 
         <div className="flex items-center gap-2 text-muted-foreground">
           <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs font-medium"
+            onClick={handleNewThread}
+            disabled={isStreaming}
+          >
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            New chat
+          </Button>
+
+          <Button
             variant="ghost"
             size="icon"
             className="h-8 w-8 hover:bg-muted"
-            onClick={() => runStream("", "summary")}
+            onClick={() => runStream("Generate a case summary", "summary")}
             disabled={isStreaming}
             title="Generate Case Summary"
           >
@@ -564,7 +439,7 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
             variant="ghost"
             size="icon"
             className="h-8 w-8 hover:bg-muted"
-            onClick={() => runStream("", "next_steps")}
+            onClick={() => runStream("Suggest next steps", "next_steps")}
             disabled={isStreaming}
             title="Suggest Next Steps"
           >
@@ -573,63 +448,78 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
 
           <div className="h-4 w-px bg-border/80 mx-1"></div>
 
-          <div className="relative">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 font-mono text-xs"
-              onClick={() => setShowThreads(!showThreads)}
+          <Popover open={showThreads} onOpenChange={setShowThreads}>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 font-mono text-xs"
+              >
+                History <ChevronDown className={`ml-1 h-3 w-3 transition-transform ${showThreads ? "rotate-180" : ""}`} />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              sideOffset={8}
+              className="w-72 p-0 overflow-hidden border-border bg-card shadow-2xl"
             >
-              History <ChevronDown className={`ml-1 h-3 w-3 transition-transform ${showThreads ? "rotate-180" : ""}`} />
-            </Button>
-
-            {showThreads && (
-              <div className="absolute right-0 top-full mt-2 w-72 rounded-xl border border-border shadow-2xl bg-card z-50 overflow-hidden">
-                <div className="p-2 border-b bg-muted/30">
-                  <Button
-                    variant="default"
-                    size="sm"
-                    className="w-full justify-start text-xs font-semibold h-8"
-                    onClick={handleNewThread}
-                  >
-                    <Plus className="h-3 w-3 mr-2" />
-                    New Investigation Thread
-                  </Button>
-                </div>
-                <div className="max-h-[300px] overflow-y-auto">
-                  {threads.length === 0 ? (
-                    <div className="p-6 text-sm text-muted-foreground text-center flex flex-col items-center gap-2">
-                      <MessageSquare className="h-8 w-8 opacity-20" />
-                      No past threads
-                    </div>
-                  ) : (
-                    <div className="p-1">
-                      {threads.map((thread) => (
+              <div className="max-h-[320px] overflow-y-auto">
+                {threads.length === 0 ? (
+                  <div className="p-6 text-sm text-muted-foreground text-center flex flex-col items-center gap-2">
+                    <MessageSquare className="h-8 w-8 opacity-20" />
+                    No past threads
+                  </div>
+                ) : (
+                  <div className="p-1">
+                    {threads.map((thread) => (
+                      <div
+                        key={thread.id}
+                        className={`flex items-start gap-1 rounded-md border transition-colors ${
+                          activeThreadId === thread.id
+                            ? "bg-primary/10 text-primary border-primary/20"
+                            : "border-transparent hover:bg-muted/60"
+                        }`}
+                      >
                         <button
-                          key={thread.id}
+                          type="button"
                           onClick={() => {
-                            setActiveThreadId(thread.id);
+                            selectThread(thread.id);
                             setShowThreads(false);
                           }}
-                          className={`w-full px-3 py-2.5 text-left text-sm rounded-md transition-colors ${
-                            activeThreadId === thread.id
-                              ? "bg-primary/10 text-primary border border-primary/20"
-                              : "hover:bg-muted/60 border border-transparent"
-                          }`}
+                          className="min-w-0 flex-1 px-3 py-2.5 text-left text-sm"
                         >
                           <p className="font-medium truncate text-[13px]">{thread.title || "Untitled"}</p>
-                          <div className="flex justify-between items-center mt-1">
+                          <div className="flex justify-between items-center mt-1 gap-2">
                             <span className="text-[10px] font-mono text-muted-foreground uppercase">{thread.message_count} msgs</span>
-                            <span className="text-[10px] text-muted-foreground">{new Date(thread.created_at || Date.now()).toLocaleDateString()}</span>
+                            <span className="text-[10px] text-muted-foreground">
+                              {thread.created_at
+                                ? new Date(thread.created_at).toLocaleDateString()
+                                : ""}
+                            </span>
                           </div>
                         </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setThreadToDelete(thread.id)}
+                          disabled={deletingThreadId === thread.id || isStreaming}
+                          className="mr-1 mt-1 shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                          aria-label={`Delete ${thread.title || "chat thread"}`}
+                          title="Delete thread"
+                        >
+                          {deletingThreadId === thread.id ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </PopoverContent>
+          </Popover>
         </div>
       </div>
 
@@ -646,13 +536,13 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
                 I can analyze evidence, verify legal compliance, extract insights, and formulate investigation next steps.
               </p>
               <div className="mt-8 grid grid-cols-1 gap-2 w-full max-w-sm">
-                <Button variant="outline" className="text-xs h-9 justify-start" onClick={() => runStream("Summarize the main risk factors in this case", "chat")}>
+                <Button variant="outline" className="text-xs h-9 justify-start" onClick={() => handleSuggestedQuery("Summarize the main risk factors in this case")}>
                   <Sparkles className="mr-2 h-3.5 w-3.5 text-primary" /> Summarize risk factors
                 </Button>
-                <Button variant="outline" className="text-xs h-9 justify-start" onClick={() => runStream("Find legal grounds to dismiss this case", "chat")}>
+                <Button variant="outline" className="text-xs h-9 justify-start" onClick={() => handleSuggestedQuery("Find legal grounds to dismiss this case")}>
                   <FileText className="mr-2 h-3.5 w-3.5 text-emerald-500" /> Find legal precedents
                 </Button>
-                <Button variant="outline" className="text-xs h-9 justify-start" onClick={() => runStream("List the submitted evidence", "chat")}>
+                <Button variant="outline" className="text-xs h-9 justify-start" onClick={() => handleSuggestedQuery("List the submitted evidence")}>
                   <Search className="mr-2 h-3.5 w-3.5 text-amber-500" /> Review evidence
                 </Button>
               </div>
@@ -665,79 +555,52 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
 
           {/* Optimistic user message — shown immediately while streaming */}
           {pendingUserMessage && (
-            <div className="flex gap-4 w-full flex-row-reverse">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border shadow-sm bg-foreground text-background border-foreground">
-                <User className="h-4 w-4" />
-              </div>
-              <div className="flex flex-col max-w-[85%] items-end">
-                <span className="text-[10px] font-mono font-medium text-muted-foreground mb-1.5 tracking-wider uppercase">
-                  Investigator
-                </span>
-                <div className="px-5 py-3.5 shadow-sm text-[14px] leading-relaxed bg-foreground text-background rounded-l-2xl rounded-tr-2xl">
-                  <div className="whitespace-pre-wrap text-background/90">
-                    {pendingUserMessage}
-                  </div>
-                </div>
-              </div>
-            </div>
+            <UserMessageBubble content={pendingUserMessage} />
           )}
 
-          {/* Streaming Response — Claude-style interleaved layout */}
-          {isStreaming && (
-            <div className="flex gap-4 w-full">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-primary/20 bg-primary/10 text-primary shadow-sm">
-                <Bot className="h-4 w-4" />
-              </div>
-              <div className="flex flex-col max-w-[85%] items-start w-full">
-                <span className="text-[10px] font-mono font-medium text-muted-foreground mb-1.5 tracking-wider uppercase">
-                  Sentinel AI
-                </span>
+          {(isStreaming || streamingState.content) && (
+            <div className="w-full px-1 sm:px-2 animate-in fade-in duration-300">
+              <div className="max-w-3xl space-y-3 text-[15px] leading-7 text-foreground/90">
+                {showWaitingIndicator && (
+                  <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                    <span className="relative flex h-3 w-3">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-primary"></span>
+                    </span>
+                    Thinking...
+                  </div>
+                )}
 
-                <div className="w-full px-5 py-3.5 text-[14px] leading-relaxed bg-card border border-border/80 rounded-r-2xl rounded-tl-2xl shadow-sm">
-                  {/* Waiting indicator — before any events arrive */}
-                  {showWaitingIndicator && (
-                    <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                      <span className="relative flex h-3 w-3">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-3 w-3 bg-primary"></span>
-                      </span>
-                      Thinking...
-                    </div>
-                  )}
+                {streamingState.items.map((item, i) => {
+                  if (item.kind === "reasoning") {
+                    return (
+                      <p key={i} className="text-xs text-muted-foreground/80 italic leading-relaxed">
+                        {item.text}
+                      </p>
+                    );
+                  }
+                  return <ToolCard key={item.record.toolCallId} record={item.record} />;
+                })}
 
-                  {/* Interleaved reasoning + tool cards */}
-                  {streamingState.items.map((item, i) => {
-                    if (item.kind === "reasoning") {
-                      return (
-                        <p key={i} className="text-xs text-muted-foreground/80 italic my-2 leading-relaxed">
-                          {item.text}
-                        </p>
-                      );
-                    }
-                    return <ToolCard key={item.record.toolCallId} record={item.record} />;
-                  })}
+                {showProcessingIndicator && (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground pt-1">
+                    <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                    <span>Generating response...</span>
+                  </div>
+                )}
 
-                  {/* Processing indicator — after tools complete but before answer */}
-                  {showProcessingIndicator && (
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground mt-3 pt-2 border-t border-border/30">
-                      <Loader2 className="h-3 w-3 animate-spin text-primary" />
-                      <span>Generating response...</span>
-                    </div>
-                  )}
-
-                  {/* Streamed answer text */}
-                  {streamingState.content && (
-                    <div className="whitespace-pre-wrap text-foreground/90 mt-1">
-                      {streamingState.content}
+                {streamingState.content && (
+                  <div className="mt-1">
+                    <OptimizedMarkdown content={streamingState.content} />
+                    {!streamingState.isComplete && (
                       <span className="inline-block w-2 h-4 bg-primary/70 animate-pulse ml-[2px] align-middle rounded-sm" />
-                    </div>
-                  )}
+                    )}
+                  </div>
+                )}
 
-                  {/* Sources button — only after streaming is complete */}
-                  {streamingState.isComplete && streamingState.citations.size > 0 && (
-                    <SourcesButton citations={Array.from(streamingState.citations.values())} />
-                  )}
-                </div>
+                {streamingState.isComplete && streamingState.citations.size > 0 && (
+                  <SourcesButton citations={Array.from(streamingState.citations.values())} />
+                )}
               </div>
             </div>
           )}
@@ -790,6 +653,38 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
           </div>
         </div>
       </div>
+
+      <AlertDialog
+        open={!!threadToDelete}
+        onOpenChange={(open) => {
+          if (!open && !deletingThreadId) setThreadToDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete thread?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the thread and all its messages. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={!!deletingThreadId}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (threadToDelete) void handleDeleteThread(threadToDelete);
+              }}
+              disabled={!!deletingThreadId}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deletingThreadId ? (
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Deleting…</>
+              ) : (
+                "Delete"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

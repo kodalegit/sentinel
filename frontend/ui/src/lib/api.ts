@@ -561,6 +561,18 @@ export async function getThreadMessages(caseId: string, threadId: string): Promi
   return fetchApi<ChatMessage[]>(`/api/cases/${caseId}/chat/threads/${threadId}/messages`);
 }
 
+export async function deleteChatThread(caseId: string, threadId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/cases/${caseId}/chat/threads/${threadId}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Delete failed" }));
+    throw new Error(error.detail || "Delete failed");
+  }
+}
+
 export type StreamAction = "chat" | "summary" | "next_steps" | "risk_analysis";
 
 export async function* streamChat(

@@ -243,6 +243,27 @@ async def get_thread_messages(
     ]
 
 
+@router.delete("/cases/{case_id}/chat/threads/{thread_id}", status_code=204)
+async def delete_case_chat_thread(
+    case_id: str,
+    thread_id: str,
+    current_user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a chat thread for the current user."""
+    thread = await repo.get_chat_thread(db, _uuid.UUID(thread_id))
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if str(thread.case_id) != case_id or thread.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    deleted = await repo.delete_chat_thread(db, _uuid.UUID(thread_id))
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    await db.commit()
+
+
 class ChatStreamRequest(ChatRequest):
     """Chat request with action type."""
 
