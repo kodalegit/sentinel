@@ -34,7 +34,7 @@ from intelligence.streaming import (
     TitleEvent,
     ErrorEvent,
 )
-from intelligence.tools import AgentContext, set_agent_context, clear_agent_context
+from intelligence.tools import AgentRuntimeContext
 from knowledge.loader import chunk_pdf_document
 from knowledge.store import get_knowledge_store
 
@@ -313,18 +313,16 @@ async def chat_stream(
             history.append({"role": m.role, "content": m.content})
 
     tender_id = str(case_db.tender_id) if case_db.tender_id else None
-
-    set_agent_context(
-        AgentContext(
-            case_id=case_id,
-            tender_id=tender_id,
-            case_title=case_db.title,
-            case_status=case_db.status,
-            case_priority=case_db.priority,
-            case_summary=case_db.summary,
-            db_session=db,
-            app_state=state,
-        )
+    runtime_context = AgentRuntimeContext(
+        action=body.action,
+        case_id=case_id,
+        tender_id=tender_id,
+        case_title=case_db.title,
+        case_status=case_db.status,
+        case_priority=case_db.priority,
+        case_summary=case_db.summary,
+        db_session=db,
+        app_state=state,
     )
 
     async def generate():
@@ -341,6 +339,7 @@ async def chat_stream(
                 message=body.message,
                 action=body.action,
                 history=history,
+                runtime_context=runtime_context,
             ):
                 event_dict = event.to_dict()
 
@@ -389,8 +388,6 @@ async def chat_stream(
 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)[:200], 'code': 'STREAM_ERROR', 'recoverable': False})}\n\n"
-        finally:
-            clear_agent_context()
 
     return StreamingResponse(
         generate(),

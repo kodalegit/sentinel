@@ -7,12 +7,14 @@ Supports OpenAI, Anthropic, Google, and local models via config.
 """
 
 import re
+from dataclasses import replace
 from typing import AsyncGenerator
 
 import logging
 
 from langchain.chat_models import init_chat_model
 from langchain.agents import create_agent
+from langchain.agents.middleware import ModelRequest, dynamic_prompt
 
 from config import settings
 from intelligence.evidence import EvidencePack, build_case_evidence_context
@@ -38,11 +40,27 @@ from intelligence.tools import (
     search_case_evidence,
     get_risk_analysis,
     search_graph_connections,
-    get_agent_context,
-    clear_agent_context,
+    AgentRuntimeContext,
+    CitationRegistry,
+    clear_citation_registry,
+    set_citation_registry,
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dynamic_prompt
+def runtime_system_prompt(request: ModelRequest) -> str:
+    runtime = request.runtime
+    if runtime is None or runtime.context is None:
+        return BASE_SYSTEM_PROMPT
+    ctx = runtime.context
+    runtime_prompt = build_runtime_system_prompt(ctx.action, ctx.case_evidence_context)
+    return (
+        f"{BASE_SYSTEM_PROMPT}\n\n{runtime_prompt}"
+        if runtime_prompt
+        else BASE_SYSTEM_PROMPT
+    )
 
 
 # =============================================================================
@@ -113,7 +131,8 @@ class InvestigationAgent:
             self.agent = create_agent(
                 model=self.llm,
                 tools=tools,
-                system_prompt=BASE_SYSTEM_PROMPT,
+                middleware=[runtime_system_prompt],
+                context_schema=AgentRuntimeContext,
             )
         except Exception:
             logger.exception("Failed to initialize investigation agent")
@@ -178,19 +197,19 @@ class InvestigationAgent:
             ordered_markers.append(marker)
         return ordered_markers
 
-    def _extract_citations(self, response_text: str) -> list[dict]:
-        ctx = get_agent_context()
-        if not ctx:
+    def _extract_citations(
+        self, response_text: str, citation_registry: CitationRegistry | None
+    ) -> list[dict]:
+        if not citation_registry:
             return []
-        return ctx.citation_registry.to_citation_dicts(
+        return citation_registry.to_citation_dicts(
             self._extract_citation_markers(response_text)
         )
 
-    def _citation_event_for_marker(self, marker: int) -> CitationEvent | None:
-        ctx = get_agent_context()
-        if not ctx:
-            return None
-        artifact = ctx.citation_registry.get(marker)
+    def _citation_event_for_marker(
+        self, marker: int, citation_registry: CitationRegistry
+    ) -> CitationEvent | None:
+        artifact = citation_registry.get(marker)
         if not artifact:
             return None
         return CitationEvent(
@@ -204,30 +223,38 @@ class InvestigationAgent:
             page=artifact.page,
         )
 
-    async def _prepare_case_context(self) -> None:
-        ctx = get_agent_context()
-        if not ctx or not ctx.case_id:
-            return
+    async def _prepare_runtime_context(
+        self,
+        runtime_context: AgentRuntimeContext | None,
+        citation_registry: CitationRegistry,
+    ) -> AgentRuntimeContext:
+        if runtime_context is None:
+            return AgentRuntimeContext()
+        if not runtime_context.case_id:
+            return runtime_context
 
-        ctx.citation_registry.clear()
         case_record = {
-            "id": ctx.case_id,
-            "title": ctx.case_title,
-            "status": ctx.case_status,
-            "priority": ctx.case_priority,
-            "summary": ctx.case_summary,
+            "id": runtime_context.case_id,
+            "title": runtime_context.case_title,
+            "status": runtime_context.case_status,
+            "priority": runtime_context.case_priority,
+            "summary": runtime_context.case_summary,
         }
-        (
-            ctx.case_evidence_context,
-            ctx.case_evidence_blocks,
-            ctx.baseline_markers,
-        ) = await build_case_evidence_context(
-            case_record=case_record,
-            case_id=ctx.case_id,
-            tender_id=ctx.tender_id,
-            db_session=ctx.db_session,
-            app_state=ctx.app_state,
-            citation_registry=ctx.citation_registry,
+        case_evidence_context, case_evidence_blocks, baseline_markers = (
+            await build_case_evidence_context(
+                case_record=case_record,
+                case_id=runtime_context.case_id,
+                tender_id=runtime_context.tender_id,
+                db_session=runtime_context.db_session,
+                app_state=runtime_context.app_state,
+                citation_registry=citation_registry,
+            )
+        )
+        return replace(
+            runtime_context,
+            case_evidence_context=case_evidence_context,
+            case_evidence_blocks=case_evidence_blocks,
+            baseline_markers=baseline_markers,
         )
 
     def _build_messages(
@@ -237,12 +264,7 @@ class InvestigationAgent:
         action: str,
         history: list[dict] | None,
     ) -> list[dict]:
-        ctx = get_agent_context()
-        runtime_prompt = build_runtime_system_prompt(
-            action,
-            ctx.case_evidence_context if ctx else None,
-        )
-        messages = [{"role": "system", "content": runtime_prompt}]
+        messages = []
         if history:
             for msg in history:
                 role = "user" if msg["role"] == "user" else "assistant"
@@ -268,6 +290,8 @@ class InvestigationAgent:
 
         try:
             summary = evidence_pack.to_dict().get("tender_summary", {})
+            citation_registry = CitationRegistry()
+            set_citation_registry(citation_registry)
             prompt = f"""Analyze this tender and explain why it has been flagged for review.
 
 Tender: {summary.get('reference', 'N/A')} - {summary.get('title', 'N/A')}
@@ -280,12 +304,8 @@ Evidence Pack:
 Provide a grounded assessment using only the evidence above and any additional legal research you need."""
 
             result = await self.agent.ainvoke(
-                {
-                    "messages": [
-                        {"role": "system", "content": BASE_SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ]
-                }
+                {"messages": [{"role": "user", "content": prompt}]},
+                context=AgentRuntimeContext(action="risk_analysis"),
             )
 
             # Extract the final response
@@ -296,7 +316,7 @@ Provide a grounded assessment using only the evidence above and any additional l
                         response_text = msg.content
                         break
 
-            citations = self._extract_citations(response_text)
+            citations = self._extract_citations(response_text, citation_registry)
 
             return {
                 "explanation": response_text,
@@ -312,6 +332,8 @@ Provide a grounded assessment using only the evidence above and any additional l
                 "citations": [],
                 "evidence_pack": evidence_pack.to_dict(),
             }
+        finally:
+            clear_citation_registry()
 
     def _summarize_tool_output(self, tool_name: str, result: str) -> str:
         """Create a brief summary of tool output for UI display."""
@@ -324,6 +346,7 @@ Provide a grounded assessment using only the evidence above and any additional l
         message: str,
         action: str = "chat",
         history: list[dict] | None = None,
+        runtime_context: AgentRuntimeContext | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """
         Stream agent response with real-time events.
@@ -332,7 +355,7 @@ Provide a grounded assessment using only the evidence above and any additional l
         citation, token, done, error.
         """
         if self.agent is None:
-            clear_agent_context()
+            clear_citation_registry()
             yield ErrorEvent(
                 message="AI assistant not configured.", code="NOT_CONFIGURED"
             )
@@ -341,17 +364,23 @@ Provide a grounded assessment using only the evidence above and any additional l
         fsm = AgentStreamFSM()
         final_content = ""
         emitted_citations: set[int] = set()
-        ctx = get_agent_context()
+        citation_registry = CitationRegistry()
+        prepared_runtime_context = runtime_context or AgentRuntimeContext(action=action)
 
         try:
-            await self._prepare_case_context()
+            set_citation_registry(citation_registry)
+            prepared_runtime_context = await self._prepare_runtime_context(
+                replace(prepared_runtime_context, action=action),
+                citation_registry,
+            )
 
-            if ctx:
-                for marker in ctx.baseline_markers:
-                    citation_event = self._citation_event_for_marker(marker)
-                    if citation_event and marker not in emitted_citations:
-                        emitted_citations.add(marker)
-                        yield citation_event
+            for marker in prepared_runtime_context.baseline_markers:
+                citation_event = self._citation_event_for_marker(
+                    marker, citation_registry
+                )
+                if citation_event and marker not in emitted_citations:
+                    emitted_citations.add(marker)
+                    yield citation_event
 
             messages = self._build_messages(
                 message=message,
@@ -361,6 +390,7 @@ Provide a grounded assessment using only the evidence above and any additional l
 
             stream = self.agent.astream(
                 {"messages": messages},
+                context=prepared_runtime_context,
                 stream_mode=["updates", "messages"],
             )
 
@@ -410,23 +440,20 @@ Provide a grounded assessment using only the evidence above and any additional l
                                         ),
                                     )
 
-                                if ctx:
-                                    for (
-                                        artifact
-                                    ) in ctx.citation_registry.list_artifacts():
-                                        marker = artifact.marker
-                                        if marker not in emitted_citations:
-                                            emitted_citations.add(marker)
-                                            yield CitationEvent(
-                                                marker=marker,
-                                                doc_id=artifact.doc_id,
-                                                title=artifact.title,
-                                                category=artifact.category,
-                                                excerpt=artifact.excerpt,
-                                                chunk_id=artifact.chunk_id,
-                                                source_url=artifact.source_url,
-                                                page=artifact.page,
-                                            )
+                                for artifact in citation_registry.list_artifacts():
+                                    marker = artifact.marker
+                                    if marker not in emitted_citations:
+                                        emitted_citations.add(marker)
+                                        yield CitationEvent(
+                                            marker=marker,
+                                            doc_id=artifact.doc_id,
+                                            title=artifact.title,
+                                            category=artifact.category,
+                                            excerpt=artifact.excerpt,
+                                            chunk_id=artifact.chunk_id,
+                                            source_url=artifact.source_url,
+                                            page=artifact.page,
+                                        )
 
                                 fsm.reset_turn()
 
@@ -445,13 +472,16 @@ Provide a grounded assessment using only the evidence above and any additional l
         except Exception as e:
             logger.exception("Agent stream error")
             yield ErrorEvent(message=f"Error: {str(e)[:200]}", code="AGENT_ERROR")
+        finally:
+            clear_citation_registry()
 
         fsm.mark_done()
 
-        citations = self._extract_citations(final_content or fsm.get_final_content())
+        citations = self._extract_citations(
+            final_content or fsm.get_final_content(),
+            citation_registry,
+        )
         yield DoneEvent(citations=citations)
-
-        clear_agent_context()
 
 
 # Singleton instance

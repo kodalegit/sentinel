@@ -3,7 +3,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,9 @@ class CitationRegistry:
         page: Optional[int],
         chunk_id: str,
     ) -> ToolArtifact:
-        key = self._make_key(doc_id=doc_id, category=category, chunk_id=chunk_id, page=page)
+        key = self._make_key(
+            doc_id=doc_id, category=category, chunk_id=chunk_id, page=page
+        )
         existing = self._artifacts_by_key.get(key)
         if existing:
             if excerpt and len(existing.excerpt) < len(excerpt):
@@ -110,7 +112,8 @@ class CitationRegistry:
 
 
 @dataclass
-class AgentContext:
+class AgentRuntimeContext:
+    action: str = "chat"
     case_id: Optional[str] = None
     tender_id: Optional[str] = None
     case_title: Optional[str] = None
@@ -122,24 +125,27 @@ class AgentContext:
     case_evidence_context: str = ""
     case_evidence_blocks: list[dict] = field(default_factory=list)
     baseline_markers: list[int] = field(default_factory=list)
-    citation_registry: CitationRegistry = field(default_factory=CitationRegistry)
 
 
-_agent_context: ContextVar[Optional[AgentContext]] = ContextVar(
-    "sentinel_agent_context", default=None
+_citation_registry: ContextVar[Optional[CitationRegistry]] = ContextVar(
+    "sentinel_citation_registry", default=None
 )
 
 
-def set_agent_context(ctx: AgentContext) -> None:
-    _agent_context.set(ctx)
+def set_citation_registry(registry: CitationRegistry) -> None:
+    _citation_registry.set(registry)
 
 
-def get_agent_context() -> Optional[AgentContext]:
-    return _agent_context.get()
+def get_citation_registry() -> Optional[CitationRegistry]:
+    return _citation_registry.get()
 
 
-def clear_agent_context() -> None:
-    _agent_context.set(None)
+def clear_citation_registry() -> None:
+    _citation_registry.set(None)
+
+
+def _require_citation_registry() -> Optional[CitationRegistry]:
+    return get_citation_registry()
 
 
 def _format_source_block(artifact: ToolArtifact, body_lines: list[str]) -> str:
@@ -156,10 +162,12 @@ def _format_source_block(artifact: ToolArtifact, body_lines: list[str]) -> str:
 async def search_legal_knowledge(
     query: str,
     category: Literal["law", "case_law", "regulation", "guideline"],
+    runtime: ToolRuntime[AgentRuntimeContext],
 ) -> tuple[str, list[dict]]:
     """Search Kenyan legal knowledge base by category."""
-    ctx = get_agent_context()
-    if not ctx or not ctx.db_session:
+    ctx = runtime.context
+    registry = _require_citation_registry()
+    if not ctx or not ctx.db_session or not registry:
         return "Knowledge base not available.", []
 
     from knowledge.store import get_knowledge_store
@@ -177,7 +185,7 @@ async def search_legal_knowledge(
     content_parts: list[str] = []
     artifacts: list[dict] = []
     for result in results:
-        artifact = ctx.citation_registry.register(
+        artifact = registry.register(
             doc_id=str(result.document_id),
             title=result.document_title,
             source_url=result.source_url,
@@ -203,12 +211,16 @@ async def search_legal_knowledge(
 
 
 @tool(response_format="content_and_artifact")
-def search_case_evidence(query: str) -> tuple[str, list[dict]]:
+def search_case_evidence(
+    query: str,
+    runtime: ToolRuntime[AgentRuntimeContext],
+) -> tuple[str, list[dict]]:
     """Search evidence linked to the current investigation case."""
-    ctx = get_agent_context()
+    ctx = runtime.context
+    registry = _require_citation_registry()
     if not ctx or not ctx.case_id:
         return "No case context available.", []
-    if not ctx.case_evidence_blocks:
+    if not ctx.case_evidence_blocks or not registry:
         return "Case evidence not available.", []
 
     terms = [term.lower() for term in query.split() if len(term.strip()) >= 3]
@@ -227,14 +239,17 @@ def search_case_evidence(query: str) -> tuple[str, list[dict]]:
     markers = [block["marker"] for block in selected]
     return (
         "\n\n".join(block["text"] for block in selected),
-        ctx.citation_registry.to_citation_dicts(markers),
+        registry.to_citation_dicts(markers),
     )
 
 
 @tool
-def get_risk_analysis(tender_id: str) -> str:
+def get_risk_analysis(
+    tender_id: str,
+    runtime: ToolRuntime[AgentRuntimeContext],
+) -> str:
     """Get the full risk analysis for a specific tender."""
-    ctx = get_agent_context()
+    ctx = runtime.context
     if not ctx or not ctx.app_state:
         return "Risk analysis not available."
     if tender_id not in ctx.app_state.tenders:
@@ -258,9 +273,12 @@ def get_risk_analysis(tender_id: str) -> str:
 
 
 @tool
-def search_graph_connections(entity_name: str) -> str:
+def search_graph_connections(
+    entity_name: str,
+    runtime: ToolRuntime[AgentRuntimeContext],
+) -> str:
     """Search the procurement entity graph for connections."""
-    ctx = get_agent_context()
+    ctx = runtime.context
     if not ctx or not ctx.app_state:
         return "Graph not available."
 
@@ -287,7 +305,5 @@ def search_graph_connections(entity_name: str) -> str:
             edge_data = graph.edges.get((node_id, neighbor), {})
             neighbor_data = graph.nodes.get(neighbor, {})
             relationship = edge_data.get("relationship", "connected to")
-            lines.append(
-                f"  - {relationship}: {neighbor_data.get('label', neighbor)}"
-            )
+            lines.append(f"  - {relationship}: {neighbor_data.get('label', neighbor)}")
     return "\n".join(lines)
