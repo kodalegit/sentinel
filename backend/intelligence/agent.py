@@ -7,16 +7,20 @@ Supports OpenAI, Anthropic, Google, and local models via config.
 """
 
 import re
-import uuid
-from typing import Optional, Literal, Any, AsyncGenerator
-from dataclasses import dataclass, field
+from typing import AsyncGenerator
+
+import logging
 
 from langchain.chat_models import init_chat_model
-from langchain.tools import tool
 from langchain.agents import create_agent
 
 from config import settings
-from intelligence.evidence import EvidencePack
+from intelligence.evidence import EvidencePack, build_case_evidence_context
+from intelligence.prompts import (
+    BASE_SYSTEM_PROMPT,
+    build_runtime_system_prompt,
+    get_prompt_for_action,
+)
 from intelligence.streaming import (
     AgentStreamFSM,
     AgentState,
@@ -28,294 +32,17 @@ from intelligence.streaming import (
     CitationEvent,
     DoneEvent,
     ErrorEvent,
-    get_prompt_for_action,
+)
+from intelligence.tools import (
+    search_legal_knowledge,
+    search_case_evidence,
+    get_risk_analysis,
+    search_graph_connections,
+    get_agent_context,
+    clear_agent_context,
 )
 
-import logging
-
 logger = logging.getLogger(__name__)
-
-
-SYSTEM_PROMPT = """You are Sentinel AI, an investigation assistant for Kenyan public procurement oversight.
-You help auditors analyze cases by searching legal knowledge and case evidence.
-
-CITATION RULES:
-- When you use information from a tool, cite it with a numbered marker like [1], [2], etc.
-- Number citations sequentially in order of first appearance.
-- Place the marker immediately after the relevant statement.
-- Do NOT fabricate URLs or document names — only reference what the tools return.
-
-CONDUCT RULES:
-- Use advisory, non-accusatory language (e.g., "this pattern may indicate..." not "this is fraud")
-- Ground every claim in retrieved evidence or legal provisions
-- When uncertain, say so and suggest what additional information would help
-- Focus on Kenyan procurement law: PPADA 2015, PPADR 2020, Conflict of Interest Act 2025
-
-OUTPUT FORMAT for case summaries:
-## Executive Summary
-2-3 sentences summarizing the key findings with citations.
-
-## Key Concerns
-- [CONCERN]: Description with citation [N]
-
-## Recommended Actions
-1. Specific action step
-2. Specific action step"""
-
-
-@dataclass
-class ToolArtifact:
-    """Metadata from a tool call for citation tracking."""
-
-    doc_id: str
-    title: str
-    source_url: Optional[str]
-    category: str
-    excerpt: str
-    page: Optional[int]
-    chunk_id: str
-
-
-@dataclass
-class AgentContext:
-    """Context passed to tools during agent execution."""
-
-    case_id: Optional[str] = None
-    tender_id: Optional[str] = None
-    db_session: Any = None
-    app_state: Any = None
-    artifacts: list[ToolArtifact] = field(default_factory=list)
-
-
-_agent_context: Optional[AgentContext] = None
-
-
-def set_agent_context(ctx: AgentContext) -> None:
-    """Set the current agent context for tool access."""
-    global _agent_context
-    _agent_context = ctx
-
-
-def get_agent_context() -> Optional[AgentContext]:
-    """Get the current agent context."""
-    return _agent_context
-
-
-def _format_risk_factors(factors: list[dict]) -> str:
-    """Format risk factors for the prompt."""
-    if not factors:
-        return "No risk factors detected."
-    lines = []
-    for i, f in enumerate(factors, 1):
-        lines.append(f"{i}. [{f['type']}] (weight: {f['weight']})")
-        lines.append(f"   {f['description']}")
-        for ev in f.get("evidence", []):
-            lines.append(f"   - Evidence: {ev}")
-    return "\n".join(lines)
-
-
-def _format_graph_paths(paths: list[dict]) -> str:
-    """Format graph paths for the prompt."""
-    if not paths:
-        return "No direct relationship paths detected."
-    lines = []
-    for p in paths:
-        via = " -> ".join(p.get("via", []))
-        via_str = f" via {via}" if via else ""
-        lines.append(f"- {p['from']}{via_str} -> {p['to']} (distance: {p['length']})")
-    return "\n".join(lines)
-
-
-# ==============================================================================
-# RAG Tools
-# ==============================================================================
-
-
-@tool(response_format="content_and_artifact")
-async def search_legal_knowledge(
-    query: str,
-    category: Literal["law", "case_law", "regulation", "guideline"],
-) -> tuple[str, list[dict]]:
-    """Search Kenyan legal knowledge base by category.
-
-    Args:
-        query: Search query for legal information
-        category: Type of legal document to search:
-            - law: Acts of Parliament (PPADA 2015, etc.)
-            - case_law: Court decisions and legal precedents
-            - regulation: Public Procurement Regulations, circulars
-            - guideline: PPRA/EACC guidelines and advisories
-
-    Returns:
-        Relevant legal text passages with source citations.
-    """
-    ctx = get_agent_context()
-    if not ctx or not ctx.db_session:
-        return "Knowledge base not available.", []
-
-    # Import here to avoid circular imports
-    from knowledge.store import get_knowledge_store
-
-    try:
-        store = get_knowledge_store(ctx.db_session)
-        results = await store.similarity_search(query, category=category.upper(), k=5)
-    except Exception as e:
-        logger.exception(
-            "search_legal_knowledge failed",
-            extra={"category": category, "query_prefix": query[:120]},
-        )
-        return f"Search error: {str(e)[:100]}", []
-    # Format content for model
-    content_parts = []
-    artifacts = []
-    for i, r in enumerate(results, 1):
-        content_parts.append(f"[{i}] From {r.document_title}:\n{r.content[:500]}...")
-        artifacts.append(
-            {
-                "doc_id": r.document_id,
-                "title": r.document_title,
-                "source_url": r.source_url,
-                "category": r.category,
-                "excerpt": r.content[:200],
-                "page": r.page_number,
-                "chunk_id": r.chunk_id,
-            }
-        )
-        # Track in context for citation mapping
-        if ctx:
-            ctx.artifacts.append(
-                ToolArtifact(
-                    doc_id=r.document_id,
-                    title=r.document_title,
-                    source_url=r.source_url,
-                    category=r.category,
-                    excerpt=r.content[:200],
-                    page=r.page_number,
-                    chunk_id=r.chunk_id,
-                )
-            )
-    return "\n\n".join(content_parts), artifacts
-
-
-@tool(response_format="content_and_artifact")
-def search_case_evidence(query: str) -> tuple[str, list[dict]]:
-    """Search evidence linked to the current investigation case.
-
-    Args:
-        query: Search query for case evidence
-
-    Returns:
-        Relevant evidence from the case including tender details, risk factors,
-        graph connections, and investigation notes.
-    """
-    ctx = get_agent_context()
-    if not ctx or not ctx.case_id:
-        return "No case context available.", []
-    # For now, return case evidence from the app state
-    # This will be enhanced to search case_evidence_links
-    if not ctx.app_state:
-        return "Case evidence not available.", []
-    artifacts = []
-    content_parts = []
-    # Get tender info if available
-    if ctx.tender_id and ctx.tender_id in ctx.app_state.tenders:
-        tender = ctx.app_state.tenders[ctx.tender_id]
-        risk = ctx.app_state.risk_scores.get(ctx.tender_id)
-        content_parts.append(f"[1] Tender {tender.reference_number}: {tender.title}")
-        content_parts.append(f"    Procuring Entity: {tender.procuring_entity}")
-        content_parts.append(
-            f"    Estimated Value: KES {tender.estimated_value:,.0f}"
-            if tender.estimated_value
-            else ""
-        )
-        if risk:
-            content_parts.append(
-                f"    Risk Score: {risk.overall}/100 ({risk.category.value})"
-            )
-            for f in risk.factors:
-                content_parts.append(f"    - {f.type.value}: {f.description}")
-        artifacts.append(
-            {
-                "doc_id": ctx.tender_id,
-                "title": f"Tender: {tender.reference_number}",
-                "source_url": None,
-                "category": "TENDER",
-                "excerpt": tender.title[:200],
-                "page": None,
-                "chunk_id": ctx.tender_id,
-            }
-        )
-    if not content_parts:
-        return "No evidence found for this case.", []
-    return "\n".join(content_parts), artifacts
-
-
-@tool
-def get_risk_analysis(tender_id: str) -> str:
-    """Get the full risk analysis for a specific tender.
-
-    Args:
-        tender_id: The tender ID to analyze
-
-    Returns:
-        Risk score, factors, ML anomaly details, and graph metrics.
-    """
-    ctx = get_agent_context()
-    if not ctx or not ctx.app_state:
-        return "Risk analysis not available."
-    if tender_id not in ctx.app_state.tenders:
-        return f"Tender {tender_id} not found."
-    tender = ctx.app_state.tenders[tender_id]
-    risk = ctx.app_state.risk_scores.get(tender_id)
-    lines = [f"Risk Analysis for Tender {tender.reference_number}:"]
-    if risk:
-        lines.append(f"Overall Score: {risk.overall}/100 ({risk.category.value})")
-        lines.append("\nRisk Factors:")
-        for f in risk.factors:
-            lines.append(f"- {f.type.value} (weight: {f.weight}): {f.description}")
-            for ev in f.evidence:
-                lines.append(f"  Evidence: {ev}")
-    else:
-        lines.append("No risk assessment available.")
-    return "\n".join(lines)
-
-
-@tool
-def search_graph_connections(entity_name: str) -> str:
-    """Search the procurement entity graph for connections.
-
-    Args:
-        entity_name: Name of company, director, or official to search
-
-    Returns:
-        Shared directors, addresses, phones, and suspicious relationship paths.
-    """
-    ctx = get_agent_context()
-    if not ctx or not ctx.app_state:
-        return "Graph not available."
-    graph = ctx.app_state.graph
-    if not graph:
-        return "Graph not loaded."
-    # Find matching nodes
-    matching_nodes = []
-    entity_lower = entity_name.lower()
-    for node in graph.nodes():
-        node_data = graph.nodes[node]
-        label = node_data.get("label", "").lower()
-        if entity_lower in label or entity_lower in node.lower():
-            matching_nodes.append((node, node_data))
-    if not matching_nodes:
-        return f"No entities found matching '{entity_name}'."
-    lines = [f"Found {len(matching_nodes)} matching entities:"]
-    for node_id, data in matching_nodes[:5]:
-        lines.append(f"\n{data.get('label', node_id)} ({data.get('type', 'unknown')}):")
-        neighbors = list(graph.neighbors(node_id))[:10]
-        for neighbor in neighbors:
-            edge_data = graph.edges.get((node_id, neighbor), {})
-            neighbor_data = graph.nodes.get(neighbor, {})
-            rel = edge_data.get("relationship", "connected to")
-            lines.append(f"  - {rel}: {neighbor_data.get('label', neighbor)}")
-    return "\n".join(lines)
 
 
 # =============================================================================
@@ -386,9 +113,10 @@ class InvestigationAgent:
             self.agent = create_agent(
                 model=self.llm,
                 tools=tools,
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=BASE_SYSTEM_PROMPT,
             )
         except Exception:
+            logger.exception("Failed to initialize investigation agent")
             self.agent = None
 
     def _template_explanation(self, evidence: dict) -> str:
@@ -438,37 +166,92 @@ class InvestigationAgent:
 
         return "\n".join(lines)
 
-    def _extract_citations(
-        self, response_text: str, artifacts: list[ToolArtifact]
-    ) -> list[dict]:
-        """Extract citation markers from response and map to artifacts."""
-        citations = []
-        # Find all [N] markers in the response
-        markers = re.findall(r"\[(\d+)\]", response_text)
-        seen = set()
-
+    def _extract_citation_markers(self, response_text: str) -> list[int]:
+        markers = re.findall(r"\[(\d+)\]", response_text or "")
+        ordered_markers: list[int] = []
+        seen: set[int] = set()
         for marker_str in markers:
             marker = int(marker_str)
             if marker in seen:
                 continue
             seen.add(marker)
+            ordered_markers.append(marker)
+        return ordered_markers
 
-            # Map to artifact (1-indexed)
-            if 0 < marker <= len(artifacts):
-                artifact = artifacts[marker - 1]
-                citations.append(
-                    {
-                        "marker": marker,
-                        "doc_id": artifact.doc_id,
-                        "title": artifact.title,
-                        "source_url": artifact.source_url,
-                        "category": artifact.category,
-                        "excerpt": artifact.excerpt,
-                        "page": artifact.page,
-                        "chunk_id": artifact.chunk_id,
-                    }
-                )
-        return citations
+    def _extract_citations(self, response_text: str) -> list[dict]:
+        ctx = get_agent_context()
+        if not ctx:
+            return []
+        return ctx.citation_registry.to_citation_dicts(
+            self._extract_citation_markers(response_text)
+        )
+
+    def _citation_event_for_marker(self, marker: int) -> CitationEvent | None:
+        ctx = get_agent_context()
+        if not ctx:
+            return None
+        artifact = ctx.citation_registry.get(marker)
+        if not artifact:
+            return None
+        return CitationEvent(
+            marker=artifact.marker,
+            doc_id=artifact.doc_id,
+            title=artifact.title,
+            category=artifact.category,
+            excerpt=artifact.excerpt,
+            chunk_id=artifact.chunk_id,
+            source_url=artifact.source_url,
+            page=artifact.page,
+        )
+
+    async def _prepare_case_context(self) -> None:
+        ctx = get_agent_context()
+        if not ctx or not ctx.case_id:
+            return
+
+        ctx.citation_registry.clear()
+        case_record = {
+            "id": ctx.case_id,
+            "title": ctx.case_title,
+            "status": ctx.case_status,
+            "priority": ctx.case_priority,
+            "summary": ctx.case_summary,
+        }
+        (
+            ctx.case_evidence_context,
+            ctx.case_evidence_blocks,
+            ctx.baseline_markers,
+        ) = await build_case_evidence_context(
+            case_record=case_record,
+            case_id=ctx.case_id,
+            tender_id=ctx.tender_id,
+            db_session=ctx.db_session,
+            app_state=ctx.app_state,
+            citation_registry=ctx.citation_registry,
+        )
+
+    def _build_messages(
+        self,
+        *,
+        message: str,
+        action: str,
+        history: list[dict] | None,
+    ) -> list[dict]:
+        ctx = get_agent_context()
+        runtime_prompt = build_runtime_system_prompt(
+            action,
+            ctx.case_evidence_context if ctx else None,
+        )
+        messages = [{"role": "system", "content": runtime_prompt}]
+        if history:
+            for msg in history:
+                role = "user" if msg["role"] == "user" else "assistant"
+                messages.append({"role": role, "content": msg["content"]})
+
+        prompt = get_prompt_for_action(action, message)
+        if prompt:
+            messages.append({"role": "user", "content": prompt})
+        return messages
 
     async def explain(self, evidence_pack: EvidencePack) -> dict:
         """
@@ -491,10 +274,18 @@ Tender: {summary.get('reference', 'N/A')} - {summary.get('title', 'N/A')}
 Procuring Entity: {summary.get('procuring_entity', 'N/A')}
 Estimated Value: KES {summary.get('estimated_value', 0):,.0f}
 
-Use the search_case_evidence tool to get the full risk analysis, then provide your assessment."""
+Evidence Pack:
+{evidence_pack.to_dict()}
+
+Provide a grounded assessment using only the evidence above and any additional legal research you need."""
 
             result = await self.agent.ainvoke(
-                {"messages": [{"role": "user", "content": prompt}]}
+                {
+                    "messages": [
+                        {"role": "system", "content": BASE_SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ]
+                }
             )
 
             # Extract the final response
@@ -505,10 +296,7 @@ Use the search_case_evidence tool to get the full risk analysis, then provide yo
                         response_text = msg.content
                         break
 
-            # Get artifacts from context for citation mapping
-            ctx = get_agent_context()
-            artifacts = ctx.artifacts if ctx else []
-            citations = self._extract_citations(response_text, artifacts)
+            citations = self._extract_citations(response_text)
 
             return {
                 "explanation": response_text,
@@ -544,6 +332,7 @@ Use the search_case_evidence tool to get the full risk analysis, then provide yo
         citation, token, done, error.
         """
         if self.agent is None:
+            clear_agent_context()
             yield ErrorEvent(
                 message="AI assistant not configured.", code="NOT_CONFIGURED"
             )
@@ -553,18 +342,22 @@ Use the search_case_evidence tool to get the full risk analysis, then provide yo
         final_content = ""
         emitted_citations: set[int] = set()
         ctx = get_agent_context()
-        if ctx:
-            ctx.artifacts = []
 
         try:
-            messages = []
-            if history:
-                for msg in history:
-                    role = "user" if msg["role"] == "user" else "assistant"
-                    messages.append({"role": role, "content": msg["content"]})
+            await self._prepare_case_context()
 
-            prompt = get_prompt_for_action(action, message)
-            messages.append({"role": "user", "content": prompt})
+            if ctx:
+                for marker in ctx.baseline_markers:
+                    citation_event = self._citation_event_for_marker(marker)
+                    if citation_event and marker not in emitted_citations:
+                        emitted_citations.add(marker)
+                        yield citation_event
+
+            messages = self._build_messages(
+                message=message,
+                action=action,
+                history=history,
+            )
 
             stream = self.agent.astream(
                 {"messages": messages},
@@ -618,8 +411,10 @@ Use the search_case_evidence tool to get the full risk analysis, then provide yo
                                     )
 
                                 if ctx:
-                                    for i, artifact in enumerate(ctx.artifacts):
-                                        marker = i + 1
+                                    for (
+                                        artifact
+                                    ) in ctx.citation_registry.list_artifacts():
+                                        marker = artifact.marker
                                         if marker not in emitted_citations:
                                             emitted_citations.add(marker)
                                             yield CitationEvent(
@@ -653,11 +448,10 @@ Use the search_case_evidence tool to get the full risk analysis, then provide yo
 
         fsm.mark_done()
 
-        artifacts = ctx.artifacts if ctx else []
-        citations = self._extract_citations(
-            final_content or fsm.get_final_content(), artifacts
-        )
+        citations = self._extract_citations(final_content or fsm.get_final_content())
         yield DoneEvent(citations=citations)
+
+        clear_agent_context()
 
 
 # Singleton instance

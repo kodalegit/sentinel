@@ -102,6 +102,8 @@ function toolDisplayName(name: string) {
 function SourcesButton({ citations }: { citations: Citation[] }) {
   if (citations.length === 0) return null;
 
+  const sortedCitations = [...citations].sort((a, b) => a.marker - b.marker);
+
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -122,7 +124,7 @@ function SourcesButton({ citations }: { citations: Citation[] }) {
           </p>
         </div>
         <div className="divide-y divide-border/40">
-          {citations.map((c) => (
+          {sortedCitations.map((c) => (
             <div key={c.marker} className="px-3 py-2.5 hover:bg-muted/30 transition-colors">
               <div className="flex items-start gap-2">
                 <span className="shrink-0 flex items-center justify-center h-5 w-5 rounded bg-primary/10 text-primary text-[10px] font-mono font-bold mt-0.5">
@@ -313,7 +315,7 @@ const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMe
           <PersistedEventsSection events={message.events} />
         )}
 
-        <OptimizedMarkdown content={message.content} />
+        <OptimizedMarkdown content={message.content} citations={citationsList} />
 
         {citationsList.length > 0 && <SourcesButton citations={citationsList} />}
       </div>
@@ -591,7 +593,10 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
 
                 {streamingState.content && (
                   <div className="mt-1">
-                    <OptimizedMarkdown content={streamingState.content} />
+                    <OptimizedMarkdown
+                      content={streamingState.content}
+                      citations={streamingState.citations}
+                    />
                     {!streamingState.isComplete && (
                       <span className="inline-block w-2 h-4 bg-primary/70 animate-pulse ml-[2px] align-middle rounded-sm" />
                     )}
