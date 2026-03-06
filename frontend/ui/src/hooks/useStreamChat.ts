@@ -60,7 +60,7 @@ export function useStreamChat(caseId: string) {
   // -----------------------------------------------------------------------
   // Server state queries
   // -----------------------------------------------------------------------
-  const { data: threads = [] } = useQuery({
+  const { data: threads = [], isFetched: threadsLoaded } = useQuery({
     queryKey: ["chat-threads", caseId],
     queryFn: () => getChatThreads(caseId),
   });
@@ -290,6 +290,7 @@ export function useStreamChat(caseId: string) {
   return {
     // State
     threads,
+    threadsLoaded,
     messages,
     activeThreadId,
     activeThreadTitle,

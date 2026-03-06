@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback, memo } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { ChatMessage, Citation, ChatStreamEvent } from "@/lib/types";
 import { useStreamChat, type ToolRecord } from "@/hooks/useStreamChat";
 import { OptimizedMarkdown } from "@/components/OptimizedMarkdown";
@@ -333,9 +334,16 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
   const [threadToDelete, setThreadToDelete] = useState<string | null>(null);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const syncingFromUrlRef = useRef(false);
+  const lastSeenUrlThreadIdRef = useRef<string | null | undefined>(undefined);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const threadIdFromUrl = searchParams.get("thread");
 
   const {
     threads,
+    threadsLoaded,
     messages,
     activeThreadId,
     activeThreadTitle,
@@ -348,8 +356,25 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
     selectThread,
     deleteThread,
     runStream,
-    handleNewThread: handleNewThreadBase,
   } = useStreamChat(caseId);
+
+  const updateThreadUrl = useCallback(
+    (threadId: string | null, mode: "push" | "replace" = "push") => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (threadId) {
+        params.set("thread", threadId);
+      } else {
+        params.delete("thread");
+      }
+      const nextUrl = params.size > 0 ? `${pathname}?${params.toString()}` : pathname;
+      if (mode === "replace") {
+        router.replace(nextUrl, { scroll: false });
+        return;
+      }
+      router.push(nextUrl, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -358,6 +383,60 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
   useEffect(() => {
     scrollToBottom();
   }, [messages, streamingState.content, streamingState.items, scrollToBottom]);
+
+  useEffect(() => {
+    if (!threadsLoaded) {
+      return;
+    }
+
+    const normalizedThreadId = threadIdFromUrl || null;
+    const isFirstUrlSync = lastSeenUrlThreadIdRef.current === undefined;
+    const urlChanged = lastSeenUrlThreadIdRef.current !== normalizedThreadId;
+
+    if (!isFirstUrlSync && !urlChanged) {
+      return;
+    }
+
+    lastSeenUrlThreadIdRef.current = normalizedThreadId;
+
+    if (
+      normalizedThreadId &&
+      !threads.some((thread) => thread.id === normalizedThreadId)
+    ) {
+      updateThreadUrl(null, "replace");
+      return;
+    }
+
+    if (activeThreadId === normalizedThreadId) {
+      return;
+    }
+    syncingFromUrlRef.current = true;
+    selectThread(normalizedThreadId);
+  }, [
+    threadsLoaded,
+    threadIdFromUrl,
+    threads,
+    activeThreadId,
+    selectThread,
+    updateThreadUrl,
+  ]);
+
+  useEffect(() => {
+    if (!threadsLoaded) {
+      return;
+    }
+
+    if (syncingFromUrlRef.current) {
+      syncingFromUrlRef.current = false;
+      return;
+    }
+
+    const normalizedThreadId = threadIdFromUrl || null;
+    if (activeThreadId === normalizedThreadId) {
+      return;
+    }
+    updateThreadUrl(activeThreadId, "replace");
+  }, [threadsLoaded, activeThreadId, threadIdFromUrl, updateThreadUrl]);
 
   const handleSend = async () => {
     if (!input.trim() || isStreaming) return;
@@ -374,9 +453,9 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
   );
 
   const handleNewThread = useCallback(() => {
-    handleNewThreadBase();
+    updateThreadUrl(null, "push");
     setShowThreads(false);
-  }, [handleNewThreadBase]);
+  }, [updateThreadUrl]);
 
   const handleDeleteThread = useCallback(
     async (threadId: string) => {
@@ -485,9 +564,10 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
                         <button
                           type="button"
                           onClick={() => {
-                            selectThread(thread.id);
+                            updateThreadUrl(thread.id, "push");
                             setShowThreads(false);
                           }}
+                          disabled={isStreaming}
                           className="min-w-0 flex-1 px-3 py-2.5 text-left text-sm"
                         >
                           <p className="font-medium truncate text-[13px]">{thread.title || "Untitled"}</p>
