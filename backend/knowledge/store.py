@@ -92,6 +92,7 @@ class KnowledgeStore:
         self,
         query: str,
         category: Optional[str] = None,
+        categories: Optional[list[str]] = None,
         k: int = 5,
     ) -> list[SearchResult]:
         """
@@ -99,7 +100,8 @@ class KnowledgeStore:
 
         Args:
             query: Search query text
-            category: Optional category filter (LAW, CASE_LAW, REGULATION, GUIDELINE)
+            category: Optional single category filter (LAW, CASE_LAW, REGULATION, GUIDELINE)
+            categories: Optional list of categories to search across
             k: Number of results to return
 
         Returns:
@@ -111,7 +113,15 @@ class KnowledgeStore:
         category_filter = ""
         params = {"embedding": embedding_str, "k": k}
 
-        if category:
+        normalized_categories = [c.upper() for c in (categories or []) if c]
+        if normalized_categories:
+            placeholders = []
+            for i, value in enumerate(normalized_categories):
+                key = f"category_{i}"
+                placeholders.append(f":{key}")
+                params[key] = value
+            category_filter = f"AND d.category IN ({', '.join(placeholders)})"
+        elif category:
             category_filter = "AND d.category = :category"
             params["category"] = category.upper()
 

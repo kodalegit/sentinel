@@ -18,10 +18,10 @@ CONDUCT RULES:
 - Focus on Kenyan procurement law, including PPADA 2015, PPADR 2020, and related governance requirements."""
 
 ACTION_SYSTEM_INSTRUCTIONS = {
-    "chat": "Answer the user's case-specific question directly. Use the provided case evidence first, and use tools only when you need more detail or legal support.",
-    "summary": "Produce a concise case summary with clear findings, evidentiary support, and practical next steps. Prefer structured headings and bullet points where useful.",
-    "next_steps": "Recommend practical investigation next steps grounded in the case evidence and, where helpful, applicable legal or procedural requirements.",
-    "risk_analysis": "Assess the key risk indicators, explain their significance, and prioritize what deserves further review.",
+    "chat": "Answer the user's case-specific question directly. Use the provided case evidence first, and use tools only when you need more detail or legal support. Use search_legal_knowledge for statutes, regulations, and guidelines. Use search_case_law only when precedent or judicial reasoning is needed.",
+    "summary": "Produce a concise case summary with clear findings, evidentiary support, and practical next steps. Prefer structured headings and bullet points where useful. Use search_legal_knowledge for governing legal requirements and search_case_law only if precedent materially helps.",
+    "next_steps": "Recommend practical investigation next steps grounded in the case evidence and, where helpful, applicable legal or procedural requirements. Use search_legal_knowledge for rules and search_case_law only if precedent materially informs the recommendation.",
+    "risk_analysis": "Assess the key risk indicators, explain their significance, and prioritize what deserves further review. Use search_legal_knowledge for legal requirements and search_case_law only when precedent is necessary.",
 }
 
 ACTION_USER_PROMPTS = {

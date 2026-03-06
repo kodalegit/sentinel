@@ -37,6 +37,7 @@ from intelligence.streaming import (
 )
 from intelligence.tools import (
     search_legal_knowledge,
+    search_case_law,
     search_case_evidence,
     get_risk_analysis,
     search_graph_connections,
@@ -123,6 +124,7 @@ class InvestigationAgent:
             return
         tools = [
             search_legal_knowledge,
+            search_case_law,
             search_case_evidence,
             get_risk_analysis,
             search_graph_connections,

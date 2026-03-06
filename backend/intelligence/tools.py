@@ -1,11 +1,14 @@
 import logging
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 from langchain.tools import ToolRuntime, tool
 
 logger = logging.getLogger(__name__)
+
+LEGAL_KNOWLEDGE_CATEGORIES = ["LAW", "REGULATION", "GUIDELINE"]
+CASE_LAW_CATEGORY = "CASE_LAW"
 
 
 @dataclass
@@ -158,13 +161,13 @@ def _format_source_block(artifact: ToolArtifact, body_lines: list[str]) -> str:
     return "\n".join(lines)
 
 
-@tool(response_format="content_and_artifact")
-async def search_legal_knowledge(
+async def _search_knowledge_categories(
+    *,
     query: str,
-    category: Literal["law", "case_law", "regulation", "guideline"],
+    categories: list[str],
     runtime: ToolRuntime[AgentRuntimeContext],
+    failure_label: str,
 ) -> tuple[str, list[dict]]:
-    """Search Kenyan legal knowledge base by category."""
     ctx = runtime.context
     registry = _require_citation_registry()
     if not ctx or not ctx.db_session or not registry:
@@ -174,11 +177,11 @@ async def search_legal_knowledge(
 
     try:
         store = get_knowledge_store(ctx.db_session)
-        results = await store.similarity_search(query, category=category.upper(), k=5)
+        results = await store.similarity_search(query, categories=categories, k=5)
     except Exception as exc:
         logger.exception(
-            "search_legal_knowledge failed",
-            extra={"category": category, "query_prefix": query[:120]},
+            failure_label,
+            extra={"categories": categories, "query_prefix": query[:120]},
         )
         return f"Search error: {str(exc)[:100]}", []
 
@@ -208,6 +211,34 @@ async def search_legal_knowledge(
     if not content_parts:
         return "No matching legal sources found.", []
     return "\n\n".join(content_parts), artifacts
+
+
+@tool(response_format="content_and_artifact")
+async def search_legal_knowledge(
+    query: str,
+    runtime: ToolRuntime[AgentRuntimeContext],
+) -> tuple[str, list[dict]]:
+    """Search Kenyan procurement law, regulations, and guidelines. Use this for legal rules and procedural requirements, not judicial precedent."""
+    return await _search_knowledge_categories(
+        query=query,
+        categories=LEGAL_KNOWLEDGE_CATEGORIES,
+        runtime=runtime,
+        failure_label="search_legal_knowledge failed",
+    )
+
+
+@tool(response_format="content_and_artifact")
+async def search_case_law(
+    query: str,
+    runtime: ToolRuntime[AgentRuntimeContext],
+) -> tuple[str, list[dict]]:
+    """Search Kenyan procurement case law and precedent. Use this when you need judicial decisions, precedent, or tribunal/court reasoning."""
+    return await _search_knowledge_categories(
+        query=query,
+        categories=[CASE_LAW_CATEGORY],
+        runtime=runtime,
+        failure_label="search_case_law failed",
+    )
 
 
 @tool(response_format="content_and_artifact")
