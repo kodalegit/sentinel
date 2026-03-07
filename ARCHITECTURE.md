@@ -94,10 +94,18 @@ Heterogeneous NetworkX graph with:
 
 - **Node types**: COMPANY, DIRECTOR, OFFICIAL, TENDER
 - **Edge types**: DIRECTOR_OF, BID_ON, WON, AWARDED_BY, RELATED_TO, SHARES_ADDRESS, SHARES_PHONE, SHARES_EMAIL
-- Suspicious edges flagged for: family connections, shared addresses (plot number matching), shared phone numbers, shared emails
+- Suspicious edges flagged for: family connections, specific shared addresses, non-generic shared phone numbers, and non-generic shared emails
 
 **Key decision: Hash-based shared attribute detection (O(n) instead of O(n²)).**
 The original pairwise comparison of all companies for shared attributes caused edge explosion (22M edges for 10K tenders). Hash-based grouping by normalized attribute keys reduces complexity to O(n) and limits edges per company to 50.
+
+**Key decision: strict filtering before shared-attribute edges are created.**
+Recompute still uses a NetworkX analysis graph, so noisy shared attributes directly affect ML features and rule evaluation. To keep the analysis graph compact and meaningful:
+
+- `SHARES_ADDRESS` edges are created only for `AddressQuality.SPECIFIC` addresses
+- generic or obviously synthetic phone numbers are excluded from `SHARES_PHONE`
+- generic emails are excluded from `SHARES_EMAIL`
+- the same filtering rules are applied in Neo4j sync and community shared-attribute summaries
 
 ### Neo4j Sync (`graph/neo4j_sync.py`)
 
@@ -109,6 +117,8 @@ PostgreSQL → sync_graph_to_neo4j()
   → Create DIRECTED_BY, BID_ON, RELATED_TO edges
   → Create SHARES_ADDRESS, SHARES_PHONE, SHARES_EMAIL, SHARES_DIRECTOR edges
 ```
+
+Neo4j shared-attribute edges use the same normalization and filtering rules as the NetworkX analysis graph so recompute output and graph exploration stay aligned.
 
 ### Community Detection (`graph/neo4j_communities.py`)
 
@@ -213,9 +223,22 @@ PostgreSQL → load_data_from_db()
     → AnomalyDetector.fit/score()  ← SHAP + sigmoid normalization
     → compute_risk_score() per tender (rules)
     → fuse scores (60/40)
-  → persist_risk_scores() → PostgreSQL
-  → AppState (in-memory singleton)
+  → persist_analysis_snapshot() → PostgreSQL
+  → AppState (in-memory singleton + latest snapshot metadata)
 ```
+
+### Persisted Analysis Snapshots
+
+**Key decision: persist whole analysis runs, not only the latest in-memory scores.**
+
+Each recomputation produces an analysis snapshot with:
+
+- a distinct `analysis_run_id`
+- snapshot status and created timestamp
+- risk assessments linked directly to that analysis run
+- summary metadata exposed to the UI
+
+This makes startup more robust because the app can load the latest persisted analysis instead of requiring a fresh recompute before the dashboard becomes useful.
 
 ### Manual Recomputation Workflow
 
@@ -227,12 +250,18 @@ The original design used Redis + ARQ worker for async recomputation after data i
 2. **User triggers recomputation** via the Data Sources page (`/sources`) by clicking "Recompute Analysis".
 3. **POST /api/recompute** returns `202 Accepted` immediately with a `job_id` and fires a background task which:
    - Reloads all data from PostgreSQL
-   - Rebuilds the procurement graph
+   - Rebuilds the NetworkX analysis graph
    - Detects communities
    - Computes risk scores
+   - Persists a new analysis snapshot and links risk assessments to that run
    - Syncs the updated graph state to Neo4j
-   - Updates the in-memory `AppState` singleton
+   - Updates the in-memory `AppState` singleton and latest snapshot metadata
 4. **Polling endpoints**: Clients poll `GET /api/recompute/status/{job_id}` for completion.
+
+Related read endpoints:
+
+- `GET /api/analysis/latest` exposes the latest persisted analysis snapshot metadata
+- startup can load the latest persisted analysis snapshot into `AppState`
 
 **Rationale:**
 
@@ -243,7 +272,7 @@ The original design used Redis + ARQ worker for async recomputation after data i
 
 ### Testing Strategy
 
-- **Core Logic Unit Tests**: `tests/test_risk_engine.py` and `tests/test_ml_features.py` isolate the critical path logic (risk rules, ML feature extraction). They use deterministic Pydantic fixtures and NetworkX graphs to verify calculations with zero database or network dependencies.
+- **Core Logic Unit Tests**: `tests/test_risk_engine.py`, `tests/test_ml_features.py`, and `tests/test_graph_builder.py` isolate the critical path logic (risk rules, ML feature extraction, and shared-attribute graph filtering). They use deterministic Pydantic fixtures and NetworkX graphs to verify calculations with zero database or network dependencies.
 
 ### Kenya-Specific Schema Evolution
 

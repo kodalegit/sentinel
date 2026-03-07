@@ -3,7 +3,7 @@
 **Project**: AI-Powered Public Procurement Oversight System  
 **Track**: Governance & Public Policy  
 **Target**: Production-ready MVP for Kenya procurement agencies  
-**Current Week**: 3 of 9
+**Current Week**: 6 of 9
 
 ---
 
@@ -13,7 +13,7 @@
 | -------------------------- | ----- | -------------------------------------------------------------- | -------- | ----------- |
 | **Foundation**             | 1–2   | DB, ML, Graph, LLM, Cases, UI, Infra                           | —        | ✅ Complete |
 | **Kenya Data & Detection** | 3     | Schema evolution, PPIP/e-GP connectors, multi-signal detection | CRITICAL | ✅ COMPLETE |
-| **Auth & Workflow**        | 3–4   | JWT auth, roles, investigation hardening                       | HIGH     | Planned     |
+| **Auth & Workflow**        | 3–5   | JWT auth, roles, investigation hardening                       | HIGH     | ✅ Complete |
 | **Ingestion & LLM**        | 5–6   | CSV/PDF ingestion, LLM case analysis                           | MEDIUM   | Planned     |
 | **Graph & Detection**      | 6–7   | Graph UX, fuzzy detection, search                              | MEDIUM   | Planned     |
 | **Polish & Demo**          | 8–9   | Export, performance, demo prep                                 | LOW      | Planned     |
@@ -202,42 +202,39 @@
 
 ## Weeks 5–6: Data Ingestion & LLM Deepening
 
-**Goal**: Richer data input (CSV, PDF PoC) and deeper LLM integration for case analysis
+**Goal**: Complete deeper LLM integration for case analysis while deferring manual ingestion in favor of Kenya OCDS/eGP/PPIP-aligned data pipelines
 
 ### Deliverables
 
-- [ ] **CSV/Excel Batch Upload**
-  - [ ] Upload endpoint with validation and error reporting
-  - [ ] Batch processing via ARQ background job
-  - [ ] Ingestion status feedback (job status polling)
-- [ ] **PDF Ingestion Proof-of-Concept**
-  - [ ] Upload PDF tender document
-  - [ ] LLM-assisted field extraction (LlamaIndex or similar)
-  - [ ] Review UI: auditor sees extracted fields, corrects/confirms
-  - [ ] Commit to DB on approval → triggers async recomputation
-- [ ] **Entity Resolution**
-  - [ ] Fuzzy matching on company names
-  - [ ] Director deduplication
-- [ ] **LLM Case Analysis**
-  - [ ] Case-level AI summary: synthesize linked tenders, risk factors, and notes
-  - [ ] "Suggest next steps" based on case status and evidence
-  - [ ] Conversational investigation assistant (ask questions about evidence)
-  - [ ] Improved prompt engineering: advisory, non-accusatory language
-  - [ ] Graceful fallback to template-based output when no API key
+- [x] **LLM Case Analysis**
+  - [x] Case-level AI summary: synthesize linked tenders, risk factors, notes, and linked evidence
+  - [x] "Suggest next steps" based on case status and evidence
+  - [x] Conversational investigation assistant with streaming responses and citations
+  - [x] Improved prompt engineering: advisory, non-accusatory language
+  - [x] Grounded retrieval over legal knowledge and case evidence with source citations
+- [x] **Citation-Aware Investigation UX**
+  - [x] Inline citation markers with source metadata tooltips
+  - [x] Source popover for referenced materials
+  - [x] Bookmarkable case chat threads with URL-backed navigation
+- [x] **Scope Decision: No Manual CSV/PDF Ingestion**
+  - [x] Manual CSV/Excel batch upload removed from the milestone scope
+  - [x] PDF extraction proof-of-concept removed from the milestone scope
+  - [x] Decision aligned to Kenya's move toward OCDS compliance through eGP and PPIP data sources
+  - [x] Future ingestion work should prioritize structured connectors and adapters over manual uploads
 
 ### Success Criteria
 
-- CSV of 50+ tenders uploads and processes successfully
-- PDF uploaded → fields extracted → reviewed → committed
-- Duplicate companies detected and merged
-- Case summary references specific evidence items
+- Case summary references specific evidence items and legal sources
+- Suggested next steps are grounded in current case evidence and applicable legal guidance
+- Auditors can ask follow-up questions in a conversational case chat with citations
+- Manual ingestion scope is formally deferred in favor of OCDS/eGP/PPIP-aligned integrations
 
 ### Mentor Review Checkpoint
 
-- **Demo**: CSV batch upload + PDF extraction review flow
 - **Demo**: AI case summary for a complex multi-tender case
-- **Discussion**: Entity resolution quality, LLM grounding reliability
-- **Blockers**: _[Document any issues here]_
+- **Demo**: Conversational investigation assistant with grounded citations and source inspection
+- **Discussion**: Why manual ingestion was deprioritized in favor of OCDS/eGP/PPIP-aligned connectors
+- **Blockers**: _[Document any remaining LLM reliability or data connector issues here]_
 
 ---
 
@@ -321,7 +318,7 @@
 | Graph performance at scale | Medium      | Medium | 🟡 Monitoring | Scale evaluation in Week 6–7, Neo4j migration path documented                           |
 | Sparse/generic addresses   | High        | High   | 🟡 Monitoring | Multi-signal detection; address quality classifier; don't rely on single-field matching |
 | PPIP data completeness     | High        | Medium | 🟢 Accepted   | Many OCDS releases are tender-only (no awards/values); supplement with e-GP contracts   |
-| Async job reliability      | Low         | Low    | � Removed     | Manual recomputation workflow eliminates async job complexity                           |
+| Async job reliability      | Low         | Low    | Removed       | Manual recomputation workflow eliminates external worker complexity                     |
 | Auth security              | Low         | High   | 🟢 Mitigated  | JWT best practices, production OAuth2 migration documented                              |
 | PDF extraction quality     | Medium      | Low    | 🟢 Accepted   | Human-in-the-loop review before commit                                                  |
 
@@ -336,7 +333,7 @@
 - [x] End-to-end demo functional (risk → evidence → graph → case)
 - [x] 5+ fraud patterns detectable (cartel, shell, conflict, pricing, timeline)
 - [x] Working MVP with Docker deployment
-- [ ] Auth + dynamic data ingestion operational
+- [x] Auth + dynamic data ingestion operational
 
 ### Stage 2: Performance + Trust (Weeks 5–7)
 
@@ -389,8 +386,8 @@
 
 ### Known Tech Debt
 
-1. NetworkX scalability limit (~10k nodes) → Future: Neo4j migration
-2. ARQ worker → Future: Celery if scale demands it
+1. NetworkX analysis graph scalability limit (~10k nodes) → Future: split compact analysis graph from richer serving graph / move more batch analytics to Neo4j
+2. Persisted snapshot growth → Future: retention policy, pruning, and diff-based recompute optimizations
 3. JWT auth → Future: OAuth2/OIDC integration
 4. PDF extraction PoC → Future: Full OCR + NLP pipeline
 5. Startup-loaded AppState → Future: event-driven state updates
@@ -430,6 +427,6 @@
 
 ---
 
-**Roadmap Version**: 2.0  
-**Last Updated**: February 2026 (Week 2)  
-**Next Review**: End of Week 3
+**Roadmap Version**: 2.1  
+**Last Updated**: March 2026 (Week 6)  
+**Next Review**: End of Week 6

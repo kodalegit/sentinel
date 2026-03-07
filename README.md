@@ -33,7 +33,7 @@ Sentinel transforms opaque tender data into actionable intelligence through:
 │  │ (~25)   │  │ Engine   │  │      │  │     │  │ CRUD     │  │
 │  └─────────┘  └──────────┘  └──────┘  └─────┘  └──────────┘  │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │ AppState (typed singleton: tenders, graph, risks)        │  │
+│  │ AppState (typed singleton: data + latest analysis snapshot)│  │
 │  └──────────────────────────────────────────────────────────┘  │
 └────────────────────────────┬────────────────────────────────────┘
                              │
@@ -46,7 +46,7 @@ Sentinel transforms opaque tender data into actionable intelligence through:
 ├─────────────────────────────┤   ├─────────────────────────────┤
 │ Tenders, Companies, Bids     │   │ GDS: Louvain, PageRank     │
 │ Cases, Users, Audit Log     │   │ APOC: Path finding         │
-│ Risk Assessments             │   │ Community detection        │
+│ Risk Assessments + Analysis Runs│ │ Community detection       │
 └─────────────────────────────┘   └─────────────────────────────┘
 ```
 
@@ -59,11 +59,10 @@ sentinel/
 ├── backend/                    # FastAPI backend
 │   ├── alembic/               # Database migrations
 │   ├── config.py              # Pydantic Settings (env vars)
-│   ├── data/                  # Seed data, synthetic generator (planned)
+│   ├── data/                  # Seed data and synthetic fixtures
 │   ├── db/                    # SQLAlchemy models, repository, session
 │   ├── graph/                 # NetworkX graph builder, communities, APIs
 │   ├── intelligence/          # LangGraph agent, evidence packs
-│   ├── jobs/                  # ARQ worker, tasks (planned)
 │   ├── main.py                # FastAPI app, lifespan, routers
 │   ├── ml/                    # Feature engineering, Isolation Forest
 │   ├── models.py              # SQLAlchemy ORM models
@@ -189,7 +188,13 @@ Without an LLM key, the system falls back to structured template explanations.
 - **Community detection**: Neo4j GDS Louvain with NetworkX fallback
 - **Path finding**: Neo4j shortest paths with sub-millisecond traversals
 - **Cluster-first UX**: Ranked suspicious communities, progressive disclosure
-- **Performance**: Hash-based edge detection (O(n) vs O(n²)), edge limits per entity
+- **Performance**: Hash-based edge detection (O(n) vs O(n²)), edge limits per entity, and strict filtering of vague/generic shared attributes
+
+### Analysis Persistence
+
+- **Persisted analysis snapshots**: Each recompute creates an `analysis_run_id` and stores linked risk assessments
+- **Fast startup recovery**: Backend can load the latest persisted analysis into `AppState`
+- **Snapshot metadata API**: `GET /api/analysis/latest` powers dashboard and sources-page analysis status
 
 ### LLM Intelligence
 
@@ -212,7 +217,7 @@ Without an LLM key, the system falls back to structured template explanations.
 
 ---
 
-## Current Status (Week 5)
+## Current Status
 
 **Complete:**
 
@@ -228,11 +233,12 @@ Without an LLM key, the system falls back to structured template explanations.
 - [x] **PPIP/e-GP Data Ingestion** (connectors, provenance, multi-signal detection)
 - [x] **Neo4j Hybrid Architecture** (GDS algorithms, PostgreSQL sync, graceful fallback)
 - [x] **Graph Performance Optimization** (O(n) edge detection, pagination, large graph handling)
-
+- [x] **Persisted Analysis Snapshots** (analysis runs, snapshot-aware risk loading, latest snapshot metadata endpoint)
+- [x] **Graph Noise Reduction** (specific-only shared address edges, generic phone/email suppression, aligned Neo4j filtering)
 - [x] **Investigation Workflow Hardening** (case assignment, supervisor dashboard, case timeline)
 - [x] **System Robustness** (Async job tracking, Pytest core logic suite, JWT guards)
 
-**Upcoming (Week 6):**
+**Next Up:**
 
 - [ ] LLM Agentic Analysis (Case Summaries, Evidence Q&A)
 - [ ] CSV/PDF ingestion for additional data sources

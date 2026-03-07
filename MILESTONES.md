@@ -3,8 +3,8 @@
 **Project**: AI-Powered Public Procurement Oversight System  
 **Track**: Governance & Public Policy  
 **Owner**: Victor Kimani  
-**Current Week**: 3 of 9  
-**Last Updated**: February 2026
+**Current Week**: 6 of 9  
+**Last Updated**: March 2026
 
 ---
 
@@ -23,7 +23,7 @@
 
 **Priority**: CRITICAL  
 **Timeline**: Week 3 (1 week)  
-**Status**: In Progress
+**Status**: ✅ Complete
 
 ### Description
 
@@ -44,7 +44,7 @@ Ground the system in real Kenyan procurement data. The current schema was design
 
 - **PPIP OCDS connector** (`connectors/ppip.py`): Fetch OCDS 1.1 releases from `tenders.go.ke/api/ocds/tenders?fy=YYYY-YYYY`, normalize to internal schema, handle both `"tender"` and `"contract"` tagged releases, extract parties with supplier roles
 - **e-GP ingestion adapters** (`connectors/egp.py`): Accept e-GP tender list payloads and contract detail payloads (including `contractmaindata`, `contractmoredetails`, `supplierdetails` with director/ownership info), normalize dates (DD/MM/YYYY → ISO), map AGPO fields
-- **Ingestion API** (`routes/ingest.py`): POST endpoints for PPIP sync (by FY) and e-GP payload ingestion; triggers async recomputation
+- **Ingestion API** (`routes/ingest.py`): POST endpoints for PPIP sync (by FY) and e-GP payload ingestion; supports manual recomputation workflow
 
 #### Multi-Signal Entity Detection (Kenyan data reality)
 
@@ -56,9 +56,10 @@ Ground the system in real Kenyan procurement data. The current schema was design
 #### Infrastructure
 
 - **Manual recomputation workflow**: User triggers recomputation via Data Sources page after ingestion
-- **POST /api/recompute endpoint**: In-process recomputation (graph rebuild, community detection, risk scoring)
+- **POST /api/recompute endpoint**: In-process recomputation (graph rebuild, community detection, risk scoring, persisted analysis snapshot)
 - **Configurable synthetic data generator** with realistic Kenyan patterns
 - **Automated startup pipeline**: migrations, seeding, health checks in Docker
+- **Latest analysis metadata endpoint**: `GET /api/analysis/latest` exposes the current persisted analysis snapshot to the frontend
 
 ### Success Criteria
 
@@ -69,6 +70,18 @@ Ground the system in real Kenyan procurement data. The current schema was design
 - Address quality classifier correctly distinguishes "Plot 45, Industrial Area" (specific) from "MOI AVENUE" (vague) from "PO Box 123" (placeholder)
 - `docker compose up` brings full stack to healthy state
 - Manual recomputation workflow allows users to batch ingestions before re-analyzing
+- Recompute output is persisted and recoverable on startup via analysis snapshots
+
+### Implementation Details
+
+**Analysis persistence and graph quality hardening:**
+
+- Risk assessments are linked directly to `analysis_run_id` so snapshots are self-contained
+- `AppState` stores latest analysis snapshot metadata for dashboard and sources-page status
+- `GET /api/analysis/latest` returns the latest persisted analysis snapshot metadata
+- Shared-address edges are limited to `AddressQuality.SPECIFIC` values
+- Generic phone numbers and generic emails are suppressed before shared-attribute edges are created
+- Neo4j shared-attribute sync uses the same filtering rules as the NetworkX analysis graph
 
 ---
 
@@ -225,25 +238,28 @@ Building on Milestone 1's source connectors and normalized ingestion layer, this
 
 **Priority**: MEDIUM  
 **Timeline**: Weeks 5–6 (1–2 weeks)  
-**Status**: Not Started
+**Status**: Completed
 
 ### Description
 
-The LLM explanation endpoint exists but is limited to single-tender risk explanation. This milestone deepens the LLM integration to support the investigation workflow — generating case summaries, suggesting next steps, and answering auditor questions about a case's evidence.
+This milestone expanded the system from a single-tender explanation endpoint into a case-aware investigation assistant. It now supports case summaries, suggested next steps, conversational case chat, grounded retrieval across legal knowledge and linked case evidence, and citation-aware investigation UX. Manual CSV/PDF ingestion work was intentionally not pursued in this milestone because the product direction shifted toward Kenya OCDS compliance and structured eGP/PPIP data integrations rather than manual uploads.
 
 ### Deliverables
 
-- Case-level AI summary: synthesize all linked tenders, risk factors, and notes into an executive brief
-- "Suggest next steps" generation based on case status and evidence
-- Conversational investigation assistant (ask questions about a case's evidence pack)
-- Improved prompt engineering for advisory, non-accusatory language
-- Robust fallback: all LLM features degrade gracefully to template-based output
+- Completed case-level AI summary: synthesize linked tenders, risk factors, notes, and linked evidence into an executive brief
+- Completed "Suggest next steps" generation based on case status and evidence
+- Completed conversational investigation assistant for case evidence and legal questions
+- Completed grounded legal + case evidence retrieval with citations
+- Completed improved prompt engineering for advisory, non-accusatory language
+- Completed citation-aware UX with inline markers, source metadata, and case chat thread navigation
+- Manual CSV/PDF ingestion intentionally deferred in favor of OCDS/eGP/PPIP-aligned structured connectors
 
 ### Success Criteria
 
-- An auditor can generate a case summary that references specific evidence items
+- An auditor can generate a case summary that references specific evidence items and legal sources
 - Suggested next steps are contextually relevant to the case's current status
-- System works fully (with reduced richness) when no LLM API key is configured
+- Auditors can ask follow-up questions in case chat and inspect supporting sources via citations
+- Milestone scope is aligned with structured public procurement data sources rather than manual ingestion
 
 ---
 
@@ -255,11 +271,11 @@ The LLM explanation endpoint exists but is limited to single-tender risk explana
 
 ### Description
 
-The graph explorer works but has room for improvement in both detection quality and user experience. Shared attribute detection (addresses, phones) is currently very literal, and the graph view could better guide investigators toward suspicious patterns.
+The graph explorer works but has room for improvement in both detection quality and user experience. Shared-attribute filtering is now stricter to avoid edge explosion, but investigators still need better search, labeling, and visualization for suspicious paths.
 
 ### Deliverables
 
-- Improved shared attribute detection: fuzzy/normalized address and phone matching
+- Improved shared attribute detection beyond the current strict baseline: fuzzy/normalized address and phone matching for high-confidence variants
 - Graph search: find any entity by name
 - Visual improvements: better node labeling, edge annotations, risk-colored nodes
 - Path highlighting: click a risk factor to highlight the relevant graph path
@@ -329,14 +345,15 @@ Final hardening pass — export capabilities, performance optimization, document
 
 1. **Manual recomputation workflow**: After data ingestion, users trigger recomputation via Data Sources page (`POST /api/recompute`). This allows batching multiple ingestions before expensive analysis and provides control over when recomputation runs. Removed Redis + ARQ worker in favor of in-process recomputation.
 2. **Dual-source ingestion**: PPIP (OCDS) provides tender metadata + some awards/contracts with party details. e-GP provides richer contract + supplier ownership data. Both normalized to the same internal schema with provenance tracking.
-3. **Address quality as first-class concept**: Every company address classified as SPECIFIC/VAGUE/PLACEHOLDER. Vague addresses suppress shared-address edge confidence; placeholder addresses ("PO Box 123") are excluded from address matching entirely.
+3. **Address quality as first-class concept**: Every company address classified as SPECIFIC/VAGUE/PLACEHOLDER. Shared-address edges are limited to SPECIFIC addresses; vague and placeholder addresses are excluded from graph edge creation.
 4. **Multi-signal shell detection**: Registration recency alone is insufficient. Shell risk is a composite of: (a) company age, (b) address quality, (c) director count, (d) ownership completeness, (e) email domain patterns, (f) BRS number recency. Each signal has independent weight; composite exceeding threshold triggers flag.
 5. **Contract as first-class entity**: Separate from tender. A tender may have zero or many contracts. Contract carries award amount, AGPO status, supplier link, and dates — enabling contract-level analysis.
 6. **Case assignment**: Hybrid model — supervisors can assign cases to auditors, and auditors can self-assign from an unassigned queue.
 7. **Confidence-aware detection**: When critical supplier attributes are missing/generic, Sentinel uses explicit data-quality flags and multi-signal scoring instead of single-field conclusions.
 8. **Nullable estimated_value**: Kenyan tenders may not have estimated_value. ML features and stats calculations handle None gracefully (defaulting to 0 for ratios).
+9. **Persisted analysis snapshots**: Recompute persists analysis runs and their risk assessments so the latest analysis can be restored on startup and exposed to the frontend.
 
 ---
 
-**Version**: 2.0  
-**Next Review**: End of Week 3
+**Version**: 2.1  
+**Next Review**: End of Week 6
