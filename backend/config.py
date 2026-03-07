@@ -21,10 +21,18 @@ class Settings(BaseSettings):
     db_max_overflow: int = 20
 
     # LLM
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "gpt-5-mini"
     llm_provider: str = "openai"
-    llm_temperature: float = 0
+    llm_temperature: float = 0.7
     llm_base_url: Optional[str] = None
+
+    # LLM API Keys (for various providers)
+    openai_api_key: Optional[str] = None
+    anthropic_api_key: Optional[str] = None
+    google_api_key: Optional[str] = None
+
+    # Encryption key for sensitive settings (generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+    settings_encryption_key: str = "sentinel-encryption-key-change-in-production"
 
     # PPIP / e-GP
     ppip_base_url: str = "https://tenders.go.ke/api/ocds"

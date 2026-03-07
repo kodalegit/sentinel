@@ -260,7 +260,11 @@ export interface CaseEvidenceLink {
 }
 
 // M3: Structured Decisions
-export type DecisionType = "SUBSTANTIATED" | "UNSUBSTANTIATED" | "REFERRED" | "INCONCLUSIVE";
+export type DecisionType =
+  | "SUBSTANTIATED"
+  | "UNSUBSTANTIATED"
+  | "REFERRED"
+  | "INCONCLUSIVE";
 
 // M3: Notifications
 export interface CaseNotification {
@@ -301,4 +305,135 @@ export interface RecomputeResponse {
     communities: number;
     risk_scores: number;
   };
+}
+
+// =============================================================================
+// M5: Knowledge Base, Chat, and Agent Settings
+// =============================================================================
+
+export type KnowledgeDocumentCategory =
+  | "LAW"
+  | "CASE_LAW"
+  | "REGULATION"
+  | "GUIDELINE";
+
+export interface KnowledgeDocument {
+  id: string;
+  title: string;
+  description: string | null;
+  category: KnowledgeDocumentCategory;
+  source_url: string | null;
+  file_name: string | null;
+  chunk_count: number;
+  uploaded_by: string | null;
+  created_at: string;
+}
+
+export interface KnowledgeChunk {
+  id: string;
+  document_id: string;
+  content: string;
+  chunk_index: number;
+  page_number: number | null;
+  chunk_metadata: Record<string, unknown> | null;
+}
+
+export interface KnowledgeStats {
+  total_documents: number;
+  total_chunks: number;
+  by_category: Record<string, number>;
+}
+
+export interface ChatThread {
+  id: string;
+  case_id: string;
+  user_id: string;
+  title: string | null;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  thread_id: string;
+  role: "user" | "assistant";
+  content: string;
+  citations: Citation[] | null;
+  events: ChatStreamEvent[] | null;
+  created_at: string;
+}
+
+export interface Citation {
+  marker: number;
+  doc_id: string;
+  title: string;
+  source_url: string | null;
+  category: string;
+  excerpt: string;
+  page: number | null;
+  chunk_id: string;
+}
+
+export type ChatStreamEventType =
+  | "token"
+  | "reasoning"
+  | "tool_start"
+  | "tool_end"
+  | "citation"
+  | "title"
+  | "done"
+  | "error";
+
+export interface ChatStreamEvent {
+  type: ChatStreamEventType;
+  // token
+  delta?: string;
+  // reasoning
+  content?: string;
+  step?: number;
+  // tool_start / tool_end
+  tool?: string;
+  tool_call_id?: string;
+  input?: Record<string, unknown>;
+  summary?: string;
+  // citation
+  marker?: number;
+  doc_id?: string;
+  title?: string;
+  source_url?: string | null;
+  category?: string;
+  excerpt?: string;
+  page?: number | null;
+  chunk_id?: string;
+  // title (for new threads)
+  // done
+  citations?: Citation[];
+  thread_id?: string;
+  // error
+  message?: string;
+  code?: string;
+  recoverable?: boolean;
+}
+
+export type ChatAction = "chat" | "summary" | "next_steps" | "risk_analysis";
+
+export interface AgentSettings {
+  llm_provider: string | null;
+  llm_model: string | null;
+  llm_api_key_set: boolean;
+  llm_base_url: string | null;
+  llm_temperature: number | null;
+  embedding_provider: string | null;
+  embedding_model: string | null;
+}
+
+export interface AgentSettingsUpdate {
+  llm_provider?: string;
+  llm_model?: string;
+  llm_api_key?: string;
+  llm_base_url?: string;
+  llm_temperature?: number;
+  embedding_provider?: string;
+  embedding_model?: string;
 }

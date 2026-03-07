@@ -1,107 +1,72 @@
 """
-LangGraph-based investigation agent for procurement oversight.
-Provides grounded, evidence-backed explanations of risk scores.
+RAG-powered investigation agent for procurement oversight.
+Provides grounded, evidence-backed analysis with citations.
 
-Uses LangChain v1 init_chat_model for provider-agnostic model initialization.
-Supports OpenAI, Anthropic, Google, and local models (e.g. Ollama) via config.
+Uses LangChain v1 create_agent with tool-calling for RAG.
+Supports OpenAI, Anthropic, Google, and local models via config.
 """
 
-from typing import TypedDict, Optional
+import re
+from dataclasses import replace
+from typing import AsyncGenerator
+
+import logging
 
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import SystemMessage, HumanMessage
-from langgraph.graph import StateGraph, END
+from langchain.agents import create_agent
+from langchain.agents.middleware import ModelRequest, dynamic_prompt
 
 from config import settings
-from intelligence.evidence import EvidencePack
+from intelligence.evidence import EvidencePack, build_case_evidence_context
+from intelligence.prompts import (
+    BASE_SYSTEM_PROMPT,
+    build_runtime_system_prompt,
+    get_prompt_for_action,
+)
+from intelligence.streaming import (
+    AgentStreamFSM,
+    AgentState,
+    StreamEvent,
+    TokenEvent,
+    ReasoningEvent,
+    ToolStartEvent,
+    ToolEndEvent,
+    CitationEvent,
+    DoneEvent,
+    ErrorEvent,
+)
+from intelligence.tools import (
+    search_legal_knowledge,
+    search_case_law,
+    search_case_evidence,
+    get_risk_analysis,
+    search_graph_connections,
+    AgentRuntimeContext,
+    CitationRegistry,
+    clear_citation_registry,
+    set_citation_registry,
+)
+
+logger = logging.getLogger(__name__)
 
 
-SYSTEM_PROMPT = """You are a senior procurement auditor assistant for Kenya's government agencies.
-Your role is ADVISORY - you help auditors understand risk patterns, not make accusations.
-
-CRITICAL RULES:
-1. ONLY cite facts from the provided evidence pack - never invent information
-2. Use advisory language: "elevated risk", "warrants review", "pattern consistent with"
-3. NEVER accuse individuals or companies of wrongdoing
-4. Always cite specific evidence items by reference
-5. Recommend concrete next steps for investigation
-6. Be concise and professional
-
-OUTPUT FORMAT (use exactly this structure):
-## Executive Summary
-2-3 sentences summarizing the key concern.
-
-## Key Concerns
-- [CONCERN 1]: Description citing evidence
-- [CONCERN 2]: Description citing evidence
-
-## Recommended Actions
-1. Specific action step
-2. Specific action step
-3. Specific action step"""
+@dynamic_prompt
+def runtime_system_prompt(request: ModelRequest) -> str:
+    runtime = request.runtime
+    if runtime is None or runtime.context is None:
+        return BASE_SYSTEM_PROMPT
+    ctx = runtime.context
+    runtime_prompt = build_runtime_system_prompt(ctx.action, ctx.case_evidence_context)
+    return (
+        f"{BASE_SYSTEM_PROMPT}\n\n{runtime_prompt}"
+        if runtime_prompt
+        else BASE_SYSTEM_PROMPT
+    )
 
 
-USER_PROMPT_TEMPLATE = """Analyze this tender and explain why it has been flagged for review.
-
-TENDER DETAILS:
-- Reference: {reference}
-- Title: {title}
-- Procuring Entity: {procuring_entity}
-- Category: {category}
-- Estimated Value: KES {estimated_value:,.0f}
-- Awarded Amount: {awarded_amount}
-- Published: {published_date}
-- Deadline: {deadline}
-- Status: {status}
-- Winning Company: {winning_company}
-- Number of Bidders: {bidder_count}
-
-DETECTED RISK FACTORS:
-{risk_factors_text}
-
-KEY METRICS:
-- Price Deviation: {price_deviation_pct}%
-- Company Age: {company_age_days} days
-- Submission Window: {timeline_days} days
-- Risk Score: {risk_score}/100 ({risk_category})
-
-RELATIONSHIP PATHS:
-{graph_paths_text}
-
-Provide your analysis following the required format."""
-
-
-class InvestigationState(TypedDict):
-    """State for the investigation agent."""
-
-    evidence: dict
-    explanation: Optional[str]
-    error: Optional[str]
-
-
-def _format_risk_factors(factors: list[dict]) -> str:
-    """Format risk factors for the prompt."""
-    if not factors:
-        return "No risk factors detected."
-    lines = []
-    for i, f in enumerate(factors, 1):
-        lines.append(f"{i}. [{f['type']}] (weight: {f['weight']})")
-        lines.append(f"   {f['description']}")
-        for ev in f.get("evidence", []):
-            lines.append(f"   - Evidence: {ev}")
-    return "\n".join(lines)
-
-
-def _format_graph_paths(paths: list[dict]) -> str:
-    """Format graph paths for the prompt."""
-    if not paths:
-        return "No direct relationship paths detected."
-    lines = []
-    for p in paths:
-        via = " -> ".join(p.get("via", []))
-        via_str = f" via {via}" if via else ""
-        lines.append(f"- {p['from']}{via_str} -> {p['to']} (distance: {p['length']})")
-    return "\n".join(lines)
+# =============================================================================
+# Agent Class
+# =============================================================================
 
 
 class InvestigationAgent:
@@ -112,8 +77,9 @@ class InvestigationAgent:
 
     def __init__(self):
         self.llm = None
-        self.graph = self._build_graph()
+        self.agent = None
         self._init_llm()
+        self._init_agent()
 
     def _init_llm(self):
         """
@@ -132,75 +98,47 @@ class InvestigationAgent:
             }
             if settings.llm_base_url:
                 kwargs["base_url"] = settings.llm_base_url
+
+            provider = settings.llm_provider.lower()
+            if provider == "openai" and settings.openai_api_key:
+                kwargs["api_key"] = settings.openai_api_key
+            elif provider == "anthropic" and settings.anthropic_api_key:
+                kwargs["api_key"] = settings.anthropic_api_key
+            elif provider in {"google", "google_genai"} and settings.google_api_key:
+                kwargs["api_key"] = settings.google_api_key
+
             self.llm = init_chat_model(**kwargs)
         except Exception:
             # No valid credentials or provider — LLM stays None, template fallback used
+            logger.exception(
+                "Failed to initialize LLM",
+                extra={"provider": settings.llm_provider, "model": settings.llm_model},
+            )
             self.llm = None
 
-    def _build_graph(self) -> StateGraph:
-        """Build the LangGraph workflow."""
-        workflow = StateGraph(InvestigationState)
-
-        workflow.add_node("generate_explanation", self._generate_explanation)
-
-        workflow.set_entry_point("generate_explanation")
-        workflow.add_edge("generate_explanation", END)
-
-        return workflow.compile()
-
-    async def _generate_explanation(self, state: InvestigationState) -> dict:
-        """Generate a grounded explanation using LLM or fallback template."""
-        evidence = state["evidence"]
-
+    def _init_agent(self):
+        """
+        Initialize the LangChain agent with RAG tools.
+        """
         if self.llm is None:
-            return {"explanation": self._template_explanation(evidence)}
-
+            return
+        tools = [
+            search_legal_knowledge,
+            search_case_law,
+            search_case_evidence,
+            get_risk_analysis,
+            search_graph_connections,
+        ]
         try:
-            summary = evidence.get("tender_summary", {})
-            metrics = evidence.get("key_metrics", {})
-
-            awarded_amount = summary.get("awarded_amount")
-            awarded_str = (
-                f"KES {awarded_amount:,.0f}" if awarded_amount else "Not yet awarded"
+            self.agent = create_agent(
+                model=self.llm,
+                tools=tools,
+                middleware=[runtime_system_prompt],
+                context_schema=AgentRuntimeContext,
             )
-
-            prompt = USER_PROMPT_TEMPLATE.format(
-                reference=summary.get("reference", "N/A"),
-                title=summary.get("title", "N/A"),
-                procuring_entity=summary.get("procuring_entity", "N/A"),
-                category=summary.get("category", "N/A"),
-                estimated_value=summary.get("estimated_value", 0),
-                awarded_amount=awarded_str,
-                published_date=summary.get("published_date", "N/A"),
-                deadline=summary.get("deadline", "N/A"),
-                status=summary.get("status", "N/A"),
-                winning_company=summary.get("winning_company", "N/A"),
-                bidder_count=summary.get("bidder_count", 0),
-                risk_factors_text=_format_risk_factors(
-                    evidence.get("risk_factors", [])
-                ),
-                price_deviation_pct=metrics.get("price_deviation_pct", 0),
-                company_age_days=metrics.get("company_age_days", "N/A"),
-                timeline_days=metrics.get("timeline_days", "N/A"),
-                risk_score=metrics.get("risk_score", 0),
-                risk_category=metrics.get("risk_category", "N/A"),
-                graph_paths_text=_format_graph_paths(evidence.get("graph_paths", [])),
-            )
-
-            messages = [
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(content=prompt),
-            ]
-
-            response = await self.llm.ainvoke(messages)
-            return {"explanation": response.content, "error": None}
-
-        except Exception as e:
-            # Fallback to template on any LLM error
-            return {
-                "explanation": self._template_explanation(evidence),
-                "error": f"LLM unavailable, using template: {str(e)[:100]}",
-            }
+        except Exception:
+            logger.exception("Failed to initialize investigation agent")
+            self.agent = None
 
     def _template_explanation(self, evidence: dict) -> str:
         """Fallback template-based explanation when LLM is unavailable."""
@@ -249,23 +187,303 @@ class InvestigationAgent:
 
         return "\n".join(lines)
 
+    def _extract_citation_markers(self, response_text: str) -> list[int]:
+        markers = re.findall(r"\[(\d+)\]", response_text or "")
+        ordered_markers: list[int] = []
+        seen: set[int] = set()
+        for marker_str in markers:
+            marker = int(marker_str)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            ordered_markers.append(marker)
+        return ordered_markers
+
+    def _extract_citations(
+        self, response_text: str, citation_registry: CitationRegistry | None
+    ) -> list[dict]:
+        if not citation_registry:
+            return []
+        return citation_registry.to_citation_dicts(
+            self._extract_citation_markers(response_text)
+        )
+
+    def _citation_event_for_marker(
+        self, marker: int, citation_registry: CitationRegistry
+    ) -> CitationEvent | None:
+        artifact = citation_registry.get(marker)
+        if not artifact:
+            return None
+        return CitationEvent(
+            marker=artifact.marker,
+            doc_id=artifact.doc_id,
+            title=artifact.title,
+            category=artifact.category,
+            excerpt=artifact.excerpt,
+            chunk_id=artifact.chunk_id,
+            source_url=artifact.source_url,
+            page=artifact.page,
+        )
+
+    async def _prepare_runtime_context(
+        self,
+        runtime_context: AgentRuntimeContext | None,
+        citation_registry: CitationRegistry,
+    ) -> AgentRuntimeContext:
+        if runtime_context is None:
+            return AgentRuntimeContext()
+        if not runtime_context.case_id:
+            return runtime_context
+
+        case_record = {
+            "id": runtime_context.case_id,
+            "title": runtime_context.case_title,
+            "status": runtime_context.case_status,
+            "priority": runtime_context.case_priority,
+            "summary": runtime_context.case_summary,
+        }
+        case_evidence_context, case_evidence_blocks, baseline_markers = (
+            await build_case_evidence_context(
+                case_record=case_record,
+                case_id=runtime_context.case_id,
+                tender_id=runtime_context.tender_id,
+                db_session=runtime_context.db_session,
+                app_state=runtime_context.app_state,
+                citation_registry=citation_registry,
+            )
+        )
+        return replace(
+            runtime_context,
+            case_evidence_context=case_evidence_context,
+            case_evidence_blocks=case_evidence_blocks,
+            baseline_markers=baseline_markers,
+        )
+
+    def _build_messages(
+        self,
+        *,
+        message: str,
+        action: str,
+        history: list[dict] | None,
+    ) -> list[dict]:
+        messages = []
+        if history:
+            for msg in history:
+                role = "user" if msg["role"] == "user" else "assistant"
+                messages.append({"role": role, "content": msg["content"]})
+
+        prompt = get_prompt_for_action(action, message)
+        if prompt:
+            messages.append({"role": "user", "content": prompt})
+        return messages
+
     async def explain(self, evidence_pack: EvidencePack) -> dict:
         """
         Generate an explanation for a tender's risk assessment.
         Returns dict with 'explanation' (str) and optional 'error'.
         """
-        result = await self.graph.ainvoke(
-            {
-                "evidence": evidence_pack.to_dict(),
-                "explanation": None,
-                "error": None,
+        if self.llm is None:
+            return {
+                "explanation": self._template_explanation(evidence_pack.to_dict()),
+                "error": "LLM not configured, using template",
+                "citations": [],
+                "evidence_pack": evidence_pack.to_dict(),
             }
+
+        try:
+            summary = evidence_pack.to_dict().get("tender_summary", {})
+            citation_registry = CitationRegistry()
+            set_citation_registry(citation_registry)
+            prompt = f"""Analyze this tender and explain why it has been flagged for review.
+
+Tender: {summary.get('reference', 'N/A')} - {summary.get('title', 'N/A')}
+Procuring Entity: {summary.get('procuring_entity', 'N/A')}
+Estimated Value: KES {summary.get('estimated_value', 0):,.0f}
+
+Evidence Pack:
+{evidence_pack.to_dict()}
+
+Provide a grounded assessment using only the evidence above and any additional legal research you need."""
+
+            result = await self.agent.ainvoke(
+                {"messages": [{"role": "user", "content": prompt}]},
+                context=AgentRuntimeContext(action="risk_analysis"),
+            )
+
+            # Extract the final response
+            response_text = ""
+            if "messages" in result:
+                for msg in reversed(result["messages"]):
+                    if hasattr(msg, "content") and isinstance(msg.content, str):
+                        response_text = msg.content
+                        break
+
+            citations = self._extract_citations(response_text, citation_registry)
+
+            return {
+                "explanation": response_text,
+                "error": None,
+                "citations": citations,
+                "evidence_pack": evidence_pack.to_dict(),
+            }
+
+        except Exception as e:
+            return {
+                "explanation": self._template_explanation(evidence_pack.to_dict()),
+                "error": f"LLM error, using template: {str(e)[:100]}",
+                "citations": [],
+                "evidence_pack": evidence_pack.to_dict(),
+            }
+        finally:
+            clear_citation_registry()
+
+    def _summarize_tool_output(self, tool_name: str, result: str) -> str:
+        """Create a brief summary of tool output for UI display."""
+        if len(result) <= 150:
+            return result
+        return result[:150] + "..."
+
+    async def stream(
+        self,
+        message: str,
+        action: str = "chat",
+        history: list[dict] | None = None,
+        runtime_context: AgentRuntimeContext | None = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """
+        Stream agent response with real-time events.
+
+        Yields StreamEvent instances: reasoning, tool_start, tool_end,
+        citation, token, done, error.
+        """
+        if self.agent is None:
+            clear_citation_registry()
+            yield ErrorEvent(
+                message="AI assistant not configured.", code="NOT_CONFIGURED"
+            )
+            return
+
+        fsm = AgentStreamFSM()
+        final_content = ""
+        emitted_citations: set[int] = set()
+        citation_registry = CitationRegistry()
+        prepared_runtime_context = runtime_context or AgentRuntimeContext(action=action)
+
+        try:
+            set_citation_registry(citation_registry)
+            prepared_runtime_context = await self._prepare_runtime_context(
+                replace(prepared_runtime_context, action=action),
+                citation_registry,
+            )
+
+            for marker in prepared_runtime_context.baseline_markers:
+                citation_event = self._citation_event_for_marker(
+                    marker, citation_registry
+                )
+                if citation_event and marker not in emitted_citations:
+                    emitted_citations.add(marker)
+                    yield citation_event
+
+            messages = self._build_messages(
+                message=message,
+                action=action,
+                history=history,
+            )
+
+            stream = self.agent.astream(
+                {"messages": messages},
+                context=prepared_runtime_context,
+                stream_mode=["updates", "messages"],
+            )
+
+            try:
+                async for mode, chunk in stream:
+                    if mode == "updates":
+                        for node_name, node_data in chunk.items():
+                            if node_data is None:
+                                continue
+                            node_messages = node_data.get("messages", [])
+                            if not node_messages:
+                                continue
+
+                            if node_name == "model":
+                                msg = node_messages[-1]
+                                state, data = fsm.on_model_update(msg)
+
+                                if state == AgentState.PLANNING:
+                                    if data.get("turn_text"):
+                                        yield ReasoningEvent(
+                                            content=data["turn_text"],
+                                            step=data["step"],
+                                        )
+                                    for tc in data.get("tool_calls", []):
+                                        yield ToolStartEvent(
+                                            tool=tc["name"],
+                                            tool_call_id=tc["id"],
+                                            input=tc["args"],
+                                        )
+
+                                elif state == AgentState.STREAMING_ANSWER:
+                                    if data.get("emit_text"):
+                                        final_content = data["emit_text"]
+
+                            elif node_name == "tools":
+                                # Process ALL tool messages (parallel calls)
+                                for msg in node_messages:
+                                    _state, data = fsm.on_tool_update(msg)
+                                    tool_name = data.get("tool_name", "unknown")
+                                    result = data.get("result", "")
+
+                                    yield ToolEndEvent(
+                                        tool=tool_name,
+                                        tool_call_id=data.get("tool_call_id", ""),
+                                        summary=self._summarize_tool_output(
+                                            tool_name, result
+                                        ),
+                                    )
+
+                                for artifact in citation_registry.list_artifacts():
+                                    marker = artifact.marker
+                                    if marker not in emitted_citations:
+                                        emitted_citations.add(marker)
+                                        yield CitationEvent(
+                                            marker=marker,
+                                            doc_id=artifact.doc_id,
+                                            title=artifact.title,
+                                            category=artifact.category,
+                                            excerpt=artifact.excerpt,
+                                            chunk_id=artifact.chunk_id,
+                                            source_url=artifact.source_url,
+                                            page=artifact.page,
+                                        )
+
+                                fsm.reset_turn()
+
+                    elif mode == "messages":
+                        token_chunk, metadata = chunk
+                        _state, data = fsm.on_message_token(token_chunk, metadata)
+
+                        if data.get("token"):
+                            yield TokenEvent(delta=data["token"])
+                            final_content += data["token"]
+                            fsm.accumulate_final(data["token"])
+
+            finally:
+                await stream.aclose()
+
+        except Exception as e:
+            logger.exception("Agent stream error")
+            yield ErrorEvent(message=f"Error: {str(e)[:200]}", code="AGENT_ERROR")
+        finally:
+            clear_citation_registry()
+
+        fsm.mark_done()
+
+        citations = self._extract_citations(
+            final_content or fsm.get_final_content(),
+            citation_registry,
         )
-        return {
-            "explanation": result.get("explanation", ""),
-            "error": result.get("error"),
-            "evidence_pack": evidence_pack.to_dict(),
-        }
+        yield DoneEvent(citations=citations)
 
 
 # Singleton instance
@@ -278,3 +496,9 @@ def get_agent() -> InvestigationAgent:
     if _agent is None:
         _agent = InvestigationAgent()
     return _agent
+
+
+def reset_agent() -> None:
+    """Reset the agent singleton (called when settings change)."""
+    global _agent
+    _agent = None

@@ -18,9 +18,11 @@ import {
   Users,
   ChevronDown,
   Bell,
+  BookOpen,
+  Settings,
 } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { getNotificationCount, getNotifications, markNotificationRead } from "@/lib/api";
@@ -44,8 +46,15 @@ export function Sidebar() {
   const { theme, setTheme } = useTheme();
   const { user, logout, isAdmin } = useAuth();
   const router = useRouter();
+  const [mounted, setMounted] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const isDarkTheme = mounted && theme === "dark";
 
   // M3: Notification queries
   const { data: notificationCount } = useQuery({
@@ -179,21 +188,49 @@ export function Sidebar() {
           </div>
         )}
 
-        {/* Admin: User Management link */}
+        {/* Admin links */}
         {isAdmin && (
-          <Link
-            href="/admin/users"
-            className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
-              pathname.startsWith("/admin/users")
-                ? "bg-sidebar-accent text-sidebar-foreground"
-                : "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
-            }`}
-          >
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg">
-              <Users size={18} strokeWidth={1.5} />
-            </span>
-            <span>User Management</span>
-          </Link>
+          <>
+            <Link
+              href="/admin/users"
+              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
+                pathname.startsWith("/admin/users")
+                  ? "bg-sidebar-accent text-sidebar-foreground"
+                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
+              }`}
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg">
+                <Users size={18} strokeWidth={1.5} />
+              </span>
+              <span>User Management</span>
+            </Link>
+            <Link
+              href="/admin/knowledge"
+              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
+                pathname.startsWith("/admin/knowledge")
+                  ? "bg-sidebar-accent text-sidebar-foreground"
+                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
+              }`}
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg">
+                <BookOpen size={18} strokeWidth={1.5} />
+              </span>
+              <span>Knowledge Base</span>
+            </Link>
+            <Link
+              href="/admin/settings"
+              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
+                pathname.startsWith("/admin/settings")
+                  ? "bg-sidebar-accent text-sidebar-foreground"
+                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
+              }`}
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg">
+                <Settings size={18} strokeWidth={1.5} />
+              </span>
+              <span>Agent Settings</span>
+            </Link>
+          </>
         )}
 
         {/* Theme toggle */}
@@ -202,9 +239,9 @@ export function Sidebar() {
           className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground transition-all duration-200"
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-lg">
-            {theme === "dark" ? <Sun size={18} strokeWidth={1.5} /> : <Moon size={18} strokeWidth={1.5} />}
+            {isDarkTheme ? <Sun size={18} strokeWidth={1.5} /> : <Moon size={18} strokeWidth={1.5} />}
           </span>
-          <span>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
+          <span>{isDarkTheme ? "Light Mode" : "Dark Mode"}</span>
         </button>
 
         {/* User info + logout */}

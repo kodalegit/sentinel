@@ -18,6 +18,14 @@ import type {
   CaseEvidenceLink,
   CaseNotification,
   WorkloadItem,
+  KnowledgeDocument,
+  KnowledgeChunk,
+  KnowledgeStats,
+  ChatThread,
+  ChatMessage,
+  ChatStreamEvent,
+  AgentSettings,
+  AgentSettingsUpdate,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -481,4 +489,176 @@ export function getRiskBorderColor(category: RiskCategory): string {
     case "LOW":
       return "border-emerald-500/30";
   }
+}
+
+// =============================================================================
+// M5: Knowledge Base API
+// =============================================================================
+
+export async function getKnowledgeDocuments(): Promise<KnowledgeDocument[]> {
+  return fetchApi<KnowledgeDocument[]>("/api/knowledge/documents");
+}
+
+export async function getKnowledgeDocument(id: string): Promise<KnowledgeDocument> {
+  return fetchApi<KnowledgeDocument>(`/api/knowledge/documents/${id}`);
+}
+
+export async function uploadKnowledgeDocument(
+  file: File,
+  title: string,
+  category: string,
+  description?: string,
+  sourceUrl?: string
+): Promise<KnowledgeDocument> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("title", title);
+  formData.append("category", category);
+  if (description) formData.append("description", description);
+  if (sourceUrl) formData.append("source_url", sourceUrl);
+
+  const response = await fetch(`${API_BASE}/api/knowledge/documents`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Upload failed" }));
+    throw new Error(error.detail || "Upload failed");
+  }
+
+  return response.json();
+}
+
+export async function deleteKnowledgeDocument(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/knowledge/documents/${id}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error("Failed to delete document");
+  }
+}
+
+export async function getKnowledgeStats(): Promise<KnowledgeStats> {
+  return fetchApi<KnowledgeStats>("/api/knowledge/stats");
+}
+
+export async function getDocumentChunks(documentId: string): Promise<KnowledgeChunk[]> {
+  return fetchApi<KnowledgeChunk[]>(`/api/knowledge/documents/${documentId}/chunks`);
+}
+
+// =============================================================================
+// M5: Chat API
+// =============================================================================
+
+export async function getChatThreads(caseId: string): Promise<ChatThread[]> {
+  return fetchApi<ChatThread[]>(`/api/cases/${caseId}/chat/threads`);
+}
+
+export async function getThreadMessages(caseId: string, threadId: string): Promise<ChatMessage[]> {
+  return fetchApi<ChatMessage[]>(`/api/cases/${caseId}/chat/threads/${threadId}/messages`);
+}
+
+export async function deleteChatThread(caseId: string, threadId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/cases/${caseId}/chat/threads/${threadId}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Delete failed" }));
+    throw new Error(error.detail || "Delete failed");
+  }
+}
+
+export type StreamAction = "chat" | "summary" | "next_steps" | "risk_analysis";
+
+export async function* streamChat(
+  caseId: string,
+  message: string,
+  options?: {
+    threadId?: string;
+    action?: StreamAction;
+  }
+): AsyncGenerator<ChatStreamEvent> {
+  const response = await fetch(`${API_BASE}/api/cases/${caseId}/chat/stream`, {
+    method: "POST",
+    headers: {
+      ...getAuthHeaders(),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      message,
+      thread_id: options?.threadId,
+      action: options?.action || "chat",
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Chat request failed");
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("No response body");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try {
+          const event = JSON.parse(line.slice(6)) as ChatStreamEvent;
+          yield event;
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    }
+  }
+}
+
+// =============================================================================
+// M5: Agent Settings API
+// =============================================================================
+
+export async function getAgentSettings(): Promise<AgentSettings> {
+  return fetchApi<AgentSettings>("/api/settings/llm");
+}
+
+export async function updateAgentSettings(settings: AgentSettingsUpdate): Promise<AgentSettings> {
+  const response = await fetch(`${API_BASE}/api/settings/llm`, {
+    method: "PATCH",
+    headers: {
+      ...getAuthHeaders(),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(settings),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Update failed" }));
+    throw new Error(error.detail || "Update failed");
+  }
+
+  return response.json();
+}
+
+export async function testLLMConnection(): Promise<{
+  success: boolean;
+  provider: string;
+  model: string;
+  response?: string;
+  error?: string;
+}> {
+  return postApi("/api/settings/llm/test", {});
 }
