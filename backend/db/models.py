@@ -303,6 +303,11 @@ class RiskAssessmentDB(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=gen_uuid
     )
+    analysis_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("analysis_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     tender_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenders.id", ondelete="CASCADE"), nullable=False
     )
@@ -318,6 +323,9 @@ class RiskAssessmentDB(Base):
         DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
 
+    analysis_run: Mapped["AnalysisRunDB"] = relationship(
+        back_populates="risk_assessments"
+    )
     tender: Mapped["TenderDB"] = relationship(back_populates="risk_assessments")
 
     __table_args__ = (
@@ -325,6 +333,76 @@ class RiskAssessmentDB(Base):
             "overall_score >= 0 AND overall_score <= 100", name="ck_score_range"
         ),
         Index("ix_risk_tender", "tender_id"),
+        Index("ix_risk_analysis_run", "analysis_run_id"),
+    )
+
+
+class AnalysisRunDB(Base):
+    __tablename__ = "analysis_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    graph_source: Mapped[str] = mapped_column(String(20), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    tender_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    company_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    node_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    edge_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    community_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    run_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    communities: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+    risk_assessments: Mapped[list["RiskAssessmentDB"]] = relationship(
+        back_populates="analysis_run", cascade="all, delete-orphan"
+    )
+    company_graph_features: Mapped[list["CompanyGraphFeatureDB"]] = relationship(
+        back_populates="analysis_run", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (Index("ix_analysis_runs_created_at", "created_at"),)
+
+
+class CompanyGraphFeatureDB(Base):
+    __tablename__ = "company_graph_features"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=gen_uuid
+    )
+    analysis_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("analysis_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    graph_degree: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    suspicious_edges: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    official_distance: Mapped[int] = mapped_column(Integer, nullable=False, default=99)
+    community_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+
+    analysis_run: Mapped["AnalysisRunDB"] = relationship(
+        back_populates="company_graph_features"
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "analysis_run_id",
+            "company_id",
+            name="uq_company_graph_features_run_company",
+        ),
+        Index("ix_company_graph_features_run", "analysis_run_id"),
+        Index("ix_company_graph_features_company", "company_id"),
     )
 
 

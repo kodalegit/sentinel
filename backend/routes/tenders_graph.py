@@ -8,6 +8,7 @@ from state import State
 from graph.builder import get_tender_subgraph, graph_to_frontend_format
 from graph.neo4j_communities import get_entity_neighborhood_neo4j
 from graph.neo4j_driver import check_neo4j_health
+from runtime_graph import ensure_runtime_graph
 
 router = APIRouter(prefix="/api", tags=["tenders"])
 
@@ -35,5 +36,6 @@ async def get_tender_graph(
             pass  # Fall through to NetworkX
 
     # NetworkX fallback
-    subgraph = get_tender_subgraph(state.graph, tender_id, depth=depth)
+    graph = ensure_runtime_graph(state)
+    subgraph = get_tender_subgraph(graph, tender_id, depth=depth)
     return graph_to_frontend_format(subgraph)

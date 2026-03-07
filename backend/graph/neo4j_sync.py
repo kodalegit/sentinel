@@ -7,11 +7,14 @@ import logging
 from typing import Any
 
 from models import Company, Director, PublicOfficial, Tender, Bid, EdgeType
+from models import AddressQuality
+from connectors.normalize import classify_address
 from graph.neo4j_driver import get_neo4j_session
 from graph.normalization import (
     normalize_phone,
     normalize_address_key,
     is_generic_email,
+    is_generic_phone,
     MAX_SHARED_EDGES_PER_COMPANY,
     MAX_GROUP_SIZE_ADDRESS,
     MAX_GROUP_SIZE_PHONE,
@@ -229,7 +232,9 @@ async def _create_tender_nodes(
         {
             "id": t.id,
             "title": t.title,
-            "value": float(t.estimated_value) if getattr(t, 'estimated_value', None) else 0.0,
+            "value": (
+                float(t.estimated_value) if getattr(t, "estimated_value", None) else 0.0
+            ),
             "status": t.status or "",
             "procurement_method": t.procurement_method or "",
             "risk_level": tender_risks.get(t.id, "LOW"),
@@ -287,11 +292,13 @@ async def _create_director_edges(session, companies: dict[str, Company]) -> int:
     return record["count"] if record else 0
 
 
-async def _create_bid_edges(session, bids: list[Bid], tenders: dict[str, Tender] = None) -> int:
+async def _create_bid_edges(
+    session, bids: list[Bid], tenders: dict[str, Tender] = None
+) -> int:
     """Create BID_ON edges between companies and tenders."""
     if not bids:
         return 0
-        
+
     tenders = tenders or {}
 
     bid_data = [
@@ -299,7 +306,11 @@ async def _create_bid_edges(session, bids: list[Bid], tenders: dict[str, Tender]
             "company_id": b.company_id,
             "tender_id": b.tender_id,
             "amount": float(b.amount) if b.amount else 0.0,
-            "is_winner": (tenders.get(b.tender_id).awarded_to == b.company_id) if tenders.get(b.tender_id) else False,
+            "is_winner": (
+                (tenders.get(b.tender_id).awarded_to == b.company_id)
+                if tenders.get(b.tender_id)
+                else False
+            ),
         }
         for b in bids
     ]
@@ -363,8 +374,9 @@ async def _create_shared_attribute_edges(session, companies: dict[str, Company])
     # 1. Shared addresses using Python-side normalization
     address_groups: dict[str, list[str]] = defaultdict(list)
     for company in companies.values():
-        if company.physical_address:
-            key = normalize_address_key(company.physical_address)
+        address = company.physical_address or company.address
+        if address and classify_address(address) == AddressQuality.SPECIFIC:
+            key = normalize_address_key(address)
             if key:
                 address_groups[key].append(company.id)
 
@@ -402,7 +414,7 @@ async def _create_shared_attribute_edges(session, companies: dict[str, Company])
     for company in companies.values():
         if company.phone:
             norm_phone = normalize_phone(company.phone)
-            if norm_phone:
+            if norm_phone and not is_generic_phone(company.phone):
                 phone_groups[norm_phone].append(company.id)
 
     phone_edges = []
@@ -652,11 +664,13 @@ async def _upsert_director_edges(session, companies: dict[str, Company]) -> int:
     return record["count"] if record else 0
 
 
-async def _upsert_bid_edges(session, bids: list[Bid], tenders: dict[str, Tender] = None) -> int:
+async def _upsert_bid_edges(
+    session, bids: list[Bid], tenders: dict[str, Tender] = None
+) -> int:
     """Upsert BID_ON edges using MERGE (incremental sync)."""
     if not bids:
         return 0
-        
+
     tenders = tenders or {}
 
     bid_data = [
@@ -664,7 +678,11 @@ async def _upsert_bid_edges(session, bids: list[Bid], tenders: dict[str, Tender]
             "company_id": b.company_id,
             "tender_id": b.tender_id,
             "amount": float(b.amount) if b.amount else 0.0,
-            "is_winner": (tenders.get(b.tender_id).awarded_to == b.company_id) if tenders.get(b.tender_id) else False,
+            "is_winner": (
+                (tenders.get(b.tender_id).awarded_to == b.company_id)
+                if tenders.get(b.tender_id)
+                else False
+            ),
         }
         for b in bids
     ]

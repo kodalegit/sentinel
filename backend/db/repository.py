@@ -21,6 +21,8 @@ from db.models import (
     RiskAssessmentDB,
     CompanyDirectorDB,
     AuditLogDB,
+    AnalysisRunDB,
+    CompanyGraphFeatureDB,
     CaseDB,
     CaseNoteDB,
     CaseEventDB,
@@ -133,14 +135,14 @@ async def get_all_bids(db: AsyncSession) -> list[BidDB]:
 
 
 async def get_latest_risk_assessment(
-    db: AsyncSession, tender_id: uuid.UUID
+    db: AsyncSession,
+    tender_id: uuid.UUID,
+    analysis_run_id: uuid.UUID | None = None,
 ) -> RiskAssessmentDB | None:
-    result = await db.execute(
-        select(RiskAssessmentDB)
-        .where(RiskAssessmentDB.tender_id == tender_id)
-        .order_by(RiskAssessmentDB.version.desc())
-        .limit(1)
-    )
+    query = select(RiskAssessmentDB).where(RiskAssessmentDB.tender_id == tender_id)
+    if analysis_run_id is not None:
+        query = query.where(RiskAssessmentDB.analysis_run_id == analysis_run_id)
+    result = await db.execute(query.order_by(RiskAssessmentDB.version.desc()).limit(1))
     return result.scalar_one_or_none()
 
 
@@ -165,8 +167,21 @@ async def get_all_latest_risk_assessments(db: AsyncSession) -> list[RiskAssessme
     return list(result.scalars().all())
 
 
+async def get_risk_assessments_for_run(
+    db: AsyncSession,
+    analysis_run_id: uuid.UUID,
+) -> list[RiskAssessmentDB]:
+    result = await db.execute(
+        select(RiskAssessmentDB).where(
+            RiskAssessmentDB.analysis_run_id == analysis_run_id
+        )
+    )
+    return list(result.scalars().all())
+
+
 async def upsert_risk_assessment(
     db: AsyncSession,
+    analysis_run_id: uuid.UUID,
     tender_id: uuid.UUID,
     overall_score: int,
     category: str,
@@ -181,6 +196,7 @@ async def upsert_risk_assessment(
     new_version = (existing.version + 1) if existing else 1
 
     assessment = RiskAssessmentDB(
+        analysis_run_id=analysis_run_id,
         tender_id=tender_id,
         version=new_version,
         overall_score=overall_score,
@@ -194,6 +210,82 @@ async def upsert_risk_assessment(
     db.add(assessment)
     await db.flush()
     return assessment
+
+
+# --- Analysis Run ---
+
+
+async def get_latest_analysis_run(db: AsyncSession) -> AnalysisRunDB | None:
+    result = await db.execute(
+        select(AnalysisRunDB).order_by(AnalysisRunDB.created_at.desc()).limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def create_analysis_run(
+    db: AsyncSession,
+    *,
+    status: str,
+    graph_source: str,
+    model_version: str,
+    tender_count: int,
+    company_count: int,
+    node_count: int,
+    edge_count: int,
+    community_count: int,
+    run_metadata: dict | None = None,
+    communities: list | None = None,
+) -> AnalysisRunDB:
+    analysis_run = AnalysisRunDB(
+        status=status,
+        graph_source=graph_source,
+        model_version=model_version,
+        tender_count=tender_count,
+        company_count=company_count,
+        node_count=node_count,
+        edge_count=edge_count,
+        community_count=community_count,
+        run_metadata=run_metadata,
+        communities=communities,
+    )
+    db.add(analysis_run)
+    await db.flush()
+    return analysis_run
+
+
+# --- Company Graph Features ---
+
+
+async def create_company_graph_features(
+    db: AsyncSession,
+    *,
+    analysis_run_id: uuid.UUID,
+    company_features: dict[str, dict[str, int]],
+) -> None:
+    for company_id, feature_values in company_features.items():
+        db.add(
+            CompanyGraphFeatureDB(
+                analysis_run_id=analysis_run_id,
+                company_id=uuid.UUID(company_id),
+                graph_degree=feature_values.get("graph_degree", 0),
+                suspicious_edges=feature_values.get("suspicious_edges", 0),
+                official_distance=feature_values.get("official_distance", 99),
+                community_size=feature_values.get("community_size", 0),
+            )
+        )
+    await db.flush()
+
+
+async def get_company_graph_features_for_run(
+    db: AsyncSession,
+    analysis_run_id: uuid.UUID,
+) -> list[CompanyGraphFeatureDB]:
+    result = await db.execute(
+        select(CompanyGraphFeatureDB).where(
+            CompanyGraphFeatureDB.analysis_run_id == analysis_run_id
+        )
+    )
+    return list(result.scalars().all())
 
 
 # --- Dashboard Stats ---
@@ -217,7 +309,11 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
     pending = pending_result.scalar_one()
 
     # Risk counts from latest assessments
-    assessments = await get_all_latest_risk_assessments(db)
+    analysis_run = await get_latest_analysis_run(db)
+    if analysis_run is not None:
+        assessments = await get_risk_assessments_for_run(db, analysis_run.id)
+    else:
+        assessments = await get_all_latest_risk_assessments(db)
     high = sum(1 for a in assessments if a.category == "HIGH")
     medium = sum(1 for a in assessments if a.category == "MEDIUM")
     low = sum(1 for a in assessments if a.category == "LOW")

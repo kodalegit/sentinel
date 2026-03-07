@@ -7,6 +7,7 @@
 
 import { useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useLatestAnalysisSnapshot } from "@/hooks/useTenders";
 import {
   syncPPIP,
   ingestEGPTenders,
@@ -40,6 +41,7 @@ let logCounter = 0;
 
 export default function DataSourcesPage() {
   const queryClient = useQueryClient();
+  const { snapshot } = useLatestAnalysisSnapshot();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [recomputing, setRecomputing] = useState(false);
@@ -201,6 +203,52 @@ export default function DataSourcesPage() {
       </header>
 
       <div className="max-w-7xl mx-auto px-6 lg:px-10 py-8">
+        {snapshot && (
+          <div className="mb-8 rounded-2xl border border-border/70 bg-card/90 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.15em] text-muted-foreground">
+                  Active Analysis Snapshot
+                </p>
+                <p className="mt-1 text-sm text-foreground">
+                  {snapshot.analysis_run_id
+                    ? `Run ${snapshot.analysis_run_id.slice(0, 8)} • ${snapshot.snapshot_source ?? "unknown source"}`
+                    : "No persisted snapshot loaded"}
+                </p>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {snapshot.model_version ?? "Unknown model"}
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+              <div>
+                <p className="text-lg font-display font-bold text-foreground">{snapshot.tender_count}</p>
+                <p className="text-[11px] text-muted-foreground">Tenders</p>
+              </div>
+              <div>
+                <p className="text-lg font-display font-bold text-foreground">{snapshot.company_count}</p>
+                <p className="text-[11px] text-muted-foreground">Companies</p>
+              </div>
+              <div>
+                <p className="text-lg font-display font-bold text-foreground">{snapshot.node_count}</p>
+                <p className="text-[11px] text-muted-foreground">Nodes</p>
+              </div>
+              <div>
+                <p className="text-lg font-display font-bold text-foreground">{snapshot.edge_count}</p>
+                <p className="text-[11px] text-muted-foreground">Edges</p>
+              </div>
+              <div>
+                <p className="text-lg font-display font-bold text-foreground">{snapshot.community_count}</p>
+                <p className="text-[11px] text-muted-foreground">Communities</p>
+              </div>
+              <div>
+                <p className="text-lg font-display font-bold text-foreground">{snapshot.risk_score_count}</p>
+                <p className="text-[11px] text-muted-foreground">Risk Scores</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Stats bar */}
         {lastStats && (
           <div className="mb-8 rounded-2xl border border-primary/20 bg-primary/5 p-4">

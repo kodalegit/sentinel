@@ -142,6 +142,23 @@ export interface DashboardStats {
   flagged_today: number;
 }
 
+export interface AnalysisSnapshotInfo {
+  analysis_run_id: string | null;
+  status: string | null;
+  snapshot_source: string | null;
+  graph_source: string | null;
+  graph_loaded: boolean;
+  model_version: string | null;
+  created_at: string | null;
+  tender_count: number;
+  company_count: number;
+  node_count: number;
+  edge_count: number;
+  community_count: number;
+  risk_score_count: number;
+  company_feature_count: number;
+}
+
 // Community detection
 export interface CommunityCluster {
   id: string;
@@ -304,6 +321,8 @@ export interface RecomputeResponse {
     edges: number;
     communities: number;
     risk_scores: number;
+    analysis_run_id?: string;
+    snapshot_source?: string;
   };
 }
 

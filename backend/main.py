@@ -26,11 +26,13 @@ from db.mappers import (
     official_to_pydantic,
     tender_to_pydantic,
     bid_to_pydantic,
+    risk_assessment_to_pydantic,
     risk_factors_to_json,
 )
 from graph.builder import build_procurement_graph
-from graph.communities import detect_communities
+from graph.communities import detect_communities, Cluster
 from ml.hybrid_scorer import HybridRiskScorer
+from ml.features import materialize_company_graph_features
 from graph.neo4j_driver import close_neo4j_driver, check_neo4j_health
 from graph.neo4j_sync import sync_graph_to_neo4j
 from graph.neo4j_communities import detect_communities_neo4j
@@ -62,6 +64,167 @@ class JobStatus(str, Enum):
 
 _recompute_jobs: dict[str, dict[str, Any]] = {}
 
+ANALYSIS_MODEL_VERSION = "hybrid-v1"
+
+
+def _communities_to_json(communities: list[Cluster]) -> list[dict]:
+    return [
+        {
+            "id": community.id,
+            "company_ids": community.company_ids,
+            "company_names": community.company_names,
+            "size": community.size,
+            "suspicion_score": community.suspicion_score,
+            "shared_attributes": community.shared_attributes,
+            "co_bid_count": community.co_bid_count,
+            "win_pattern": community.win_pattern,
+        }
+        for community in communities
+    ]
+
+
+def _communities_from_json(items: list[dict] | None) -> list[Cluster]:
+    if not items:
+        return []
+    return [
+        Cluster(
+            id=item.get("id", "cluster-unknown"),
+            company_ids=item.get("company_ids", []),
+            company_names=item.get("company_names", []),
+            size=int(item.get("size", 0)),
+            suspicion_score=float(item.get("suspicion_score", 0.0)),
+            shared_attributes=item.get("shared_attributes", {}),
+            co_bid_count=int(item.get("co_bid_count", 0)),
+            win_pattern=item.get("win_pattern", {}),
+        )
+        for item in items
+    ]
+
+
+def _company_graph_features_from_rows(rows) -> dict[str, dict[str, int]]:
+    return {
+        str(row.company_id): {
+            "graph_degree": row.graph_degree,
+            "suspicious_edges": row.suspicious_edges,
+            "official_distance": row.official_distance,
+            "community_size": row.community_size,
+        }
+        for row in rows
+    }
+
+
+async def load_persisted_analysis(app: FastAPI) -> dict | None:
+    data = await load_data_from_db()
+
+    async with async_session() as db:
+        analysis_run = await repo.get_latest_analysis_run(db)
+        if analysis_run is None:
+            return None
+        risk_assessments = await repo.get_risk_assessments_for_run(db, analysis_run.id)
+        feature_rows = await repo.get_company_graph_features_for_run(
+            db, analysis_run.id
+        )
+
+    risk_scores = {
+        str(assessment.tender_id): risk_assessment_to_pydantic(assessment)
+        for assessment in risk_assessments
+    }
+    communities = _communities_from_json(analysis_run.communities)
+    company_graph_features = _company_graph_features_from_rows(feature_rows)
+
+    app.state.app_state = AppState(
+        tenders=data["tenders"],
+        companies=data["companies"],
+        directors=data["directors"],
+        officials=data["officials"],
+        bids=data["bids"],
+        bids_by_tender=data["bids_by_tender"],
+        risk_scores=risk_scores,
+        communities=communities,
+        analysis_run_id=str(analysis_run.id),
+        analysis_status=analysis_run.status,
+        analysis_model_version=analysis_run.model_version,
+        analysis_created_at=analysis_run.created_at,
+        graph_loaded=False,
+        graph_source="persisted",
+        snapshot_source="persisted",
+        analysis_summary={
+            "tenders": analysis_run.tender_count,
+            "companies": analysis_run.company_count,
+            "nodes": analysis_run.node_count,
+            "edges": analysis_run.edge_count,
+            "communities": analysis_run.community_count,
+            "risk_scores": len(risk_scores),
+        },
+        company_graph_features=company_graph_features,
+    )
+
+    return {
+        "tenders": len(data["tenders"]),
+        "companies": len(data["companies"]),
+        "nodes": analysis_run.node_count,
+        "edges": analysis_run.edge_count,
+        "communities": len(communities),
+        "risk_scores": len(risk_scores),
+        "analysis_run_id": str(analysis_run.id),
+        "snapshot_source": "persisted",
+    }
+
+
+async def persist_analysis_snapshot(
+    *,
+    risk_scores: dict[str, RiskScore],
+    communities: list[Cluster],
+    company_graph_features: dict[str, dict[str, int]],
+    scorer: HybridRiskScorer,
+    summary: dict[str, int],
+) -> str:
+    async with async_session() as db:
+        async with db.begin():
+            analysis_run = await repo.create_analysis_run(
+                db=db,
+                status="COMPLETED",
+                graph_source="networkx",
+                model_version=ANALYSIS_MODEL_VERSION,
+                tender_count=summary["tenders"],
+                company_count=summary["companies"],
+                node_count=summary["nodes"],
+                edge_count=summary["edges"],
+                community_count=summary["communities"],
+                run_metadata=summary,
+                communities=_communities_to_json(communities),
+            )
+            await repo.create_company_graph_features(
+                db=db,
+                analysis_run_id=analysis_run.id,
+                company_features=company_graph_features,
+            )
+
+            ml_scores = scorer.last_ml_scores
+            model_version = f"{ANALYSIS_MODEL_VERSION}:{analysis_run.id}"
+            for tender_id, risk in risk_scores.items():
+                ml_row = None
+                if ml_scores is not None and tender_id in ml_scores.index:
+                    ml_row = ml_scores.loc[tender_id]
+                await repo.upsert_risk_assessment(
+                    db=db,
+                    analysis_run_id=analysis_run.id,
+                    tender_id=uuid.UUID(tender_id),
+                    overall_score=risk.overall,
+                    category=risk.category.value,
+                    rule_factors=risk_factors_to_json(risk.factors),
+                    recommendation=risk.recommendation,
+                    ml_anomaly_score=(
+                        float(ml_row["anomaly_score"]) if ml_row is not None else None
+                    ),
+                    ml_feature_importance=(
+                        ml_row["feature_importance"] if ml_row is not None else None
+                    ),
+                    model_version=model_version,
+                )
+
+    return str(analysis_run.id)
+
 
 async def recompute_app_state(app: FastAPI) -> dict:
     """
@@ -83,6 +246,7 @@ async def recompute_app_state(app: FastAPI) -> dict:
     # Detect communities using NetworkX (always available)
     # Neo4j sync happens in background after initial load
     communities = detect_communities(graph, data["bids"], data["companies"])
+    company_graph_features = materialize_company_graph_features(graph)
 
     scorer = HybridRiskScorer()
     risk_scores = scorer.score_all(
@@ -94,13 +258,28 @@ async def recompute_app_state(app: FastAPI) -> dict:
         graph=graph,
         communities=communities,
         bids_by_tender=data["bids_by_tender"],
+        company_graph_features=company_graph_features,
     )
 
     for tender_id, risk in risk_scores.items():
         if tender_id in graph:
             graph.nodes[tender_id]["risk_level"] = risk.category.value
 
-    await persist_risk_scores(risk_scores)
+    summary = {
+        "tenders": len(data["tenders"]),
+        "companies": len(data["companies"]),
+        "nodes": graph.number_of_nodes(),
+        "edges": graph.number_of_edges(),
+        "communities": len(communities),
+        "risk_scores": len(risk_scores),
+    }
+    analysis_run_id = await persist_analysis_snapshot(
+        risk_scores=risk_scores,
+        communities=communities,
+        company_graph_features=company_graph_features,
+        scorer=scorer,
+        summary=summary,
+    )
 
     app.state.app_state = AppState(
         tenders=data["tenders"],
@@ -110,19 +289,20 @@ async def recompute_app_state(app: FastAPI) -> dict:
         bids=data["bids"],
         bids_by_tender=data["bids_by_tender"],
         graph=graph,
+        graph_loaded=True,
+        graph_source="networkx",
         risk_scores=risk_scores,
         communities=communities,
+        analysis_run_id=analysis_run_id,
+        analysis_status="COMPLETED",
+        analysis_model_version=ANALYSIS_MODEL_VERSION,
+        analysis_created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        snapshot_source="fresh",
+        analysis_summary=summary,
+        company_graph_features=company_graph_features,
     )
 
-    s = app.state.app_state
-    return {
-        "tenders": len(s.tenders),
-        "companies": len(s.companies),
-        "nodes": s.graph.number_of_nodes(),
-        "edges": s.graph.number_of_edges(),
-        "communities": len(s.communities),
-        "risk_scores": len(s.risk_scores),
-    }
+    return {**summary, "analysis_run_id": analysis_run_id, "snapshot_source": "fresh"}
 
 
 async def sync_neo4j_background(app: FastAPI):
@@ -190,22 +370,6 @@ async def load_data_from_db():
     }
 
 
-async def persist_risk_scores(risk_scores: dict[str, RiskScore]):
-    """Save computed risk scores back to PostgreSQL."""
-    async with async_session() as db:
-        async with db.begin():
-            for tender_id, risk in risk_scores.items():
-                await repo.upsert_risk_assessment(
-                    db=db,
-                    tender_id=uuid.UUID(tender_id),
-                    overall_score=risk.overall,
-                    category=risk.category.value,
-                    rule_factors=risk_factors_to_json(risk.factors),
-                    recommendation=risk.recommendation,
-                    model_version="rules-v1",
-                )
-
-
 async def neo4j_or_fallback(neo4j_coro, networkx_fn, *args, **kwargs):
     """
     Try Neo4j first; fall back to the NetworkX function on any failure.
@@ -237,16 +401,22 @@ async def lifespan(app: FastAPI):
             "Set JWT_SECRET_KEY in production!\n" + "=" * 70
         )
 
-    stats = await recompute_app_state(app)
-    print(f"Loaded {stats['tenders']} tenders from PostgreSQL")
-    print(f"Built graph with {stats['nodes']} nodes and {stats['edges']} edges")
-    print(f"Detected {stats['communities']} bidding communities")
-    print(f"Computed and persisted {stats['risk_scores']} risk scores")
+    stats = await load_persisted_analysis(app)
+    if stats is None:
+        stats = await recompute_app_state(app)
+        print(f"Loaded {stats['tenders']} tenders from PostgreSQL")
+        print(f"Built graph with {stats['nodes']} nodes and {stats['edges']} edges")
+        print(f"Detected {stats['communities']} bidding communities")
+        print(f"Computed and persisted {stats['risk_scores']} risk scores")
 
-    # Populate Neo4j on first boot so Neo4j-first endpoints are ready immediately.
-    if settings.neo4j_enabled:
-        asyncio.ensure_future(sync_neo4j_background(app))
-        print("Neo4j sync scheduled (background)")
+        if settings.neo4j_enabled:
+            asyncio.ensure_future(sync_neo4j_background(app))
+            print("Neo4j sync scheduled (background)")
+    else:
+        print(f"Loaded {stats['tenders']} tenders from PostgreSQL")
+        print(f"Loaded persisted analysis snapshot {stats['analysis_run_id']}")
+        print(f"Loaded {stats['communities']} bidding communities")
+        print(f"Loaded {stats['risk_scores']} persisted risk scores")
 
     yield
 

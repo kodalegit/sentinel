@@ -217,6 +217,23 @@ class RiskScore(BaseModel):
     recommendation: Optional[str] = None
 
 
+class AnalysisSnapshotInfo(BaseModel):
+    analysis_run_id: Optional[str] = None
+    status: Optional[str] = None
+    snapshot_source: Optional[str] = None
+    graph_source: Optional[str] = None
+    graph_loaded: bool = False
+    model_version: Optional[str] = None
+    created_at: Optional[datetime] = None
+    tender_count: int = 0
+    company_count: int = 0
+    node_count: int = 0
+    edge_count: int = 0
+    community_count: int = 0
+    risk_score_count: int = 0
+    company_feature_count: int = 0
+
+
 class TenderWithRisk(BaseModel):
     """Tender with computed risk score for API responses."""
 

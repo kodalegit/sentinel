@@ -2,6 +2,7 @@
 Typed application state, populated once at startup and injected into routes via Depends().
 """
 
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Annotated
 
@@ -30,8 +31,17 @@ class AppState:
     bids: list[Bid] = field(default_factory=list)
     bids_by_tender: dict[str, list[Bid]] = field(default_factory=dict)
     graph: nx.Graph = field(default_factory=nx.Graph)
+    graph_loaded: bool = False
+    graph_source: str | None = None
     risk_scores: dict[str, RiskScore] = field(default_factory=dict)
     communities: list[Cluster] = field(default_factory=list)
+    analysis_run_id: str | None = None
+    analysis_status: str | None = None
+    analysis_model_version: str | None = None
+    analysis_created_at: datetime | None = None
+    snapshot_source: str | None = None
+    analysis_summary: dict[str, int] = field(default_factory=dict)
+    company_graph_features: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 def get_state(request: Request) -> AppState:

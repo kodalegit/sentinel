@@ -66,12 +66,30 @@ GENERIC_EMAIL_PREFIXES = [
     "mail@",
 ]
 
+GENERIC_PHONE_PATTERNS = [
+    "000000",
+    "111111",
+    "222222",
+    "333333",
+    "444444",
+    "555555",
+    "666666",
+    "777777",
+    "888888",
+    "999999",
+    "123456",
+    "234567",
+    "345678",
+    "456789",
+    "012345",
+]
+
 
 def normalize_phone(phone: str | None) -> str | None:
     """
     Normalize phone number for comparison.
     Strips all non-digit characters and returns None for empty/invalid.
-    
+
     Examples:
         "+254 712 345 678" -> "254712345678"
         "0712-345-678" -> "0712345678"
@@ -86,17 +104,29 @@ def normalize_phone(phone: str | None) -> str | None:
     return digits
 
 
+def is_generic_phone(phone: str | None) -> bool:
+    digits = normalize_phone(phone)
+    if not digits:
+        return True
+
+    core = digits[-9:] if len(digits) >= 9 else digits
+    if len(set(core)) <= 2:
+        return True
+
+    return any(pattern in core for pattern in GENERIC_PHONE_PATTERNS)
+
+
 def normalize_address_key(addr: str) -> str | None:
     """
     Create a normalized key for address grouping.
     Returns None for addresses that are too vague to group reliably.
-    
+
     Uses multiple strategies to extract a groupable key:
     1. Plot number (e.g., "Plot 45" -> "plot:45")
     2. LR number (e.g., "L.R. No. 1234" -> "lr:1234")
     3. Building name (e.g., "Westlands Plaza" -> "building:westlands plaza")
     4. Token set (if >= 3 meaningful tokens)
-    
+
     Returns None for:
     - Empty addresses
     - PO Box only addresses
@@ -104,7 +134,7 @@ def normalize_address_key(addr: str) -> str | None:
     """
     if not addr:
         return None
-        
+
     a = addr.lower().strip()
 
     # 1. Try plot number
@@ -125,7 +155,7 @@ def normalize_address_key(addr: str) -> str | None:
     # 4. For specific addresses, use normalized token set
     tokens = set(re.findall(r"\w+", a))
     meaningful = tokens - ADDRESS_FILLER_WORDS
-    
+
     # Filter out pure numbers (like PO Box numbers)
     meaningful = {t for t in meaningful if not t.isdigit()}
 
@@ -139,10 +169,10 @@ def normalize_address_key(addr: str) -> str | None:
 def is_generic_email(email: str) -> bool:
     """
     Check if email is a generic/placeholder that shouldn't create edges.
-    
+
     Generic emails like info@company.com are commonly used as defaults
     and would create false connections between unrelated companies.
-    
+
     Examples:
         "info@company.com" -> True
         "john.doe@company.com" -> False
@@ -157,7 +187,7 @@ def is_generic_email(email: str) -> bool:
 def addresses_similar(addr1: str, addr2: str) -> bool:
     """
     Check if two addresses are suspiciously similar.
-    
+
     Uses multiple matching strategies for Kenya's varied address formats:
     1. Exact match after normalization
     2. Plot number matching (e.g., 'Plot 45' ~ 'Plot 45A')
@@ -167,7 +197,7 @@ def addresses_similar(addr1: str, addr2: str) -> bool:
     """
     if not addr1 or not addr2:
         return False
-        
+
     a1 = addr1.lower().strip()
     a2 = addr2.lower().strip()
 
@@ -197,13 +227,12 @@ def addresses_similar(addr1: str, addr2: str) -> bool:
     # 4. High token overlap for addresses with enough detail
     tokens1 = set(re.findall(r"\w+", a1))
     tokens2 = set(re.findall(r"\w+", a2))
-    
+
     if len(tokens1) >= 3 and len(tokens2) >= 3:
         overlap = tokens1 & tokens2
         meaningful_overlap = overlap - ADDRESS_FILLER_WORDS
         min_tokens = min(
-            len(tokens1 - ADDRESS_FILLER_WORDS), 
-            len(tokens2 - ADDRESS_FILLER_WORDS)
+            len(tokens1 - ADDRESS_FILLER_WORDS), len(tokens2 - ADDRESS_FILLER_WORDS)
         )
         if min_tokens > 0 and len(meaningful_overlap) / min_tokens >= 0.6:
             return True

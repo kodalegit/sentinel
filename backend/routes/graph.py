@@ -21,6 +21,7 @@ from graph.neo4j_communities import (
 )
 from graph.neo4j_driver import check_neo4j_health
 from graph.neo4j_sync import get_graph_stats_from_neo4j
+from runtime_graph import ensure_runtime_graph
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
 
@@ -46,7 +47,7 @@ async def _neo4j_or_networkx(neo4j_coro, networkx_fn, *args, **kwargs):
 @router.get("/stats")
 async def get_graph_stats(state: State):
     """Get graph statistics. Uses Neo4j counts when available, falls back to NetworkX."""
-    G = state.graph
+    G = ensure_runtime_graph(state)
 
     # Count edges by relationship from NetworkX (always available, used for type breakdowns)
     node_types: dict[str, int] = {}
@@ -101,7 +102,7 @@ def get_full_graph(
 ):
     """Get the shadow graph for exploration with pagination/limits.
     For large graphs, use /communities or /entity/{id} endpoints instead."""
-    G = state.graph
+    G = ensure_runtime_graph(state)
 
     # If graph is small enough, return full graph
     if G.number_of_nodes() <= limit_nodes and G.number_of_edges() <= limit_edges:
@@ -217,8 +218,9 @@ async def get_community_graph(
             pass  # Fall through to NetworkX
 
     # NetworkX fallback
+    graph = ensure_runtime_graph(state)
     subgraph = get_cluster_subgraph(
-        state.graph, cluster.company_ids, include_tenders, include_officials
+        graph, cluster.company_ids, include_tenders, include_officials
     )
     return graph_to_frontend_format(subgraph)
 
@@ -242,7 +244,8 @@ async def get_path(
             pass
 
     # NetworkX fallback
-    result = find_shortest_path(state.graph, source, target)
+    graph = ensure_runtime_graph(state)
+    result = find_shortest_path(graph, source, target)
     if result is None:
         raise HTTPException(status_code=404, detail="No path found between entities")
     return result
@@ -270,8 +273,9 @@ async def get_entity_neighborhood(
             pass
 
     # NetworkX fallback
-    if entity_id not in state.graph:
+    graph = ensure_runtime_graph(state)
+    if entity_id not in graph:
         raise HTTPException(status_code=404, detail="Entity not found in graph")
 
-    subgraph = get_tender_subgraph(state.graph, entity_id, depth=depth)
+    subgraph = get_tender_subgraph(graph, entity_id, depth=depth)
     return graph_to_frontend_format(subgraph)

@@ -3,6 +3,7 @@
  */
 
 import type {
+  AnalysisSnapshotInfo,
   DashboardStats,
   TenderWithRisk,
   TenderDetail,
@@ -173,6 +174,10 @@ async function deleteApi(endpoint: string): Promise<void> {
 
 export async function getDashboardStats(): Promise<DashboardStats> {
   return fetchApi<DashboardStats>("/api/stats");
+}
+
+export async function getLatestAnalysisSnapshot(): Promise<AnalysisSnapshotInfo> {
+  return fetchApi<AnalysisSnapshotInfo>("/api/analysis/latest");
 }
 
 export async function getTenders(options?: {

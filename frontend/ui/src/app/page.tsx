@@ -6,7 +6,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useDashboardStats, useTenders } from "@/hooks/useTenders";
+import {
+  useDashboardStats,
+  useLatestAnalysisSnapshot,
+  useTenders,
+} from "@/hooks/useTenders";
 import { formatKES } from "@/lib/api";
 import type { RiskCategory } from "@/lib/types";
 import { TenderCard } from "@/components/TenderCard";
@@ -34,9 +38,22 @@ function DashboardContent() {
   const [activeTab, setActiveTab] = useState<FilterTab>("ALL");
 
   const { stats, loading: statsLoading } = useDashboardStats();
+  const { snapshot, loading: snapshotLoading } = useLatestAnalysisSnapshot();
   const { tenders, loading: tendersLoading } = useTenders(
     activeTab === "ALL" ? undefined : activeTab
   );
+
+  const snapshotLabel = snapshot?.snapshot_source === "fresh"
+    ? "Fresh Snapshot"
+    : snapshot?.snapshot_source === "persisted"
+    ? "Persisted Snapshot"
+    : "Snapshot Unavailable";
+
+  const graphLabel = snapshot?.graph_loaded
+    ? snapshot?.graph_source === "networkx-lazy"
+      ? "Lazy graph loaded"
+      : "Graph loaded"
+    : "Graph not preloaded";
 
   return (
     <div className="min-h-screen pb-12">
@@ -58,9 +75,13 @@ function DashboardContent() {
             <div className="flex items-center gap-3">
               <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-secondary/70 px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                Live Monitoring
+                {snapshotLoading ? "Loading Snapshot" : snapshotLabel}
               </span>
-              <span className="text-xs text-muted-foreground">Updated every hour</span>
+              <span className="text-xs text-muted-foreground">
+                {snapshot?.analysis_run_id
+                  ? `Run ${snapshot.analysis_run_id.slice(0, 8)} • ${graphLabel}`
+                  : graphLabel}
+              </span>
             </div>
           </div>
         </div>

@@ -33,6 +33,9 @@ class HybridRiskScorer:
 
     def __init__(self):
         self.detector = AnomalyDetector()
+        self.last_features_df: pd.DataFrame | None = None
+        self.last_ml_scores: pd.DataFrame | None = None
+        self.last_company_graph_features: dict[str, dict[str, int]] = {}
 
     def fit(
         self,
@@ -41,6 +44,7 @@ class HybridRiskScorer:
         bids: list[Bid],
         graph: nx.Graph,
         bids_by_tender: dict[str, list[Bid]] | None = None,
+        company_graph_features: dict[str, dict[str, int]] | None = None,
     ):
         """Train the Isolation Forest on current data."""
         features_df = extract_tender_features(
@@ -49,7 +53,10 @@ class HybridRiskScorer:
             bids,
             graph,
             bids_by_tender=bids_by_tender,
+            company_graph_features=company_graph_features,
         )
+        self.last_features_df = features_df.copy()
+        self.last_company_graph_features = company_graph_features or {}
         self.detector.fit(features_df)
         self.detector.save("default")
 
@@ -63,6 +70,7 @@ class HybridRiskScorer:
         graph: nx.Graph,
         communities: list[Cluster] | None = None,
         bids_by_tender: dict[str, list[Bid]] | None = None,
+        company_graph_features: dict[str, dict[str, int]] | None = None,
     ) -> dict[str, RiskScore]:
         """
         Compute hybrid risk scores for all tenders.
@@ -81,16 +89,27 @@ class HybridRiskScorer:
             bids,
             graph,
             bids_by_tender=bids_by_tender,
+            company_graph_features=company_graph_features,
         )
+        self.last_features_df = features_df.copy()
+        self.last_company_graph_features = company_graph_features or {}
         ml_scores = None
 
         if not self.detector.is_fitted:
             loaded = self.detector.load("default")
             if not loaded:
-                self.fit(tenders, companies, bids, graph, bids_by_tender=bids_by_tender)
+                self.fit(
+                    tenders,
+                    companies,
+                    bids,
+                    graph,
+                    bids_by_tender=bids_by_tender,
+                    company_graph_features=company_graph_features,
+                )
 
         if self.detector.is_fitted:
             ml_scores = self.detector.score(features_df)
+        self.last_ml_scores = ml_scores.copy() if ml_scores is not None else None
 
         # Use Louvain communities for cartel detection (unified algorithm)
         if communities is None:

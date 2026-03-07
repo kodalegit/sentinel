@@ -5,6 +5,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RiskCategory, CaseStatus } from "@/lib/types";
 import {
+  getLatestAnalysisSnapshot,
   getDashboardStats,
   getTenders,
   getTenderDetail,
@@ -22,6 +23,7 @@ import {
 
 export const queryKeys = {
   dashboard: ["dashboard-stats"] as const,
+  analysisLatest: ["analysis-latest"] as const,
   tenders: (filter?: RiskCategory) => ["tenders", filter ?? "ALL"] as const,
   tenderDetail: (id: string) => ["tender-detail", id] as const,
   tenderGraph: (id: string) => ["tender-graph", id] as const,
@@ -41,6 +43,15 @@ export function useDashboardStats() {
     queryFn: getDashboardStats,
   });
   return { stats, loading, error };
+}
+
+export function useLatestAnalysisSnapshot() {
+  const { data: snapshot = null, isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.analysisLatest,
+    queryFn: getLatestAnalysisSnapshot,
+    staleTime: 30 * 1000,
+  });
+  return { snapshot, loading, error };
 }
 
 export function useTenders(filter?: RiskCategory) {

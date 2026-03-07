@@ -25,6 +25,7 @@ from graph.normalization import (
     normalize_phone,
     normalize_address_key,
     is_generic_email,
+    is_generic_phone,
     MAX_SHARED_EDGES_PER_COMPANY,
     MAX_GROUP_SIZE_ADDRESS,
     MAX_GROUP_SIZE_PHONE,
@@ -170,10 +171,9 @@ def _add_shared_address_edges(G: nx.Graph, companies: dict[str, Company]):
         if not addr:
             continue
         quality = classify_address(addr)
-        if quality == AddressQuality.PLACEHOLDER:
+        if quality != AddressQuality.SPECIFIC:
             continue
 
-        # Create normalized key for grouping
         addr_key = normalize_address_key(addr)
         if addr_key:
             address_groups[addr_key].append((company.id, addr, quality))
@@ -195,16 +195,12 @@ def _add_shared_address_edges(G: nx.Graph, companies: dict[str, Company]):
             for id2, addr2, q2 in group[i + 1 :]:
                 if edge_count[id2] >= MAX_SHARED_EDGES_PER_COMPANY:
                     continue
-                # Lower confidence if either address is vague
-                confidence = "high"
-                if q1 == AddressQuality.VAGUE or q2 == AddressQuality.VAGUE:
-                    confidence = "low"
                 G.add_edge(
                     id1,
                     id2,
                     relationship=EdgeType.SHARES_ADDRESS.value,
                     suspicious=True,
-                    confidence=confidence,
+                    confidence="high",
                 )
                 edge_count[id1] += 1
                 edge_count[id2] += 1
@@ -220,7 +216,7 @@ def _add_shared_phone_edges(G: nx.Graph, companies: dict[str, Company]):
 
     for company in companies.values():
         phone = normalize_phone(company.phone)
-        if phone:
+        if phone and not is_generic_phone(company.phone):
             phone_groups[phone].append(company.id)
 
     # Track edges per company to enforce limit

@@ -11,8 +11,9 @@ from models import (
     TenderDetail,
 )
 from state import State
-from intelligence.evidence import build_evidence_pack, build_evidence_pack_async
+from intelligence.evidence import build_evidence_pack_async
 from intelligence.agent import get_agent
+from runtime_graph import ensure_runtime_graph
 
 router = APIRouter(prefix="/api", tags=["tenders"])
 
@@ -88,7 +89,10 @@ async def get_evidence_pack(tender_id: str, state: State):
     )
     tender_bids = state.bids_by_tender.get(tender_id, [])
 
-    pack = await build_evidence_pack_async(tender, risk, tender_bids, state.companies, state.graph)
+    graph = ensure_runtime_graph(state)
+    pack = await build_evidence_pack_async(
+        tender, risk, tender_bids, state.companies, graph
+    )
     return pack.to_dict()
 
 
@@ -105,8 +109,10 @@ async def explain_tender_risk(tender_id: str, state: State):
     tender_bids = state.bids_by_tender.get(tender_id, [])
 
     # Use async variant so Neo4j paths are resolved before LLM prompt is built
-    pack = await build_evidence_pack_async(tender, risk, tender_bids, state.companies, state.graph)
+    graph = ensure_runtime_graph(state)
+    pack = await build_evidence_pack_async(
+        tender, risk, tender_bids, state.companies, graph
+    )
     agent = get_agent()
     result = await agent.explain(pack)
     return result
-

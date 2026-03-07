@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from langchain.tools import ToolRuntime, tool
+from runtime_graph import ensure_runtime_graph
 
 logger = logging.getLogger(__name__)
 
@@ -313,9 +314,7 @@ def search_graph_connections(
     if not ctx or not ctx.app_state:
         return "Graph not available."
 
-    graph = ctx.app_state.graph
-    if not graph:
-        return "Graph not loaded."
+    graph = ensure_runtime_graph(ctx.app_state)
 
     matching_nodes = []
     entity_lower = entity_name.lower()

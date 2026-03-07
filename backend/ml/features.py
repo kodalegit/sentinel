@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 from datetime import date, timedelta
-from collections import defaultdict
+from collections import defaultdict, deque
 
 from models import Tender, Company, Bid, TenderStatus
 
@@ -23,13 +23,50 @@ def _precompute_official_distances(graph: nx.Graph) -> dict[str, int]:
     if not officials:
         return {}
 
-    # Reverse lookup: BFS from all officials simultaneously
     distances: dict[str, int] = {}
-    for src in officials:
-        for node, dist in nx.single_source_shortest_path_length(graph, src).items():
-            if node not in distances or dist < distances[node]:
-                distances[node] = dist
+
+    queue = deque((src, 0) for src in officials)
+    while queue:
+        node, dist = queue.popleft()
+        if node in distances:
+            continue
+        distances[node] = dist
+        for neighbor in graph.neighbors(node):
+            if neighbor not in distances:
+                queue.append((neighbor, dist + 1))
+
     return distances
+
+
+def materialize_company_graph_features(graph: nx.Graph) -> dict[str, dict[str, int]]:
+    official_distances = _precompute_official_distances(graph)
+    company_features: dict[str, dict[str, int]] = {}
+
+    for node_id, attrs in graph.nodes(data=True):
+        if attrs.get("type") != "COMPANY":
+            continue
+
+        neighbors_2hop = nx.single_source_shortest_path_length(graph, node_id, cutoff=2)
+        company_features[node_id] = {
+            "graph_degree": int(graph.degree(node_id)),
+            "suspicious_edges": int(
+                sum(
+                    1
+                    for _, _, edge_attrs in graph.edges(node_id, data=True)
+                    if edge_attrs.get("suspicious", False)
+                )
+            ),
+            "official_distance": int(official_distances.get(node_id, 99)),
+            "community_size": int(
+                sum(
+                    1
+                    for neighbor_id in neighbors_2hop
+                    if graph.nodes[neighbor_id].get("type") == "COMPANY"
+                )
+            ),
+        }
+
+    return company_features
 
 
 def extract_tender_features(
@@ -38,6 +75,7 @@ def extract_tender_features(
     bids: list[Bid],
     graph: nx.Graph,
     bids_by_tender: dict[str, list[Bid]] | None = None,
+    company_graph_features: dict[str, dict[str, int]] | None = None,
 ) -> pd.DataFrame:
     """
     Extract numerical features for each tender.
@@ -51,6 +89,9 @@ def extract_tender_features(
         bids_by_tender = defaultdict(list)
         for b in bids:
             bids_by_tender[b.tender_id].append(b)
+
+    if company_graph_features is None:
+        company_graph_features = materialize_company_graph_features(graph)
 
     # Category-level stats for z-scores
     category_values = defaultdict(list)
@@ -74,9 +115,6 @@ def extract_tender_features(
             company_bids[b.company_id] += 1
         if t.awarded_to:
             company_wins[t.awarded_to] += 1
-
-    # Pre-compute official distances once (multi-source BFS)
-    official_dist = _precompute_official_distances(graph)
 
     rows = []
     for tid, tender in tenders.items():
@@ -140,24 +178,12 @@ def extract_tender_features(
         official_distance = 99
         community_size = 0
 
-        if tender.awarded_to and tender.awarded_to in graph:
-            cid = tender.awarded_to
-            graph_degree = graph.degree(cid)
-            suspicious_edges = sum(
-                1
-                for _, _, d in graph.edges(cid, data=True)
-                if d.get("suspicious", False)
-            )
-            # Look up pre-computed official distance
-            official_distance = official_dist.get(cid, 99)
-            # Community size: count only COMPANY nodes within 2 hops
-            if cid in graph:
-                neighbors_2hop = nx.single_source_shortest_path_length(
-                    graph, cid, cutoff=2
-                )
-                community_size = sum(
-                    1 for n in neighbors_2hop if graph.nodes[n].get("type") == "COMPANY"
-                )
+        if tender.awarded_to:
+            graph_features = company_graph_features.get(tender.awarded_to, {})
+            graph_degree = graph_features.get("graph_degree", 0)
+            suspicious_edges = graph_features.get("suspicious_edges", 0)
+            official_distance = min(graph_features.get("official_distance", 99), 10)
+            community_size = graph_features.get("community_size", 0)
 
         rows.append(
             {

@@ -7,7 +7,10 @@ import networkx as nx
 from collections import defaultdict
 from dataclasses import dataclass
 
-from models import Bid, Company
+from models import Company, Bid
+from models import AddressQuality
+from connectors.normalize import classify_address
+from graph.normalization import normalize_address_key, normalize_phone, is_generic_phone
 
 
 @dataclass
@@ -200,18 +203,27 @@ def _find_shared_attributes(
     cluster_companies = [companies[cid] for cid in company_ids if cid in companies]
 
     # Shared addresses
-    addresses = defaultdict(list)
+    addresses = defaultdict(lambda: {"address": "", "companies": []})
     for c in cluster_companies:
-        addr_key = c.address.lower().strip()
-        addresses[addr_key].append(c.name)
-    for addr, names in addresses.items():
-        if len(names) > 1:
-            shared["addresses"].append({"address": addr, "companies": names})
+        addr = c.physical_address or c.address
+        if classify_address(addr) != AddressQuality.SPECIFIC:
+            continue
+        addr_key = normalize_address_key(addr)
+        if not addr_key:
+            continue
+        if not addresses[addr_key]["address"]:
+            addresses[addr_key]["address"] = addr
+        addresses[addr_key]["companies"].append(c.name)
+    for item in addresses.values():
+        if len(item["companies"]) > 1:
+            shared["addresses"].append(item)
 
     # Shared phones
     phones = defaultdict(list)
     for c in cluster_companies:
-        phone_key = "".join(ch for ch in c.phone if ch.isdigit())
+        phone_key = normalize_phone(c.phone)
+        if not phone_key or is_generic_phone(c.phone):
+            continue
         phones[phone_key].append(c.name)
     for phone, names in phones.items():
         if len(names) > 1:
