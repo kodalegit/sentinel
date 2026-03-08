@@ -271,21 +271,23 @@ This milestone expanded the system from a single-tender explanation endpoint int
 
 ### Description
 
-The graph explorer works but has room for improvement in both detection quality and user experience. Shared-attribute filtering is now stricter to avoid edge explosion, but investigators still need better search, labeling, and visualization for suspicious paths.
+The graph explorer should evolve from a generic network view into an investigation-first workspace. Shared-attribute filtering is now stricter and helps avoid edge explosion, but the current experience still asks users to visually decipher too much structure at once. This milestone focuses on progressive disclosure, entity search, richer evidence explanation, and path-centric investigation flows so that an auditor can understand not just what is connected, but why it matters.
 
 ### Deliverables
 
-- Improved shared attribute detection beyond the current strict baseline: fuzzy/normalized address and phone matching for high-confidence variants
-- Graph search: find any entity by name
-- Visual improvements: better node labeling, edge annotations, risk-colored nodes
-- Path highlighting: click a risk factor to highlight the relevant graph path
-- Performance evaluation of community detection at larger scale; document findings and migration path if needed
+- Investigation-first graph entry points: community view, entity search, tender-centered neighborhood view, and shortest-path view
+- Progressive disclosure controls: suspicious-only mode, node/edge type filters, and focused neighborhood exploration instead of full-network overload
+- Readable entity identity: full labels on demand, richer node details, better edge annotations, and clearer explanation of suspicious ties
+- Explanation-driven interactions: click a suspicious reason or risk factor to highlight the relevant nodes, edges, or path in the graph
+- Confidence-aware detection improvements: normalized and high-confidence fuzzy matching for addresses and phone numbers, surfaced with explicit confidence labels
+- Performance evaluation of community detection and graph exploration at larger scale; document findings and the serving strategy if further Neo4j-first migration is needed
 
 ### Success Criteria
 
-- Shared address detection catches variations (e.g., "P.O. Box 123" vs "PO Box 123, Nairobi")
-- An investigator can search for an entity and see its neighborhood in the graph
-- Risk-relevant paths are visually highlighted when exploring a flagged tender
+- An investigator can search for any entity and load its neighborhood without relying on the full graph view
+- The graph makes entity identity and suspicious ties understandable without forcing the user to infer meaning from truncated labels alone
+- Risk-relevant paths or suspicious reasons can be highlighted directly from the investigation UI
+- Shared-attribute matching catches high-confidence variants while keeping confidence visible and false positives controlled
 
 ---
 

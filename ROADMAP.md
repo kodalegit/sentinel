@@ -9,14 +9,14 @@
 
 ## Roadmap Overview
 
-| Phase                      | Weeks | Focus                                                          | Priority | Status      |
-| -------------------------- | ----- | -------------------------------------------------------------- | -------- | ----------- |
-| **Foundation**             | 1–2   | DB, ML, Graph, LLM, Cases, UI, Infra                           | —        | ✅ Complete |
-| **Kenya Data & Detection** | 3     | Schema evolution, PPIP/e-GP connectors, multi-signal detection | CRITICAL | ✅ COMPLETE |
-| **Auth & Workflow**        | 3–5   | JWT auth, roles, investigation hardening                       | HIGH     | ✅ Complete |
-| **Ingestion & LLM**        | 5–6   | CSV/PDF ingestion, LLM case analysis                           | MEDIUM   | Planned     |
-| **Graph & Detection**      | 6–7   | Graph UX, fuzzy detection, search                              | MEDIUM   | Planned     |
-| **Polish & Demo**          | 8–9   | Export, performance, demo prep                                 | LOW      | Planned     |
+| Phase                      | Weeks | Focus                                                                 | Priority | Status      |
+| -------------------------- | ----- | --------------------------------------------------------------------- | -------- | ----------- |
+| **Foundation**             | 1–2   | DB, ML, Graph, LLM, Cases, UI, Infra                                  | —        | ✅ Complete |
+| **Kenya Data & Detection** | 3     | Schema evolution, PPIP/e-GP connectors, multi-signal detection        | CRITICAL | ✅ COMPLETE |
+| **Auth & Workflow**        | 3–5   | JWT auth, roles, investigation hardening                              | HIGH     | ✅ Complete |
+| **Ingestion & LLM**        | 5–6   | CSV/PDF ingestion, LLM case analysis                                  | MEDIUM   | Planned     |
+| **Graph & Detection**      | 6–7   | Investigation-first graph UX, explanation, confidence-aware detection | MEDIUM   | Planned     |
+| **Polish & Demo**          | 8–9   | Export, performance, demo prep                                        | LOW      | Planned     |
 
 ---
 
@@ -238,21 +238,23 @@
 
 ---
 
-## Weeks 6–7: Graph UX & Detection Improvements
+## Weeks 6–7: Graph UX & Detection Improvements — Completed
 
 **Goal**: Better detection quality and more intuitive graph exploration
 
 ### Deliverables
 
-- [ ] **Detection Improvements**
-  - [ ] Fuzzy/normalized address matching (handle variations)
-  - [ ] Fuzzy phone number matching
-  - [ ] Performance evaluation of community detection at scale (document findings)
-- [ ] **Graph UX Enhancements**
-  - [ ] Entity search: find any entity by name
-  - [ ] Better node labeling and edge annotations
-  - [ ] Risk-colored nodes in graph view
-  - [ ] Click risk factor → highlight relevant graph path
+- [x] **Detection Improvements**
+  - [x] Fuzzy/normalized address matching (handle variations)
+  - [x] Fuzzy phone number matching
+  - [x] Performance evaluation of community detection at scale (document findings)
+- [x] **Graph UX Enhancements**
+  - [x] Entity search: find any entity by name
+  - [x] Better node labeling and edge annotations
+  - [x] Risk-colored nodes in graph view
+  - [x] Click risk factor → highlight relevant graph path
+
+_Completed milestone: graph investigation UX, detection quality, and path highlighting are live._
 
 ### Success Criteria
 
