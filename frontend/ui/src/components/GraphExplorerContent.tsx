@@ -961,7 +961,7 @@ export function GraphExplorerContent() {
           )}
 
           {selectedCluster && viewMode === "cluster" && (
-            <div className="absolute bottom-4 right-4 w-80 animate-fade-in-up">
+            <div className="absolute bottom-4 right-4 w-80 max-h-[calc(100%-6rem)] animate-fade-in-up overflow-y-auto">
               <div className="rounded-2xl border border-border/60 bg-card/95 backdrop-blur-sm shadow-xl p-5">
                 <div className="flex items-center justify-between mb-3">
                   <span className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">

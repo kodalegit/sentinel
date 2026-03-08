@@ -411,6 +411,8 @@ export function ShadowGraph({
         <Background color={isDark ? "#2a3533" : "#c8bfb4"} gap={48} size={1} />
         <Controls />
         <MiniMap
+          position="bottom-center"
+          className="bottom-4 left-1/2 -translate-x-1/2 border border-border/60 bg-card/95 backdrop-blur-sm shadow-lg rounded-md"
           nodeColor={minimapNodeColor}
           maskColor={isDark ? "rgba(11,17,16,0.7)" : "rgba(246,243,238,0.7)"}
         />
