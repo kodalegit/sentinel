@@ -10,6 +10,7 @@ import {
   ReactFlow,
   Node,
   Edge,
+  type ReactFlowInstance,
   Background,
   Controls,
   MiniMap,
@@ -26,6 +27,8 @@ import { useTheme } from "next-themes";
 interface ShadowGraphProps {
   data: GraphData;
   focusNodeId?: string;
+  highlightNodeIds?: string[];
+  highlightEdgeIds?: string[];
   onNodeClick?: (nodeId: string, nodeType: NodeType) => void;
 }
 
@@ -73,13 +76,54 @@ function buildAdjacency(graphData: GraphData) {
   return adj;
 }
 
+function getNodeSubtitle(node: GraphData["nodes"][number]): string | null {
+  const metadata = node.metadata as Record<string, unknown>;
+  if (node.type === "TENDER") {
+    return typeof metadata.procuring_entity === "string" ? metadata.procuring_entity : null;
+  }
+  if (node.type === "OFFICIAL") {
+    const department = typeof metadata.department === "string" ? metadata.department : null;
+    const position = typeof metadata.position === "string" ? metadata.position : null;
+    if (department && position) {
+      return `${department} · ${position}`;
+    }
+    return department || position;
+  }
+  if (node.type === "COMPANY") {
+    const address = typeof metadata.address === "string" ? metadata.address : null;
+    if (address) {
+      return address;
+    }
+    return typeof metadata.source_system === "string"
+      ? metadata.source_system.toUpperCase()
+      : null;
+  }
+  return null;
+}
+
+function formatEdgeLabel(edge: GraphData["edges"][number]): string | undefined {
+  if (edge.label) {
+    return edge.label;
+  }
+  if (!edge.suspicious) {
+    return undefined;
+  }
+  return edge.relationship.replace(/_/g, " ").toLowerCase();
+}
+
 /**
  * Barycenter heuristic: order nodes in a layer by the average x-position
  * of their neighbours in the previously placed layer. Significantly reduces
  * edge crossings compared to arbitrary ordering.
  */
-function layoutNodes(graphData: GraphData, focusNodeId?: string, isDark = false): Node[] {
+function layoutNodes(
+  graphData: GraphData,
+  focusNodeId?: string,
+  highlightNodeIds?: string[],
+  isDark = false,
+): Node[] {
   const NODE_THEME = isDark ? NODE_THEME_DARK : NODE_THEME_LIGHT;
+  const highlightNodeSet = highlightNodeIds ? new Set(highlightNodeIds) : null;
   const adj = buildAdjacency(graphData);
   const nodeTypeById = new Map(
     graphData.nodes.map((node) => [node.id, node.type] as const)
@@ -165,23 +209,32 @@ function layoutNodes(graphData: GraphData, focusNodeId?: string, isDark = false)
       const theme = NODE_THEME[node.type as keyof typeof NODE_THEME];
       const meta = NODE_META[node.type as keyof typeof NODE_META];
       const Icon = meta.icon;
+      const subtitle = getNodeSubtitle(node);
       const isHighRisk = node.risk_level === "HIGH";
       const borderColor = node.risk_level
         ? RISK_COLORS[node.risk_level]
         : theme.border;
       const isFocused = focusNodeId && node.id === focusNodeId;
       const isDimmed = focusNodeId && node.id !== focusNodeId;
+      const isHighlighted = !!highlightNodeSet?.has(node.id);
 
       result.push({
         id: node.id,
         position: { x, y },
         data: {
           label: (
-            <div className="flex items-center gap-3 px-1">
-              <Icon size={20} strokeWidth={1.5} className="shrink-0" />
-              <span className="text-[14px] font-semibold truncate max-w-[240px] leading-snug">
-                {node.label}
-              </span>
+            <div className="flex items-start gap-3 px-1" title={node.label}>
+              <Icon size={20} strokeWidth={1.5} className="shrink-0 mt-0.5" />
+              <div className="min-w-0 max-w-[260px] text-left">
+                <div className="text-[13px] font-semibold wrap-break-word leading-snug">
+                  {node.label}
+                </div>
+                {subtitle && (
+                  <div className="mt-1 text-[11px] opacity-75 wrap-break-word leading-snug">
+                    {subtitle}
+                  </div>
+                )}
+              </div>
             </div>
           ),
           nodeType: node.type,
@@ -190,13 +243,15 @@ function layoutNodes(graphData: GraphData, focusNodeId?: string, isDark = false)
         },
         style: {
           background: theme.bg,
-          border: `1.5px solid ${borderColor}`,
+          border: `${isHighlighted ? 2 : 1.5}px solid ${borderColor}`,
           color: theme.color,
           borderRadius: meta.radius,
           padding: "14px 22px",
           fontSize: "14px",
           boxShadow: isFocused
             ? `0 0 0 4px ${borderColor}50`
+            : isHighlighted
+            ? `0 0 0 4px ${borderColor}30, 0 10px 24px ${borderColor}25`
             : isHighRisk
             ? `0 0 16px ${RISK_COLORS.HIGH}35`
             : "0 4px 16px rgba(31,75,70,0.12)",
@@ -212,28 +267,35 @@ function layoutNodes(graphData: GraphData, focusNodeId?: string, isDark = false)
   return result;
 }
 
-function createEdges(graphData: GraphData, focusNodeId?: string, isDark = false): Edge[] {
+function createEdges(
+  graphData: GraphData,
+  focusNodeId?: string,
+  highlightEdgeIds?: string[],
+  isDark = false,
+): Edge[] {
   const normalEdge = isDark ? "#5a5550" : "#b9b2a6";
   const suspiciousEdge = isDark ? "#e06050" : "#c4412f";
   const labelFill = isDark ? "#c8c2b8" : "#6b6761";
   const labelBg = isDark ? "#111a19" : "#fffaf4";
+  const highlightEdgeSet = highlightEdgeIds ? new Set(highlightEdgeIds) : null;
 
   return graphData.edges.map((edge) => {
     const isConnected =
       focusNodeId && (edge.source === focusNodeId || edge.target === focusNodeId);
     const baseOpacity = focusNodeId ? (isConnected ? 0.9 : 0.18) : 0.55;
     const suspicious = edge.suspicious;
+    const isHighlighted = !!highlightEdgeSet?.has(edge.id);
 
     return {
       id: edge.id,
       source: edge.source,
       target: edge.target,
       type: "smoothstep",
-      label: edge.suspicious ? (edge.label || undefined) : undefined,
+      label: formatEdgeLabel(edge),
       style: {
         stroke: suspicious ? suspiciousEdge : normalEdge,
-        strokeWidth: suspicious ? 2 : 1,
-        opacity: suspicious ? Math.max(baseOpacity, 0.7) : baseOpacity,
+        strokeWidth: isHighlighted ? (suspicious ? 3 : 2.5) : suspicious ? 2 : 1,
+        opacity: isHighlighted ? 0.95 : suspicious ? Math.max(baseOpacity, 0.7) : baseOpacity,
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,
@@ -241,7 +303,7 @@ function createEdges(graphData: GraphData, focusNodeId?: string, isDark = false)
         width: 16,
         height: 16,
       },
-      animated: !!(edge.suspicious && (!focusNodeId || isConnected)),
+      animated: isHighlighted || !!(edge.suspicious && (!focusNodeId || isConnected)),
       labelStyle: {
         fontSize: 11,
         fill: labelFill,
@@ -257,19 +319,61 @@ function createEdges(graphData: GraphData, focusNodeId?: string, isDark = false)
   });
 }
 
-export function ShadowGraph({ data, onNodeClick, focusNodeId }: ShadowGraphProps) {
+export function ShadowGraph({
+  data,
+  onNodeClick,
+  focusNodeId,
+  highlightNodeIds,
+  highlightEdgeIds,
+}: ShadowGraphProps) {
   const { resolvedTheme } = useTheme();
   const [isDark, setIsDark] = useState(false);
+  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<Node, Edge> | null>(null);
 
   useEffect(() => {
     setIsDark(resolvedTheme === "dark");
   }, [resolvedTheme]);
 
-  const initialNodes = useMemo(() => layoutNodes(data, focusNodeId, isDark), [data, focusNodeId, isDark]);
-  const initialEdges = useMemo(() => createEdges(data, focusNodeId, isDark), [data, focusNodeId, isDark]);
+  const initialNodes = useMemo(
+    () => layoutNodes(data, focusNodeId, highlightNodeIds, isDark),
+    [data, focusNodeId, highlightNodeIds, isDark]
+  );
+  const initialEdges = useMemo(
+    () => createEdges(data, focusNodeId, highlightEdgeIds, isDark),
+    [data, focusNodeId, highlightEdgeIds, isDark]
+  );
 
-  const [nodes, , onNodesChange] = useNodesState(initialNodes);
-  const [edges, , onEdgesChange] = useEdgesState(initialEdges);
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  useEffect(() => {
+    setNodes(initialNodes);
+  }, [initialNodes, setNodes]);
+
+  useEffect(() => {
+    setEdges(initialEdges);
+  }, [initialEdges, setEdges]);
+
+  useEffect(() => {
+    if (!flowInstance) {
+      return;
+    }
+
+    if (!focusNodeId) {
+      flowInstance.fitView({ padding: 0.25, duration: 300 });
+      return;
+    }
+
+    const targetNode = initialNodes.find((node) => node.id === focusNodeId);
+    if (!targetNode) {
+      return;
+    }
+
+    flowInstance.setCenter(targetNode.position.x + 120, targetNode.position.y + 40, {
+      zoom: 0.9,
+      duration: 350,
+    });
+  }, [flowInstance, focusNodeId, initialNodes]);
 
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
@@ -297,6 +401,7 @@ export function ShadowGraph({ data, onNodeClick, focusNodeId }: ShadowGraphProps
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onInit={setFlowInstance}
         onNodeClick={handleNodeClick}
         fitView
         fitViewOptions={{ padding: 0.25 }}

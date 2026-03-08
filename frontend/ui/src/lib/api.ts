@@ -8,6 +8,8 @@ import type {
   TenderWithRisk,
   TenderDetail,
   GraphData,
+  GraphPathResult,
+  GraphSearchResult,
   CommunitiesResponse,
   CaseWithTender,
   CaseStats,
@@ -80,7 +82,8 @@ async function fetchApi<T>(endpoint: string): Promise<T> {
   }
 
   if (!response.ok) {
-    throw new Error(`API error: ${response.status} ${response.statusText}`);
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || `API error: ${response.status} ${response.statusText}`);
   }
   return response.json();
 }
@@ -242,6 +245,28 @@ export async function getCommunities(): Promise<CommunitiesResponse> {
 
 export async function getCommunityGraph(clusterId: string): Promise<GraphData> {
   return fetchApi<GraphData>(`/api/graph/communities/${clusterId}`);
+}
+
+export async function searchGraphEntities(
+  query: string,
+): Promise<GraphSearchResult[]> {
+  const params = new URLSearchParams({ q: query, limit: "8" });
+  return fetchApi<GraphSearchResult[]>(`/api/graph/search?${params.toString()}`);
+}
+
+export async function getEntityNeighborhood(
+  entityId: string,
+  depth: number = 2,
+): Promise<GraphData> {
+  return fetchApi<GraphData>(`/api/graph/entity/${entityId}?depth=${depth}`);
+}
+
+export async function getGraphPath(
+  sourceId: string,
+  targetId: string,
+): Promise<GraphPathResult> {
+  const params = new URLSearchParams({ source: sourceId, target: targetId });
+  return fetchApi<GraphPathResult>(`/api/graph/path?${params.toString()}`);
 }
 
 // --- Case Management ---
