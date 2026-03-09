@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.security import get_password_hash
-from auth.dependencies import AdminOnly, CurrentUser
+from auth.dependencies import AdminOnly, SupervisorOrAdmin
 from db.config import get_db
 from db.models import UserDB
 from models import User, UserCreate, UserUpdate, UserRole
@@ -189,18 +189,18 @@ async def deactivate_user(
 
 @router.get("/assignable/list", response_model=list[User])
 async def list_assignable_users(
-    current_user: CurrentUser,
+    current_user: SupervisorOrAdmin,
     db: AsyncSession = Depends(get_db),
 ):
     """
     List users that can be assigned to cases.
-    Returns active auditors and supervisors.
-    Requires authentication (any logged-in user can view assignable users).
+    Returns active auditors, supervisors, and admins.
+    Requires supervisor or admin access.
     """
     result = await db.execute(
         select(UserDB)
         .where(UserDB.is_active == True)
-        .where(UserDB.role.in_(["auditor", "supervisor"]))
+        .where(UserDB.role.in_(["auditor", "supervisor", "admin"]))
         .order_by(UserDB.full_name)
     )
     users = result.scalars().all()

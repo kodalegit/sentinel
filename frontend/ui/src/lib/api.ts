@@ -11,6 +11,7 @@ import type {
   GraphPathResult,
   GraphSearchResult,
   CommunitiesResponse,
+  Case,
   CaseWithTender,
   CaseStats,
   RiskCategory,
@@ -300,12 +301,16 @@ export async function createCase(data: {
   return postApi<CaseWithTender>("/api/cases", data);
 }
 
+export async function getTenderCases(tenderId: string): Promise<Case[]> {
+  return fetchApi<Case[]>(`/api/tenders/${tenderId}/cases`);
+}
+
 export async function updateCase(
   caseId: string,
   data: {
     status?: string;
     priority?: string;
-    assigned_to_id?: string;
+    assigned_to_id?: string | null;
     summary?: string;
     decision?: string;
   },
@@ -351,11 +356,7 @@ export async function removeCaseEvidence(
   return deleteApi(`/api/cases/${caseId}/evidence/${linkId}`);
 }
 
-// --- M3: Self-Assign & Decision ---
-
-export async function selfAssignCase(caseId: string): Promise<CaseWithTender> {
-  return postApi<CaseWithTender>(`/api/cases/${caseId}/self-assign`, {});
-}
+// --- M3: Decision ---
 
 export async function recordDecision(
   caseId: string,

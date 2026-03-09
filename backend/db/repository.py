@@ -383,11 +383,32 @@ async def get_cases_for_tender(db: AsyncSession, tender_id: uuid.UUID) -> list[C
     return list(result.scalars().all())
 
 
+async def get_active_case_for_tender(
+    db: AsyncSession, tender_id: uuid.UUID
+) -> CaseDB | None:
+    result = await db.execute(
+        select(CaseDB)
+        .options(
+            selectinload(CaseDB.notes).selectinload(CaseNoteDB.author),
+            selectinload(CaseDB.tender),
+            selectinload(CaseDB.assigned_to),
+            selectinload(CaseDB.created_by),
+        )
+        .where(
+            CaseDB.tender_id == tender_id,
+            CaseDB.status.in_(["OPEN", "INVESTIGATING", "ESCALATED"]),
+        )
+        .order_by(CaseDB.created_at.desc())
+    )
+    return result.scalars().first()
+
+
 async def create_case(
     db: AsyncSession,
     tender_id: uuid.UUID,
     title: str,
     priority: str = "MEDIUM",
+    status: str = "OPEN",
     assigned_to_id: uuid.UUID | None = None,
     created_by_id: uuid.UUID = None,
     summary: str | None = None,
@@ -395,6 +416,7 @@ async def create_case(
     case = CaseDB(
         tender_id=tender_id,
         title=title,
+        status=status,
         priority=priority,
         assigned_to_id=assigned_to_id,
         created_by_id=created_by_id,
@@ -417,7 +439,7 @@ async def update_case(
     if not case:
         return None
     for key, value in kwargs.items():
-        if value is not None and hasattr(case, key):
+        if hasattr(case, key):
             setattr(case, key, value)
     await db.flush()
     await db.refresh(
@@ -560,6 +582,25 @@ async def get_case_evidence_links(
     return list(result.scalars().all())
 
 
+async def get_case_evidence_link_by_reference(
+    db: AsyncSession,
+    case_id: uuid.UUID,
+    evidence_type: str,
+    reference_id: str,
+) -> CaseEvidenceLinkDB | None:
+    """Get a case evidence link by case/type/reference tuple."""
+    result = await db.execute(
+        select(CaseEvidenceLinkDB)
+        .options(selectinload(CaseEvidenceLinkDB.added_by))
+        .where(
+            CaseEvidenceLinkDB.case_id == case_id,
+            CaseEvidenceLinkDB.evidence_type == evidence_type,
+            CaseEvidenceLinkDB.reference_id == reference_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_case_evidence_link(
     db: AsyncSession, link_id: uuid.UUID
 ) -> CaseEvidenceLinkDB | None:
@@ -682,7 +723,8 @@ async def get_supervisor_workload(db: AsyncSession) -> list[dict]:
     # Get all active users who can be assigned cases
     users_result = await db.execute(
         select(UserDB).where(
-            UserDB.is_active == True, UserDB.role.in_(["auditor", "supervisor"])
+            UserDB.is_active == True,
+            UserDB.role.in_(["auditor", "supervisor", "admin"]),
         )
     )
     users = list(users_result.scalars().all())

@@ -7,10 +7,11 @@
 
 import { use, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTenderDetail, useTenderGraph } from "@/hooks/useTenders";
-import { formatKES, createCase } from "@/lib/api";
-import type { RiskFactor, RiskFactorType, RiskCategory } from "@/lib/types";
+import { formatKES, createCase, getTenderCases } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import type { Case, RiskFactor, RiskFactorType, RiskCategory } from "@/lib/types";
 import { RiskBadge, StatusBadge } from "@/components/ui/RiskBadge";
 import { ShadowGraph } from "@/components/ShadowGraph";
 import { Button } from "@/components/ui/button";
@@ -96,8 +97,15 @@ export default function TenderDetailPage({
   const router = useRouter();
   const queryClient = useQueryClient();
   const { detail, loading } = useTenderDetail(id);
+  const { isSupervisorOrAdmin } = useAuth();
   const [showGraph, setShowGraph] = useState(false);
+  const [caseActionError, setCaseActionError] = useState<string | null>(null);
   const { graph, loading: graphLoading } = useTenderGraph(showGraph ? id : null);
+  const { data: tenderCases = [] } = useQuery<Case[]>({
+    queryKey: ["tender-cases", id],
+    queryFn: () => getTenderCases(id),
+    enabled: !!id,
+  });
 
   if (loading) {
     return (
@@ -122,18 +130,29 @@ export default function TenderDetailPage({
   }
 
   const { tender, risk, bids, winning_company } = detail;
+  const activeCase = tenderCases.find((item) =>
+    ["OPEN", "INVESTIGATING", "ESCALATED"].includes(item.status),
+  );
 
   const handleOpenCase = async () => {
+    if (activeCase) {
+      router.push(`/cases/${activeCase.id}`);
+      return;
+    }
+
     try {
-      await createCase({
+      setCaseActionError(null);
+      const created = await createCase({
         tender_id: tender.id,
         title: `Investigation: ${tender.title}`,
       });
-      // Invalidate cases cache so the new case appears in the list
       await queryClient.invalidateQueries({ queryKey: ["cases"] });
-      router.push("/cases");
-    } catch {
-      // silent
+      await queryClient.invalidateQueries({ queryKey: ["tender-cases", id] });
+      router.push(`/cases/${created.case.id}`);
+    } catch (error) {
+      setCaseActionError(
+        error instanceof Error ? error.message : "Failed to open investigation case.",
+      );
     }
   };
 
@@ -277,6 +296,11 @@ export default function TenderDetailPage({
               <h3 className="text-[11px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">
                 Actions
               </h3>
+              {caseActionError && (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                  {caseActionError}
+                </div>
+              )}
               <Button
                 size="sm"
                 onClick={() => setShowGraph(true)}
@@ -285,15 +309,31 @@ export default function TenderDetailPage({
                 <Network size={14} />
                 Explore Connections
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleOpenCase}
-                className="w-full text-xs"
-              >
-                <FolderOpen size={14} />
-                Open Investigation Case
-              </Button>
+              {activeCase ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => router.push(`/cases/${activeCase.id}`)}
+                  className="w-full text-xs"
+                >
+                  <FolderOpen size={14} />
+                  View Active Case
+                </Button>
+              ) : isSupervisorOrAdmin ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleOpenCase}
+                  className="w-full text-xs"
+                >
+                  <FolderOpen size={14} />
+                  Open Investigation Case
+                </Button>
+              ) : (
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Supervisors and admins open and assign cases for tender reviews.
+                </p>
+              )}
             </div>
 
             {/* Tender metadata */}

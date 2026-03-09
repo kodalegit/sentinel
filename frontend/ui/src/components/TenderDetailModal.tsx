@@ -137,7 +137,7 @@ function TenderDetailContent({
               className="text-xs"
             >
               <FolderOpen size={14} />
-              Open Case
+              Open Investigation Case
             </Button>
           )}
           <Button

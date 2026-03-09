@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import (
@@ -31,14 +32,22 @@ from models import (
 from state import State
 from db.config import get_db
 from db import repository as repo
-from auth.dependencies import CurrentUser, require_roles, SupervisorOrAdmin
+from auth.dependencies import CurrentUser, SupervisorOrAdmin
 from db.models import UserDB
 
 router = APIRouter(prefix="/api", tags=["cases"])
 
 # Role-based permission constants
-SUPERVISOR_ONLY_STATUSES = {"DISMISSED"}  # Only supervisors+ can dismiss
-SUPERVISOR_ACTIONS = {"reassign"}  # Only supervisors+ can reassign
+SUPERVISOR_ONLY_STATUSES = {"OPEN", "DISMISSED"}
+STATUS_TRANSITIONS = {
+    "OPEN": {"INVESTIGATING", "DISMISSED"},
+    "INVESTIGATING": {"ESCALATED", "RESOLVED", "DISMISSED"},
+    "ESCALATED": {"INVESTIGATING", "RESOLVED", "DISMISSED"},
+    "RESOLVED": set(),
+    "DISMISSED": {"OPEN"},
+}
+TERMINAL_STATUSES = {"RESOLVED", "DISMISSED"}
+ASSIGNABLE_ROLES = {"auditor", "supervisor", "admin"}
 
 
 def _case_db_to_pydantic(case_db) -> Case:
@@ -104,6 +113,127 @@ def _evidence_link_db_to_pydantic(link_db) -> CaseEvidenceLink:
         added_by_id=str(link_db.added_by_id),
         created_at=link_db.created_at,
     )
+
+
+def _case_with_tender_response(case_db, state: State) -> CaseWithTender:
+    case = _case_db_to_pydantic(case_db)
+    tender_id = str(case_db.tender_id)
+    risk = state.risk_scores.get(
+        tender_id, RiskScore(overall=0, category=RiskCategory.LOW)
+    )
+    tender_title = case_db.tender.title if case_db.tender else "Unknown"
+    return CaseWithTender(
+        case=case,
+        tender_title=tender_title,
+        risk_score=risk.overall,
+        risk_category=risk.category,
+    )
+
+
+def _is_supervisor_or_admin(current_user: CurrentUser) -> bool:
+    return current_user.role in ("supervisor", "admin")
+
+
+def _is_assigned_investigator(case_db, current_user: CurrentUser) -> bool:
+    return case_db.assigned_to_id == current_user.id
+
+
+def _require_case_participant(case_db, current_user: CurrentUser) -> None:
+    if _is_supervisor_or_admin(current_user) or _is_assigned_investigator(
+        case_db, current_user
+    ):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Only the assigned investigator or supervisors can update this case",
+    )
+
+
+async def _get_assignable_user(db: AsyncSession, user_id: str) -> UserDB:
+    result = await db.execute(select(UserDB).where(UserDB.id == _uuid.UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user or not user.is_active or user.role not in ASSIGNABLE_ROLES:
+        raise HTTPException(status_code=400, detail="Selected assignee is not eligible")
+    return user
+
+
+async def _validate_case_evidence_link(
+    *,
+    body: CaseEvidenceLinkCreate,
+    case_db,
+    state: State,
+    db: AsyncSession,
+) -> dict | None:
+    evidence_type = body.evidence_type.value
+    metadata = dict(body.link_metadata or {})
+    case_tender_id = str(case_db.tender_id)
+
+    if evidence_type == "TENDER":
+        if body.reference_id != case_tender_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Tender evidence must reference the tender attached to this case",
+            )
+        if body.reference_id not in state.tenders:
+            raise HTTPException(status_code=400, detail="Tender evidence not found")
+        tender = state.tenders[body.reference_id]
+        metadata.setdefault("reference_number", tender.reference_number)
+        metadata.setdefault("procuring_entity", tender.procuring_entity)
+        metadata.setdefault("estimated_value", tender.estimated_value)
+        return metadata
+
+    if evidence_type == "RISK_FACTOR":
+        tender_id, separator, factor_type = body.reference_id.partition(":")
+        if not separator or tender_id != case_tender_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Risk factor evidence must reference a risk factor for this case tender",
+            )
+        risk = state.risk_scores.get(tender_id)
+        if not risk:
+            raise HTTPException(
+                status_code=400, detail="Risk factor evidence not found"
+            )
+        factor = next(
+            (item for item in risk.factors if item.type.value == factor_type),
+            None,
+        )
+        if not factor:
+            raise HTTPException(
+                status_code=400, detail="Risk factor evidence not found"
+            )
+        metadata.setdefault("type", factor.type.value)
+        metadata.setdefault("weight", factor.weight)
+        metadata.setdefault("description", factor.description)
+        metadata.setdefault("evidence", factor.evidence)
+        return metadata
+
+    if evidence_type == "DOCUMENT":
+        try:
+            document_id = _uuid.UUID(body.reference_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail="Document evidence must use a valid document ID"
+            ) from exc
+        document = await repo.get_knowledge_document(db, document_id)
+        if not document:
+            raise HTTPException(status_code=400, detail="Document evidence not found")
+        metadata.setdefault("title", document.title)
+        metadata.setdefault("source_url", document.source_url)
+        metadata.setdefault("description", document.description)
+        return metadata
+
+    if evidence_type == "GRAPH_PATH":
+        if not any(
+            metadata.get(key) for key in ("path", "description", "summary", "nodes")
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Graph path evidence requires path details in metadata",
+            )
+        return metadata
+
+    return metadata or None
 
 
 @router.get("/cases", response_model=list[CaseWithTender])
@@ -203,14 +333,21 @@ async def get_case_detail(
 async def create_case(
     body: CaseCreate,
     state: State,
-    current_user: CurrentUser,
+    current_user: SupervisorOrAdmin,
     db: AsyncSession = Depends(get_db),
 ):
-    """Open a new investigation case for a tender. Requires authentication."""
+    """Open a new investigation case for a tender. Supervisors only."""
     tender_id = body.tender_id
 
     if tender_id not in state.tenders:
         raise HTTPException(status_code=404, detail="Tender not found")
+
+    active_case = await repo.get_active_case_for_tender(db, _uuid.UUID(tender_id))
+    if active_case:
+        raise HTTPException(
+            status_code=409,
+            detail="An active case already exists for this tender",
+        )
 
     # Auto-set priority from risk score if not provided
     risk = state.risk_scores.get(
@@ -218,15 +355,19 @@ async def create_case(
     )
     priority = body.priority.value if body.priority else risk.category.value
 
-    # Parse assigned_to_id if provided
     assigned_to_id = None
+    assignee = None
     if body.assigned_to_id:
-        assigned_to_id = _uuid.UUID(body.assigned_to_id)
+        assignee = await _get_assignable_user(db, body.assigned_to_id)
+        assigned_to_id = assignee.id
+
+    initial_status = "INVESTIGATING" if assigned_to_id else "OPEN"
 
     case_db = await repo.create_case(
         db=db,
         tender_id=_uuid.UUID(tender_id),
         title=body.title,
+        status=initial_status,
         priority=priority,
         assigned_to_id=assigned_to_id,
         created_by_id=current_user.id,
@@ -241,8 +382,26 @@ async def create_case(
         event_type="CASE_OPENED",
         actor_id=current_user.id,
         new_value=f"Case opened for tender {tender_id}",
-        event_metadata={"tender_id": tender_id, "priority": priority},
+        event_metadata={
+            "tender_id": tender_id,
+            "priority": priority,
+            "status": initial_status,
+        },
     )
+
+    if assigned_to_id:
+        await repo.create_case_event(
+            db=db,
+            case_id=case_db.id,
+            event_type="ASSIGNMENT",
+            actor_id=current_user.id,
+            old_value=None,
+            new_value=str(assigned_to_id),
+            event_metadata={
+                "old_assignee_name": None,
+                "new_assignee_name": assignee.full_name if assignee else None,
+            },
+        )
 
     # M3: Auto-link tender as evidence
     tender = state.tenders[tender_id]
@@ -257,6 +416,8 @@ async def create_case(
             "reference_number": tender.reference_number,
             "procuring_entity": tender.procuring_entity,
             "estimated_value": tender.estimated_value,
+            "auto_linked": True,
+            "protected": True,
         },
     )
 
@@ -274,6 +435,8 @@ async def create_case(
                 "weight": factor.weight,
                 "description": factor.description,
                 "evidence": factor.evidence,
+                "auto_linked": True,
+                "protected": True,
             },
         )
 
@@ -300,15 +463,7 @@ async def create_case(
         case_db, attribute_names=["notes", "tender", "assigned_to", "created_by"]
     )
 
-    case = _case_db_to_pydantic(case_db)
-    tender_title = state.tenders[tender_id].title
-
-    return CaseWithTender(
-        case=case,
-        tender_title=tender_title,
-        risk_score=risk.overall,
-        risk_category=risk.category,
-    )
+    return _case_with_tender_response(case_db, state)
 
 
 @router.patch("/cases/{case_id}", response_model=CaseWithTender)
@@ -325,7 +480,7 @@ async def update_case(
     - Auditors cannot dismiss cases or reassign to others
     - Supervisors+ can perform all actions
     """
-    update_fields = body.model_dump(exclude_none=True)
+    update_fields = body.model_dump(exclude_unset=True)
     if not update_fields:
         raise HTTPException(status_code=400, detail="No fields to update")
 
@@ -337,28 +492,24 @@ async def update_case(
     old_status = case_db.status
     old_priority = case_db.priority
     old_assigned_to_id = case_db.assigned_to_id
+    old_assignee_name = case_db.assigned_to.full_name if case_db.assigned_to else None
 
     # Check role-based permissions
-    is_supervisor_or_admin = current_user.role in ("supervisor", "admin")
+    is_supervisor_or_admin = _is_supervisor_or_admin(current_user)
+    is_assigned_investigator = _is_assigned_investigator(case_db, current_user)
 
-    # Only supervisors+ can dismiss cases
-    if "status" in update_fields:
-        new_status = (
-            update_fields["status"].value
-            if hasattr(update_fields["status"], "value")
-            else update_fields["status"]
-        )
-        if new_status in SUPERVISOR_ONLY_STATUSES and not is_supervisor_or_admin:
-            raise HTTPException(
-                status_code=403,
-                detail="Only supervisors can dismiss cases",
-            )
-
-    # Only supervisors+ can reassign cases
     if "assigned_to_id" in update_fields and not is_supervisor_or_admin:
         raise HTTPException(
             status_code=403,
-            detail="Only supervisors can reassign cases",
+            detail="Only supervisors can assign or unassign cases",
+        )
+
+    if not is_supervisor_or_admin and any(
+        field in update_fields for field in ("priority", "summary", "decision")
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only supervisors can update case management fields",
         )
 
     # Convert enums to string values for DB
@@ -375,18 +526,73 @@ async def update_case(
             else update_fields["priority"]
         )
 
-    # Convert assigned_to_id string to UUID
+    new_status = update_fields.get("status", old_status)
     new_assigned_to_id = None
-    if "assigned_to_id" in update_fields and update_fields["assigned_to_id"]:
-        new_assigned_to_id = _uuid.UUID(update_fields["assigned_to_id"])
-        update_fields["assigned_to_id"] = new_assigned_to_id
+    new_assignee_name = old_assignee_name
+    if "assigned_to_id" in update_fields:
+        if update_fields["assigned_to_id"]:
+            assignee = await _get_assignable_user(db, update_fields["assigned_to_id"])
+            new_assigned_to_id = assignee.id
+            new_assignee_name = assignee.full_name
+            update_fields["assigned_to_id"] = new_assigned_to_id
+        else:
+            update_fields["assigned_to_id"] = None
+            new_assigned_to_id = None
+            new_assignee_name = None
+    else:
+        new_assigned_to_id = old_assigned_to_id
 
-    # Set closed_at for terminal statuses
-    if "status" in update_fields and update_fields["status"] in (
-        "RESOLVED",
-        "DISMISSED",
+    if (
+        "assigned_to_id" in update_fields
+        and new_assigned_to_id
+        and old_status == "OPEN"
     ):
+        new_status = update_fields["status"] = "INVESTIGATING"
+    elif (
+        "assigned_to_id" in update_fields
+        and new_assigned_to_id is None
+        and old_status == "INVESTIGATING"
+        and "status" not in update_fields
+    ):
+        new_status = update_fields["status"] = "OPEN"
+
+    if "status" in update_fields:
+        if new_status == old_status and "assigned_to_id" not in update_fields:
+            raise HTTPException(
+                status_code=400, detail="Case is already in that status"
+            )
+        if new_status not in STATUS_TRANSITIONS.get(old_status, set()):
+            raise HTTPException(
+                status_code=400, detail="Invalid case status transition"
+            )
+        if new_status in SUPERVISOR_ONLY_STATUSES and not is_supervisor_or_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="Only supervisors can reopen or dismiss cases",
+            )
+        if not is_supervisor_or_admin:
+            if not is_assigned_investigator:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only the assigned investigator or supervisors can change case status",
+                )
+            if new_status not in {"ESCALATED", "RESOLVED"}:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Assigned investigators can only escalate or resolve cases",
+                )
+
+    resulting_assignee_id = update_fields.get("assigned_to_id", old_assigned_to_id)
+    if new_status in {"INVESTIGATING", "RESOLVED"} and resulting_assignee_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="This status requires an assigned investigator",
+        )
+
+    if "status" in update_fields and new_status in TERMINAL_STATUSES:
         update_fields["closed_at"] = datetime.now(timezone.utc).replace(tzinfo=None)
+    elif "status" in update_fields:
+        update_fields["closed_at"] = None
 
     case_db = await repo.update_case(db, _uuid.UUID(case_id), **update_fields)
     await db.flush()
@@ -401,16 +607,20 @@ async def update_case(
             old_value=old_status,
             new_value=update_fields["status"],
         )
-        # Notify supervisor on escalation
+
         if update_fields["status"] == "ESCALATED":
-            # Get supervisors to notify (simplified: notify case creator if supervisor)
-            if case_db.created_by and case_db.created_by.role in (
-                "supervisor",
-                "admin",
-            ):
+            supervisors = await db.execute(
+                select(UserDB).where(
+                    UserDB.is_active == True,
+                    UserDB.role.in_(["supervisor", "admin"]),
+                )
+            )
+            for supervisor in supervisors.scalars().all():
+                if supervisor.id == current_user.id:
+                    continue
                 await repo.create_notification(
                     db=db,
-                    user_id=case_db.created_by_id,
+                    user_id=supervisor.id,
                     case_id=case_db.id,
                     message=f"Case escalated: {case_db.title}",
                 )
@@ -433,6 +643,10 @@ async def update_case(
             actor_id=current_user.id,
             old_value=str(old_assigned_to_id) if old_assigned_to_id else None,
             new_value=str(new_assigned_to_id) if new_assigned_to_id else None,
+            event_metadata={
+                "old_assignee_name": old_assignee_name,
+                "new_assignee_name": new_assignee_name,
+            },
         )
         # Notify new assignee
         if new_assigned_to_id:
@@ -466,19 +680,7 @@ async def update_case(
         case_db, attribute_names=["notes", "tender", "assigned_to", "created_by"]
     )
 
-    case = _case_db_to_pydantic(case_db)
-    tender_id = str(case_db.tender_id)
-    risk = state.risk_scores.get(
-        tender_id, RiskScore(overall=0, category=RiskCategory.LOW)
-    )
-    tender_title = case_db.tender.title if case_db.tender else "Unknown"
-
-    return CaseWithTender(
-        case=case,
-        tender_title=tender_title,
-        risk_score=risk.overall,
-        risk_category=risk.category,
-    )
+    return _case_with_tender_response(case_db, state)
 
 
 @router.post("/cases/{case_id}/notes", status_code=201)
@@ -492,6 +694,8 @@ async def add_note(
     case_db = await repo.get_case(db, _uuid.UUID(case_id))
     if not case_db:
         raise HTTPException(status_code=404, detail="Case not found")
+
+    _require_case_participant(case_db, current_user)
 
     note_db = await repo.add_case_note(
         db=db,
@@ -562,6 +766,7 @@ async def get_case_evidence(
 async def add_case_evidence(
     case_id: str,
     body: CaseEvidenceLinkCreate,
+    state: State,
     current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ):
@@ -570,6 +775,27 @@ async def add_case_evidence(
     if not case_db:
         raise HTTPException(status_code=404, detail="Case not found")
 
+    _require_case_participant(case_db, current_user)
+
+    existing_link = await repo.get_case_evidence_link_by_reference(
+        db,
+        _uuid.UUID(case_id),
+        body.evidence_type.value,
+        body.reference_id,
+    )
+    if existing_link:
+        raise HTTPException(
+            status_code=409,
+            detail="This evidence is already linked to the case",
+        )
+
+    validated_metadata = await _validate_case_evidence_link(
+        body=body,
+        case_db=case_db,
+        state=state,
+        db=db,
+    )
+
     link_db = await repo.add_case_evidence_link(
         db=db,
         case_id=_uuid.UUID(case_id),
@@ -577,7 +803,7 @@ async def add_case_evidence(
         reference_id=body.reference_id,
         label=body.label,
         added_by_id=current_user.id,
-        link_metadata=body.link_metadata,
+        link_metadata=validated_metadata,
     )
 
     # Emit event
@@ -590,6 +816,7 @@ async def add_case_evidence(
         event_metadata={
             "evidence_id": str(link_db.id),
             "type": body.evidence_type.value,
+            "reference_id": body.reference_id,
         },
     )
     await db.commit()
@@ -608,6 +835,18 @@ async def remove_case_evidence(
     link_db = await repo.get_case_evidence_link(db, _uuid.UUID(link_id))
     if not link_db or str(link_db.case_id) != case_id:
         raise HTTPException(status_code=404, detail="Evidence link not found")
+
+    if not _is_supervisor_or_admin(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Only supervisors can remove evidence links",
+        )
+
+    if (link_db.link_metadata or {}).get("protected"):
+        raise HTTPException(
+            status_code=400,
+            detail="Protected baseline evidence cannot be removed from a case",
+        )
 
     label = link_db.label
     deleted = await repo.remove_case_evidence_link(db, _uuid.UUID(link_id))
@@ -631,68 +870,11 @@ async def remove_case_evidence(
 @router.post("/cases/{case_id}/self-assign", response_model=CaseWithTender)
 async def self_assign_case(
     case_id: str,
-    state: State,
     current_user: CurrentUser,
-    db: AsyncSession = Depends(get_db),
 ):
-    """Auditor picks up an unassigned case. Transitions to INVESTIGATING."""
-    case_db = await repo.get_case(db, _uuid.UUID(case_id))
-    if not case_db:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    if case_db.assigned_to_id is not None:
-        raise HTTPException(status_code=400, detail="Case is already assigned")
-
-    old_status = case_db.status
-
-    # Assign to current user and transition to INVESTIGATING
-    case_db = await repo.update_case(
-        db,
-        _uuid.UUID(case_id),
-        assigned_to_id=current_user.id,
-        status="INVESTIGATING",
-    )
-    await db.flush()
-
-    # Emit assignment event
-    await repo.create_case_event(
-        db=db,
-        case_id=case_db.id,
-        event_type="ASSIGNMENT",
-        actor_id=current_user.id,
-        old_value=None,
-        new_value=str(current_user.id),
-        event_metadata={"self_assigned": True},
-    )
-
-    # Emit status change event if status changed
-    if old_status != "INVESTIGATING":
-        await repo.create_case_event(
-            db=db,
-            case_id=case_db.id,
-            event_type="STATUS_CHANGE",
-            actor_id=current_user.id,
-            old_value=old_status,
-            new_value="INVESTIGATING",
-        )
-
-    await db.commit()
-    await db.refresh(
-        case_db, attribute_names=["notes", "tender", "assigned_to", "created_by"]
-    )
-
-    case = _case_db_to_pydantic(case_db)
-    tender_id = str(case_db.tender_id)
-    risk = state.risk_scores.get(
-        tender_id, RiskScore(overall=0, category=RiskCategory.LOW)
-    )
-    tender_title = case_db.tender.title if case_db.tender else "Unknown"
-
-    return CaseWithTender(
-        case=case,
-        tender_title=tender_title,
-        risk_score=risk.overall,
-        risk_category=risk.category,
+    raise HTTPException(
+        status_code=403,
+        detail="Self-assignment is disabled. Supervisors must assign cases.",
     )
 
 
@@ -709,10 +891,31 @@ async def record_decision(
     if not case_db:
         raise HTTPException(status_code=404, detail="Case not found")
 
+    if not _is_supervisor_or_admin(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Only supervisors can record formal case decisions",
+        )
+
     if case_db.status not in ("INVESTIGATING", "ESCALATED"):
         raise HTTPException(
             status_code=400,
             detail="Decisions can only be recorded on cases in INVESTIGATING or ESCALATED status",
+        )
+
+    valid_evidence_ids = {
+        str(link.id)
+        for link in await repo.get_case_evidence_links(db, _uuid.UUID(case_id))
+    }
+    invalid_references = [
+        reference_id
+        for reference_id in body.evidence_references
+        if reference_id not in valid_evidence_ids
+    ]
+    if invalid_references:
+        raise HTTPException(
+            status_code=400,
+            detail="Decision evidence references must point to evidence linked to this case",
         )
 
     # Update case with structured decision

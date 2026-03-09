@@ -219,7 +219,7 @@ function CasesPageContent() {
             <p className="text-sm text-muted-foreground mt-1">
               {assigneeFilter !== "all"
                 ? "Try clearing the assignee filter."
-                : "Open a case from any tender's detail view to start investigating."}
+                : "Supervisors and admins can open cases from tender detail view to start an investigation."}
             </p>
           </div>
         ) : (

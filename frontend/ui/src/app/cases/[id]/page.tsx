@@ -14,7 +14,6 @@ import {
   getCaseEvidence,
   updateCase,
   addCaseNote,
-  selfAssignCase,
   recordDecision,
   getAssignableUsers,
 } from "@/lib/api";
@@ -46,7 +45,6 @@ import {
   MessageSquarePlus,
   Link2,
   Gavel,
-  UserPlus,
   PanelLeft,
   Settings2,
   ShieldAlert,
@@ -105,7 +103,7 @@ function CaseDetailContent() {
   const params = useParams();
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { isSupervisorOrAdmin } = useAuth();
+  const { isSupervisorOrAdmin, user } = useAuth();
   const caseId = params.id as string;
 
   const [activeTab, setActiveTab] = useState<TabId>("overview");
@@ -114,6 +112,7 @@ function CaseDetailContent() {
   const [noteContent, setNoteContent] = useState("");
   const [noteType, setNoteType] = useState<NoteType>("OBSERVATION");
   const [submitting, setSubmitting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Decision form state
   const [showDecisionForm, setShowDecisionForm] = useState(false);
@@ -154,9 +153,12 @@ function CaseDetailContent() {
 
   const handleStatusChange = async (newStatus: CaseStatus) => {
     setSubmitting(true);
+    setActionError(null);
     try {
       await updateCase(caseId, { status: newStatus });
       invalidateAll();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to update case status.");
     } finally {
       setSubmitting(false);
     }
@@ -164,19 +166,14 @@ function CaseDetailContent() {
 
   const handleAssign = async (userId: string) => {
     setSubmitting(true);
+    setActionError(null);
     try {
-      await updateCase(caseId, { assigned_to_id: userId });
+      await updateCase(caseId, {
+        assigned_to_id: userId === "unassigned" ? null : userId,
+      });
       invalidateAll();
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleSelfAssign = async () => {
-    setSubmitting(true);
-    try {
-      await selfAssignCase(caseId);
-      invalidateAll();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to update assignment.");
     } finally {
       setSubmitting(false);
     }
@@ -185,10 +182,13 @@ function CaseDetailContent() {
   const handleAddNote = async () => {
     if (!noteContent.trim()) return;
     setSubmitting(true);
+    setActionError(null);
     try {
       await addCaseNote(caseId, { content: noteContent.trim(), note_type: noteType });
       setNoteContent("");
       invalidateAll();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to add note.");
     } finally {
       setSubmitting(false);
     }
@@ -197,6 +197,7 @@ function CaseDetailContent() {
   const handleRecordDecision = async () => {
     if (!finding.trim()) return;
     setSubmitting(true);
+    setActionError(null);
     try {
       await recordDecision(caseId, {
         decision_type: decisionType,
@@ -208,6 +209,8 @@ function CaseDetailContent() {
       setFinding("");
       setRecommendation("");
       invalidateAll();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to record decision.");
     } finally {
       setSubmitting(false);
     }
@@ -241,8 +244,13 @@ function CaseDetailContent() {
 
   const c = caseData.case;
   const statusCfg = STATUS_CONFIG[c.status];
-  const canSelfAssign = !c.assigned_to_id && c.status === "OPEN";
-  const canRecordDecision = c.status === "INVESTIGATING" || c.status === "ESCALATED";
+  const isAssignedInvestigator = user?.id === c.assigned_to_id;
+  const canAddNote = isSupervisorOrAdmin || isAssignedInvestigator;
+  const canTransitionCase = isSupervisorOrAdmin || isAssignedInvestigator;
+  const canRecordDecision =
+    isSupervisorOrAdmin &&
+    (c.status === "INVESTIGATING" || c.status === "ESCALATED");
+  const assignmentValue = c.assigned_to_id ?? "unassigned";
 
   const nextStatuses: Record<CaseStatus, CaseStatus[]> = {
     OPEN: ["INVESTIGATING", "DISMISSED"],
@@ -251,6 +259,9 @@ function CaseDetailContent() {
     RESOLVED: [],
     DISMISSED: ["OPEN"],
   };
+  const availableNextStatuses = nextStatuses[c.status].filter(
+    (status) => isSupervisorOrAdmin || status === "ESCALATED" || status === "RESOLVED",
+  );
 
   return (
     <div className="flex flex-col h-dvh bg-background text-foreground overflow-hidden selection:bg-primary/30">
@@ -366,42 +377,41 @@ function CaseDetailContent() {
                      <h3 className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-3 font-semibold">
                        INVESTIGATION ACTIONS
                      </h3>
+
+                     {actionError && (
+                       <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+                         {actionError}
+                       </div>
+                     )}
                      
                      {/* Assignment Action */}
-                     {(canSelfAssign || isSupervisorOrAdmin) && (
+                     {isSupervisorOrAdmin && (
                         <div className="space-y-2">
                           <label className="text-[10px] font-mono text-muted-foreground uppercase">Personnel Assignment</label>
-                          {canSelfAssign && (
-                            <Button onClick={handleSelfAssign} disabled={submitting} variant="outline" className="w-full h-9 text-xs justify-start bg-card hover:bg-muted">
-                              {submitting ? <Loader2 size={12} className="animate-spin mr-2" /> : <UserPlus size={14} className="mr-2 opacity-70" />}
-                              SELF-ASSIGN CASE
-                            </Button>
-                          )}
-                          {isSupervisorOrAdmin && (
-                            <Select onValueChange={handleAssign} value={c.assigned_to_id || ""}>
-                              <SelectTrigger className="w-full h-9 text-xs font-medium">
-                                <SelectValue placeholder="Select investigator..." />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {assignableUsers.map((u) => (
-                                  <SelectItem key={u.id} value={u.id} className="text-xs">
-                                    <span className="font-mono text-[10px] opacity-60 mr-2 w-16 inline-block">{u.role}</span> {u.full_name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          )}
+                          <Select onValueChange={handleAssign} value={assignmentValue}>
+                            <SelectTrigger className="w-full h-9 text-xs font-medium">
+                              <SelectValue placeholder="Select investigator..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="unassigned" className="text-xs">
+                                <span className="font-mono text-[10px] opacity-60 mr-2 w-16 inline-block">queue</span> Unassigned Queue
+                              </SelectItem>
+                              {assignableUsers.map((u) => (
+                                <SelectItem key={u.id} value={u.id} className="text-xs">
+                                  <span className="font-mono text-[10px] opacity-60 mr-2 w-16 inline-block">{u.role}</span> {u.full_name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
                      )}
 
                      {/* Status Transitions Action */}
-                     {nextStatuses[c.status].length > 0 && (
+                     {canTransitionCase && availableNextStatuses.length > 0 && (
                         <div className="space-y-2 pt-2">
                            <label className="text-[10px] font-mono text-muted-foreground uppercase mb-1 block">Transition Case Status</label>
                            <div className="flex flex-wrap gap-2">
-                             {nextStatuses[c.status]
-                               .filter((s) => s !== "DISMISSED" || isSupervisorOrAdmin)
-                               .map((s) => (
+                             {availableNextStatuses.map((s) => (
                                  <Button
                                    key={s}
                                    variant="outline"
@@ -422,7 +432,7 @@ function CaseDetailContent() {
                      {canRecordDecision && (
                        <div className="pt-2">
                          <label className="text-[10px] font-mono text-muted-foreground uppercase mb-2 block">Formal Decision</label>
-                         {c.decision_type ? (
+                        {c.decision_type ? (
                            <div className="p-4 rounded-lg border border-border/50 bg-secondary/20 space-y-3">
                              <div className="flex items-center gap-2">
                                <Gavel size={14} className="text-primary"/>
@@ -498,17 +508,49 @@ function CaseDetailContent() {
                       <div key={e.id} className="relative group rounded-md border border-border/50 bg-card p-4 hover:border-primary/30 transition-colors shadow-sm overflow-hidden">
                         <div className="absolute top-0 left-0 w-1 h-full bg-border/50 group-hover:bg-primary/50 transition-colors"></div>
                         <div className="flex items-center justify-between pl-2 mb-2">
-                          <span className="px-2 py-0.5 rounded text-[9px] font-mono tracking-widest font-bold uppercase bg-muted/60 text-foreground border border-border">
-                            {e.evidence_type}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded text-[9px] font-mono tracking-widest font-bold uppercase bg-muted/60 text-foreground border border-border">
+                              {e.evidence_type}
+                            </span>
+                            {e.link_metadata && typeof e.link_metadata === 'object' && 'protected' in e.link_metadata && e.link_metadata.protected ? (
+                              <span className="px-2 py-0.5 rounded text-[9px] font-mono tracking-widest uppercase border border-border/60 text-muted-foreground">
+                                baseline
+                              </span>
+                            ) : null}
+                          </div>
                           <span className="text-[10px] font-mono text-muted-foreground opacity-70">
                             {new Date(e.created_at).toLocaleDateString()}
                           </span>
                         </div>
                         <p className="text-[13px] font-medium leading-snug pl-2">{e.label}</p>
+                        <p className="mt-2 pl-2 text-[10px] font-mono text-muted-foreground break-all">Ref: {e.reference_id}</p>
                         {e.link_metadata && typeof e.link_metadata === 'object' && 'description' in e.link_metadata && e.evidence_type === "RISK_FACTOR" && e.link_metadata.description ? (
                           <div className="mt-3 pl-2 text-xs text-muted-foreground bg-muted/30 p-2 rounded border border-border/40">
                             {String(e.link_metadata.description)}
+                          </div>
+                        ) : null}
+                        {e.evidence_type === "TENDER" && (
+                          <div className="mt-3 pl-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-0 text-[11px]"
+                              onClick={() => router.push(`/tenders/${e.reference_id}`)}
+                            >
+                              View tender details
+                            </Button>
+                          </div>
+                        )}
+                        {e.link_metadata && typeof e.link_metadata === 'object' && 'source_url' in e.link_metadata && typeof e.link_metadata.source_url === 'string' && e.link_metadata.source_url ? (
+                          <div className="mt-2 pl-2">
+                            <a
+                              href={e.link_metadata.source_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[11px] text-primary hover:underline"
+                            >
+                              Open source document
+                            </a>
                           </div>
                         ) : null}
                       </div>
@@ -583,13 +625,16 @@ function CaseDetailContent() {
                      <textarea
                        value={noteContent}
                        onChange={(e) => setNoteContent(e.target.value)}
-                       placeholder="Enter new insight, deduction, or observation..."
+                       placeholder={canAddNote ? "Enter new insight, deduction, or observation..." : "Only the assigned investigator or supervisors can add notes."}
                        rows={4}
+                       disabled={!canAddNote}
                        className="w-full text-xs bg-transparent p-2 resize-none focus:outline-none placeholder:text-muted-foreground/40 font-mono"
                      />
                      <div className="flex justify-between items-center px-1">
-                       <span className="text-[10px] font-mono text-muted-foreground opacity-50">Markdown supported</span>
-                       <Button size="sm" onClick={handleAddNote} disabled={!noteContent.trim() || submitting} className="h-7 text-xs px-3 shadow-none gap-2">
+                       <span className="text-[10px] font-mono text-muted-foreground opacity-50">
+                         {canAddNote ? "Markdown supported" : "Read-only until this case is assigned to you or updated by a supervisor"}
+                       </span>
+                       <Button size="sm" onClick={handleAddNote} disabled={!canAddNote || !noteContent.trim() || submitting} className="h-7 text-xs px-3 shadow-none gap-2">
                          {submitting ? <Loader2 size={12} className="animate-spin" /> : <><MessageSquarePlus size={12} /> Post Entry</>}
                        </Button>
                      </div>
@@ -700,10 +745,24 @@ function TimelineEventIcon({ type }: { type: string }) {
 }
 
 function TimelineEventDescription({ event }: { event: CaseEvent }) {
+  const oldAssigneeName =
+    event.event_metadata && typeof event.event_metadata.old_assignee_name === "string"
+      ? event.event_metadata.old_assignee_name
+      : null;
+  const newAssigneeName =
+    event.event_metadata && typeof event.event_metadata.new_assignee_name === "string"
+      ? event.event_metadata.new_assignee_name
+      : null;
+
   switch (event.event_type) {
     case "STATUS_CHANGE": return <span className="font-mono">[{event.old_value}] → [{event.new_value}]</span>;
     case "PRIORITY_CHANGE": return <span className="font-mono">{event.old_value} → {event.new_value}</span>;
-    case "ASSIGNMENT": return <>{event.new_value ? <span className="font-medium text-foreground">Assigned ID: {event.new_value}</span> : "Unassigned"}</>;
+    case "ASSIGNMENT":
+      return (
+        <span className="font-medium text-foreground">
+          {(oldAssigneeName || "Unassigned queue")} → {(newAssigneeName || "Unassigned queue")}
+        </span>
+      );
     case "NOTE_ADDED": return <>{event.new_value} record appended</>;
     case "EVIDENCE_LINKED": return <span className="text-primary italic truncate block max-w-full">Target: {event.new_value}</span>;
     case "EVIDENCE_UNLINKED": return <>Removed connection to: <del className="opacity-70">{event.old_value}</del></>;
