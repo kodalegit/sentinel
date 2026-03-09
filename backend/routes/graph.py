@@ -4,7 +4,7 @@ import networkx as nx
 from fastapi import APIRouter, HTTPException, Query
 
 from config import settings
-from models import GraphData, GraphNode, GraphEdge
+from models import GraphData, GraphNode, GraphEdge, GraphSearchResult
 from state import State
 from graph.builder import (
     get_tender_subgraph,
@@ -28,6 +28,7 @@ router = APIRouter(prefix="/api/graph", tags=["graph"])
 # Maximum nodes/edges to return in a single response to prevent memory exhaustion
 MAX_GRAPH_NODES = 500
 MAX_GRAPH_EDGES = 2000
+MAX_GRAPH_SEARCH_RESULTS = 12
 
 
 async def _neo4j_or_networkx(neo4j_coro, networkx_fn, *args, **kwargs):
@@ -42,6 +43,30 @@ async def _neo4j_or_networkx(neo4j_coro, networkx_fn, *args, **kwargs):
         except Exception:
             pass
     return networkx_fn(*args, **kwargs)
+
+
+def _build_search_subtitle(graph: nx.Graph, node_id: str, attrs: dict) -> str | None:
+    node_type = attrs.get("type")
+    if node_type == "TENDER":
+        return attrs.get("procuring_entity")
+    if node_type == "OFFICIAL":
+        department = attrs.get("department")
+        position = attrs.get("position")
+        if department and position:
+            return f"{department} · {position}"
+        return department or position
+    if node_type == "COMPANY":
+        return attrs.get("address") or attrs.get("source_system")
+    if node_type == "DIRECTOR":
+        company_count = sum(
+            1
+            for neighbor_id in graph.neighbors(node_id)
+            if graph.nodes[neighbor_id].get("type") == "COMPANY"
+        )
+        if company_count:
+            suffix = "company" if company_count == 1 else "companies"
+            return f"Linked to {company_count} {suffix}"
+    return None
 
 
 @router.get("/stats")
@@ -223,6 +248,47 @@ async def get_community_graph(
         graph, cluster.company_ids, include_tenders, include_officials
     )
     return graph_to_frontend_format(subgraph)
+
+
+@router.get("/search", response_model=list[GraphSearchResult])
+def search_graph_entities(
+    state: State,
+    q: str = Query(..., min_length=2, description="Search query"),
+    limit: int = Query(
+        MAX_GRAPH_SEARCH_RESULTS,
+        ge=1,
+        le=25,
+        description="Maximum results to return",
+    ),
+):
+    graph = ensure_runtime_graph(state)
+    query = q.strip().lower()
+    matches: list[tuple[tuple[int, int, str], GraphSearchResult]] = []
+
+    for node_id, attrs in graph.nodes(data=True):
+        label = str(attrs.get("label", node_id)).strip()
+        if not label:
+            continue
+        label_lower = label.lower()
+        if query not in label_lower:
+            continue
+
+        result = GraphSearchResult(
+            id=node_id,
+            type=attrs.get("type", "COMPANY"),
+            label=label,
+            risk_level=attrs.get("risk_level"),
+            subtitle=_build_search_subtitle(graph, node_id, attrs),
+        )
+        rank = (
+            0 if label_lower.startswith(query) else 1,
+            len(label),
+            label_lower,
+        )
+        matches.append((rank, result))
+
+    matches.sort(key=lambda item: item[0])
+    return [result for _, result in matches[:limit]]
 
 
 @router.get("/path")

@@ -274,6 +274,14 @@ class GraphData(BaseModel):
     edges: list[GraphEdge]
 
 
+class GraphSearchResult(BaseModel):
+    id: str
+    type: NodeType
+    label: str
+    risk_level: Optional[RiskCategory] = None
+    subtitle: Optional[str] = None
+
+
 # Case Management
 class CaseStatus(str, Enum):
     OPEN = "OPEN"

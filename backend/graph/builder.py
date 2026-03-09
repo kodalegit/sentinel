@@ -111,7 +111,7 @@ def build_procurement_graph(
         G.add_node(
             tender.id,
             type=NodeType.TENDER.value,
-            label=tender.title[:50] + "..." if len(tender.title) > 50 else tender.title,
+            label=tender.title,
             full_title=tender.title,
             procuring_entity=tender.procuring_entity,
             value=tender.estimated_value or 0,

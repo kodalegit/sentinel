@@ -109,6 +109,34 @@ export interface TenderDetail {
 }
 
 // Graph
+export interface GraphSearchResult {
+  id: string;
+  type: NodeType;
+  label: string;
+  risk_level: RiskCategory | null;
+  subtitle: string | null;
+}
+
+export interface GraphPathNode {
+  id: string;
+  type: NodeType;
+  label: string;
+  risk_level?: RiskCategory | null;
+}
+
+export interface GraphPathEdge {
+  source: string;
+  target: string;
+  relationship: EdgeType;
+  suspicious: boolean;
+}
+
+export interface GraphPathResult {
+  nodes: GraphPathNode[];
+  edges: GraphPathEdge[];
+  length: number;
+}
+
 export interface GraphNode {
   id: string;
   type: NodeType;
@@ -130,6 +158,7 @@ export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
 }
+
 
 // Dashboard
 export interface DashboardStats {

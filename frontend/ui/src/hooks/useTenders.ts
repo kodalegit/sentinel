@@ -17,6 +17,9 @@ import {
   getCaseDetail,
   getCommunities,
   getCommunityGraph,
+  searchGraphEntities,
+  getEntityNeighborhood,
+  getGraphPath,
 } from "@/lib/api";
 
 // --- Query key factory ---
@@ -33,6 +36,9 @@ export const queryKeys = {
   caseDetail: (id: string) => ["case-detail", id] as const,
   communities: ["communities"] as const,
   communityGraph: (id: string) => ["community-graph", id] as const,
+  graphSearch: (query: string) => ["graph-search", query] as const,
+  entityNeighborhood: (id: string, depth: number) => ["entity-neighborhood", id, depth] as const,
+  graphPath: (sourceId: string, targetId: string) => ["graph-path", sourceId, targetId] as const,
 };
 
 // --- Tender hooks ---
@@ -99,10 +105,11 @@ export function useFullGraph(options?: {
   limitNodes?: number;
   limitEdges?: number;
   nodeType?: string;
-}) {
+} | null) {
   const { data: graph = null, isLoading: loading, error } = useQuery({
     queryKey: ["full-graph", options] as const,
-    queryFn: () => getFullGraph(options),
+    queryFn: () => getFullGraph(options ?? undefined),
+    enabled: options !== null,
     staleTime: 5 * 60 * 1000,
   });
   return { graph, loading, error };
@@ -155,4 +162,35 @@ export function useCommunityGraph(clusterId: string | null) {
     staleTime: 5 * 60 * 1000,
   });
   return { graph, loading, error };
+}
+
+export function useGraphSearch(query: string) {
+  const normalized = query.trim();
+  const { data: results = [], isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.graphSearch(normalized),
+    queryFn: () => searchGraphEntities(normalized),
+    enabled: normalized.length >= 2,
+    staleTime: 30 * 1000,
+  });
+  return { results, loading, error };
+}
+
+export function useEntityNeighborhood(entityId: string | null, depth: number = 2) {
+  const { data: graph = null, isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.entityNeighborhood(entityId!, depth),
+    queryFn: () => getEntityNeighborhood(entityId!, depth),
+    enabled: !!entityId,
+    staleTime: 5 * 60 * 1000,
+  });
+  return { graph, loading, error };
+}
+
+export function useGraphPath(sourceId: string | null, targetId: string | null) {
+  const { data: path = null, isLoading: loading, error } = useQuery({
+    queryKey: queryKeys.graphPath(sourceId!, targetId!),
+    queryFn: () => getGraphPath(sourceId!, targetId!),
+    enabled: !!sourceId && !!targetId,
+    staleTime: 5 * 60 * 1000,
+  });
+  return { path, loading, error };
 }
