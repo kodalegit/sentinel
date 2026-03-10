@@ -264,11 +264,11 @@ function CaseDetailContent() {
   );
 
   return (
-    <div className="flex flex-col h-dvh bg-background text-foreground overflow-hidden selection:bg-primary/30">
+    <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground selection:bg-primary/30">
       
       {/* Top Application Bar */}
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-border/60 bg-card/40 px-4 md:px-6 backdrop-blur-md z-30">
-        <div className="flex items-center gap-4 min-w-0">
+        <div className="min-w-0 flex-1">
           <Button 
             variant="ghost" 
             size="icon" 
@@ -299,7 +299,7 @@ function CaseDetailContent() {
               <span className={`text-xl font-bold font-mono tracking-tight leading-none ${PRIORITY_COLOR[caseData.risk_category]}`}>
                 {caseData.risk_score}
               </span>
-              <span className="text-[10px] font-mono tracking-widest text-muted-foreground uppercase leading-none">Score</span>
+              <span className="text-[10px] font-mono text-muted-foreground uppercase leading-none">Score</span>
             </div>
           </div>
           <Button 
@@ -315,19 +315,19 @@ function CaseDetailContent() {
       </header>
 
       {/* Main Workspace */}
-      <div className="flex flex-1 min-h-0 overflow-hidden relative">
+      <div className="relative flex flex-1 min-h-0 overflow-hidden">
         
         {/* Left Context Sidebar */}
         <div className={`
-          absolute lg:relative z-20 h-full w-full sm:w-[380px] lg:w-[420px] 
+          absolute inset-y-0 left-0 z-20 flex h-full min-h-0 w-full max-w-full flex-col sm:w-[380px] lg:relative lg:w-[420px] 
           bg-card/95 lg:bg-card/30 border-r border-border/50 shadow-2xl lg:shadow-none 
-          transition-transform duration-300 ease-out select-none flex flex-col shrink-0
+          transition-transform duration-300 ease-out select-none shrink-0
           backdrop-blur-xl lg:backdrop-blur-none
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
         `}>
           {/* Active Tab Content Area */}
-          <ScrollArea className="flex-1 w-full" type="scroll">
-            <div className="p-5 lg:p-6 space-y-8 select-text">
+          <ScrollArea className="min-h-0 flex-1 w-full" type="scroll">
+            <div className="min-h-full p-4 pb-6 sm:p-5 lg:p-6 space-y-6 sm:space-y-8 select-text">
               
               {/* TAB CONTENT: OVERVIEW */}
               <div className={activeTab === "overview" ? "block" : "hidden"}>
@@ -534,7 +534,7 @@ function CaseDetailContent() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="h-7 px-0 text-[11px]"
+                              className="h-7 justify-start rounded-md border border-border/60 bg-background/70 px-2 text-[11px] text-foreground/90 shadow-sm cursor-pointer hover:border-primary/30 hover:bg-primary/10 hover:text-primary dark:bg-card/80"
                               onClick={() => router.push(`/tenders/${e.reference_id}`)}
                             >
                               View tender details
@@ -675,7 +675,7 @@ function CaseDetailContent() {
           </ScrollArea>
 
           {/* Bottom Tabs Switcher - Sticky */}
-          <div className="grid grid-cols-4 shrink-0 border-t border-border/60 bg-muted/20 h-14">
+          <div className="grid h-14 shrink-0 grid-cols-4 border-t border-border/60 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80">
             <TabBtn id="overview" label="Overview" icon={<PanelLeft size={16}/>} active={activeTab === 'overview'} set={setActiveTab} />
             <TabBtn id="evidence" label="Evidence" icon={<Link2 size={16}/>} count={evidence.length} active={activeTab === 'evidence'} set={setActiveTab} />
             <TabBtn id="timeline" label="Timeline" icon={<Clock size={16}/>} count={timeline.length} active={activeTab === 'timeline'} set={setActiveTab} />
@@ -687,9 +687,9 @@ function CaseDetailContent() {
         <div className="hidden lg:block w-px h-full bg-linear-to-r from-border/50 via-background to-transparent shadow-[4px_0_24px_-4px_rgba(0,0,0,0.3)] z-10 box-content"></div>
 
         {/* Main Interface: Chat Panel */}
-        <div className="flex-1 flex flex-col h-full bg-background relative overflow-hidden z-10">
+        <div className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
            {/* The Chat Application */}
-           <CaseChat caseId={caseId} className="flex-1 h-full rounded-none border-0 shadow-none" />
+           <CaseChat caseId={caseId} className="h-full flex-1 rounded-none border-0 shadow-none" />
            
            {/* Mobile Sidebar Overlay mask */}
            {sidebarOpen && (
@@ -712,7 +712,7 @@ function TabBtn({ id, label, icon, active, set, count }: { id: TabId, label: str
   return (
     <button 
       onClick={() => set(id)}
-      className={`relative flex flex-col items-center justify-center gap-1 transition-all h-full
+      className={`relative flex h-full min-w-0 flex-col items-center justify-center gap-1 px-1 transition-all
         ${active ? "text-primary bg-background shadow-[inset_0_2px_0_0_rgba(var(--primary),0.5)]" : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"}
       `}
     >
@@ -724,7 +724,9 @@ function TabBtn({ id, label, icon, active, set, count }: { id: TabId, label: str
           </span>
         )}
       </div>
-      <span className="text-[9px] font-mono tracking-widest uppercase font-semibold mx-auto translate-x-px truncate w-full px-1">{label}</span>
+      <span className="mx-auto w-full truncate px-1 text-center text-[8px] font-mono font-semibold uppercase tracking-[0.18em] sm:text-[9px]">
+        {label}
+      </span>
       {active && <div className="absolute right-0 w-px h-8 bg-border/40" />}
     </button>
   );

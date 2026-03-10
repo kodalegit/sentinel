@@ -26,6 +26,7 @@ import {
   AlertTriangle,
   Building2,
   Calendar,
+  ScanSearch,
   FileText,
   Network,
   Users,
@@ -452,21 +453,36 @@ export default function TenderDetailPage({
 
       {/* Graph Modal */}
       <Dialog open={showGraph} onOpenChange={(open) => !open && setShowGraph(false)}>
-        <DialogContent className="max-w-[95vw] max-h-[92vh] p-0 bg-card/95 border border-border/70">
-          <DialogHeader className="px-6 pt-5 pb-0">
-            <DialogTitle className="font-display text-lg">
-              Connection Graph: {tender.title}
-            </DialogTitle>
+        <DialogContent className="flex max-h-[92vh] max-w-[96vw] flex-col overflow-hidden border border-border/70 bg-card/95 p-0 shadow-2xl sm:max-w-[92vw] xl:max-w-[1200px]">
+          <DialogHeader className="shrink-0 border-b border-border/60 px-4 py-4 sm:px-6 sm:py-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0 space-y-2">
+                <DialogTitle className="font-display text-lg leading-tight sm:text-xl">
+                  Connection Graph: {tender.title}
+                </DialogTitle>
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/30 px-2 py-1">
+                    <ScanSearch size={12} />
+                    Explore linked entities, officials, and suspicious paths
+                  </span>
+                  <span className="inline-flex items-center rounded-full border border-border/60 bg-muted/30 px-2 py-1">
+                    Drag nodes, zoom, or use the minimap to reframe the graph
+                  </span>
+                </div>
+              </div>
+            </div>
           </DialogHeader>
-          <div className="h-[78vh] p-4">
+          <div className="min-h-0 flex-1 p-3 sm:p-4">
             {graphLoading ? (
-              <div className="flex items-center justify-center h-full">
+              <div className="flex h-[72vh] items-center justify-center rounded-2xl border border-border/60 bg-muted/20">
                 <Loader2 className="w-8 h-8 animate-spin text-primary" />
               </div>
             ) : graph ? (
-              <ShadowGraph data={graph} focusNodeId={id} />
+              <div className="h-[72vh] min-h-[420px] rounded-2xl border border-border/50 bg-linear-to-b from-background via-background to-muted/10 p-2 sm:p-3">
+                <ShadowGraph data={graph} focusNodeId={id} minimapPosition="bottom-right" />
+              </div>
             ) : (
-              <div className="flex items-center justify-center h-full text-muted-foreground">
+              <div className="flex h-[72vh] items-center justify-center rounded-2xl border border-dashed border-border/60 bg-muted/10 text-muted-foreground">
                 No graph data available
               </div>
             )}

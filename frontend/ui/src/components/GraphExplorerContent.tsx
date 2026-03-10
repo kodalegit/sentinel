@@ -939,7 +939,7 @@ export function GraphExplorerContent() {
                       variant="outline"
                       size="sm"
                       onClick={handleOpenSelectedNodeNeighborhood}
-                      className="h-8 text-xs bg-card/95 text-foreground hover:bg-accent"
+                      className="h-8 cursor-pointer border-border/70 bg-background/80 text-foreground shadow-sm hover:border-primary/40 hover:bg-primary/10 hover:text-primary dark:bg-card/80"
                     >
                       <Target size={14} />
                       Open neighborhood
@@ -1002,7 +1002,7 @@ export function GraphExplorerContent() {
                           variant="ghost"
                           size="sm"
                           onClick={() => setSelectedClusterInsight(null)}
-                          className="h-8 px-2"
+                          className="h-8 border border-primary/20 bg-background/60 px-2 text-foreground/80 shadow-sm hover:border-primary/40 hover:bg-primary/10 hover:text-primary dark:bg-card/70"
                         >
                           <X size={14} />
                         </Button>
@@ -1019,7 +1019,7 @@ export function GraphExplorerContent() {
                                 className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
                                   isActive
                                     ? "border-primary/40 bg-primary/10 text-primary"
-                                    : "border-border/60 bg-background/70 text-foreground/80 hover:bg-accent/50"
+                                    : "border-border/60 bg-background/80 text-foreground/80 hover:border-primary/30 hover:bg-primary/10 hover:text-primary dark:bg-card/70"
                                 }`}
                               >
                                 {resolveClusterNodeLabel(nodeId)}

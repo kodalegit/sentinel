@@ -30,6 +30,7 @@ interface ShadowGraphProps {
   highlightNodeIds?: string[];
   highlightEdgeIds?: string[];
   onNodeClick?: (nodeId: string, nodeType: NodeType) => void;
+  minimapPosition?: "bottom-center" | "bottom-right";
 }
 
 const NODE_THEME_LIGHT = {
@@ -325,6 +326,7 @@ export function ShadowGraph({
   focusNodeId,
   highlightNodeIds,
   highlightEdgeIds,
+  minimapPosition = "bottom-center",
 }: ShadowGraphProps) {
   const { resolvedTheme } = useTheme();
   const [isDark, setIsDark] = useState(false);
@@ -394,8 +396,13 @@ export function ShadowGraph({
     return nodeTheme[type]?.border ?? "#64748b";
   }, [nodeTheme]);
 
+  const minimapPositionClass =
+    minimapPosition === "bottom-right"
+      ? "bottom-4! left-auto! right-4! translate-x-0!"
+      : "bottom-4! left-1/2! right-auto! -translate-x-1/2!";
+
   return (
-    <div className="w-full h-full rounded-2xl border border-border/60 overflow-hidden bg-card/80 shadow-[0_25px_60px_-45px_rgba(31,75,70,0.4)]">
+    <div className="relative flex h-full w-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card/80 shadow-[0_25px_60px_-45px_rgba(31,75,70,0.4)]">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -407,47 +414,53 @@ export function ShadowGraph({
         fitViewOptions={{ padding: 0.25 }}
         attributionPosition="bottom-left"
         proOptions={{ hideAttribution: true }}
+        className="bg-transparent"
       >
         <Background color={isDark ? "#2a3533" : "#c8bfb4"} gap={48} size={1} />
-        <Controls />
+        <Controls className="bottom-auto! left-4! top-4! [&>button]:bg-card/95! [&>button]:border-border/70! [&>button]:shadow-sm! [&>button]:text-foreground! [&>button:hover]:bg-primary/10! [&>button:hover]:text-primary!" />
         <MiniMap
-          position="bottom-center"
-          className="bottom-4 left-1/2 -translate-x-1/2 border border-border/60 bg-card/95 backdrop-blur-sm shadow-lg rounded-md"
+          position="bottom-right"
+          pannable
+          zoomable
+          className={`${minimapPositionClass} overflow-hidden rounded-lg border border-border/60 bg-card/95 shadow-lg backdrop-blur-sm`}
           nodeColor={minimapNodeColor}
           maskColor={isDark ? "rgba(11,17,16,0.7)" : "rgba(246,243,238,0.7)"}
         />
       </ReactFlow>
 
       {/* Legend */}
-      <div className="absolute bottom-4 left-20 rounded-xl border border-border/60 bg-card/95 backdrop-blur-sm p-3.5 text-xs text-muted-foreground shadow-lg z-10">
-        <div className="font-semibold mb-2 text-foreground/80 text-[13px]">Legend</div>
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2">
-            <div className="w-2.5 h-2.5 rounded-sm" style={{ background: nodeTheme.COMPANY.border }} />
-            <span>Company</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-2.5 h-2.5 rounded-full" style={{ background: nodeTheme.DIRECTOR.border }} />
-            <span>Director</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-2.5 h-2.5 rounded-full" style={{ background: nodeTheme.OFFICIAL.border }} />
-            <span>Official</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-2.5 h-2.5 rounded" style={{ background: nodeTheme.TENDER.border }} />
-            <span>Tender</span>
-          </div>
-          <div className="my-1.5 border-t border-border/40" />
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-px" style={{ background: isDark ? "#5a5550" : "#b9b2a6" }} />
-            <span>Connection</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-[2px] rounded-full" style={{ background: isDark ? "#e06050" : "#c4412f" }} />
-            <span style={{ color: isDark ? "#e06050" : "#c4412f" }}>Suspicious</span>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-col gap-3 p-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="pointer-events-auto max-w-[220px] rounded-xl border border-border/60 bg-card/95 p-3.5 text-xs text-muted-foreground shadow-lg backdrop-blur-sm">
+          <div className="mb-2 text-[13px] font-semibold text-foreground/80">Legend</div>
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <div className="h-2.5 w-2.5 rounded-sm" style={{ background: nodeTheme.COMPANY.border }} />
+              <span>Company</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="h-2.5 w-2.5 rounded-full" style={{ background: nodeTheme.DIRECTOR.border }} />
+              <span>Director</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="h-2.5 w-2.5 rounded-full" style={{ background: nodeTheme.OFFICIAL.border }} />
+              <span>Official</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="h-2.5 w-2.5 rounded" style={{ background: nodeTheme.TENDER.border }} />
+              <span>Tender</span>
+            </div>
+            <div className="my-1.5 border-t border-border/40" />
+            <div className="flex items-center gap-2">
+              <div className="h-px w-5" style={{ background: isDark ? "#5a5550" : "#b9b2a6" }} />
+              <span>Connection</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="h-[2px] w-5 rounded-full" style={{ background: isDark ? "#e06050" : "#c4412f" }} />
+              <span style={{ color: isDark ? "#e06050" : "#c4412f" }}>Suspicious</span>
+            </div>
           </div>
         </div>
+        <div className="pointer-events-none hidden min-h-[120px] min-w-[180px] sm:block" />
       </div>
     </div>
   );
