@@ -36,6 +36,8 @@ from db.models import (
     AgentSettingDB,
 )
 
+_UNSET = object()
+
 
 # --- Company ---
 
@@ -850,6 +852,33 @@ async def create_knowledge_document(
         uploaded_by_id=uploaded_by_id,
     )
     db.add(doc)
+    await db.flush()
+    return doc
+
+
+async def update_knowledge_document(
+    db: AsyncSession,
+    document_id: uuid.UUID,
+    *,
+    title: str | None | object = _UNSET,
+    description: str | None | object = _UNSET,
+    category: str | None | object = _UNSET,
+    source_url: str | None | object = _UNSET,
+) -> KnowledgeDocumentDB | None:
+    """Update metadata for a knowledge document without touching its chunks."""
+    doc = await db.get(KnowledgeDocumentDB, document_id)
+    if not doc:
+        return None
+
+    if title is not _UNSET:
+        doc.title = title
+    if description is not _UNSET:
+        doc.description = description
+    if category is not _UNSET:
+        doc.category = category
+    if source_url is not _UNSET:
+        doc.source_url = source_url
+
     await db.flush()
     return doc
 

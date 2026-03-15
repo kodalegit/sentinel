@@ -377,6 +377,13 @@ export interface KnowledgeDocument {
   created_at: string;
 }
 
+export interface KnowledgeDocumentUpdate {
+  title?: string;
+  description?: string | null;
+  category?: KnowledgeDocumentCategory;
+  source_url?: string | null;
+}
+
 export interface KnowledgeChunk {
   id: string;
   document_id: string;
@@ -484,4 +491,26 @@ export interface AgentSettingsUpdate {
   llm_temperature?: number;
   embedding_provider?: string;
   embedding_model?: string;
+}
+
+export interface LLMModelCatalogEntry {
+  value: string;
+  label: string;
+  description: string | null;
+  recommended: boolean;
+  deprecated: boolean;
+}
+
+export interface LLMProviderCatalog {
+  value: string;
+  label: string;
+  description: string | null;
+  requires_api_key: boolean;
+  supports_base_url: boolean;
+  supports_custom_model: boolean;
+  models: LLMModelCatalogEntry[];
+}
+
+export interface LLMModelCatalogResponse {
+  providers: LLMProviderCatalog[];
 }

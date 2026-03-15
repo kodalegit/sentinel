@@ -64,8 +64,9 @@ def detect_communities(
         shared = _find_shared_attributes(G, company_ids, companies)
         co_bids = _count_co_bids(bids, set(company_ids))
         wins = _analyze_win_pattern(bids, set(company_ids), companies)
-        score = _calculate_suspicion_score(
-            shared, co_bids, wins, len(company_ids), G, company_ids
+        suspicious_edge_count = _count_suspicious_edges(G, company_ids)
+        score = calculate_suspicion_score(
+            shared, co_bids, len(company_ids), suspicious_edge_count
         )
 
         clusters.append(
@@ -273,13 +274,11 @@ def _analyze_win_pattern(
     }
 
 
-def _calculate_suspicion_score(
+def calculate_suspicion_score(
     shared: dict,
     co_bid_count: int,
-    wins: dict,
     cluster_size: int,
-    G: nx.Graph,
-    company_ids: list[str],
+    suspicious_edge_count: int,
 ) -> float:
     """
     Calculate a 0-100 suspicion score for a cluster.
@@ -296,15 +295,19 @@ def _calculate_suspicion_score(
     score += min(30, co_bid_count * 5)
 
     # Suspicious edges in main graph (up to 20 points)
+    score += min(20, suspicious_edge_count * 5)
+
+    # Cluster size bonus (up to 20 points)
+    score += min(20, (cluster_size - 1) * 5)
+
+    return min(100, score)
+
+
+def _count_suspicious_edges(G: nx.Graph, company_ids: list[str]) -> int:
     suspicious_count = 0
     for cid in company_ids:
         if cid in G:
             for _, _, data in G.edges(cid, data=True):
                 if data.get("suspicious", False):
                     suspicious_count += 1
-    score += min(20, suspicious_count * 5)
-
-    # Cluster size bonus (up to 20 points)
-    score += min(20, (cluster_size - 1) * 5)
-
-    return min(100, score)
+    return suspicious_count

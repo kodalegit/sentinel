@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from models import (
     KnowledgeDocument,
     KnowledgeDocumentCategory,
+    KnowledgeDocumentUpdate,
     KnowledgeChunk,
     KnowledgeStats,
     ChatThread,
@@ -129,6 +130,48 @@ async def upload_knowledge_document(
     await db.commit()
     await db.refresh(doc_db, attribute_names=["uploaded_by"])
 
+    return _doc_db_to_pydantic(doc_db)
+
+
+@router.patch("/knowledge/documents/{document_id}", response_model=KnowledgeDocument)
+async def update_knowledge_document(
+    document_id: str,
+    body: KnowledgeDocumentUpdate,
+    current_user: AdminOnly,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update metadata for a knowledge document without reprocessing chunks."""
+    update_data = body.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No changes submitted")
+
+    if "title" in update_data:
+        title = (update_data.get("title") or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Title is required")
+        update_data["title"] = title
+
+    if "description" in update_data and isinstance(update_data["description"], str):
+        update_data["description"] = update_data["description"].strip() or None
+
+    if "source_url" in update_data and isinstance(update_data["source_url"], str):
+        update_data["source_url"] = update_data["source_url"].strip() or None
+
+    if "category" in update_data and update_data["category"] is not None:
+        update_data["category"] = update_data["category"].value
+
+    doc_db = await repo.update_knowledge_document(
+        db,
+        _uuid.UUID(document_id),
+        **update_data,
+    )
+    if not doc_db:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    await db.commit()
+    doc_db = await repo.get_knowledge_document(db, _uuid.UUID(document_id))
+    if not doc_db:
+        raise HTTPException(status_code=404, detail="Document not found")
     return _doc_db_to_pydantic(doc_db)
 
 

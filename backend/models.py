@@ -523,6 +523,13 @@ class KnowledgeDocumentCreate(BaseModel):
     source_url: Optional[str] = None
 
 
+class KnowledgeDocumentUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[KnowledgeDocumentCategory] = None
+    source_url: Optional[str] = None
+
+
 class KnowledgeChunk(BaseModel):
     id: str
     document_id: str
@@ -588,3 +595,25 @@ class AgentSettingsResponse(BaseModel):
     llm_temperature: Optional[float] = None
     embedding_provider: Optional[str] = None
     embedding_model: Optional[str] = None
+
+
+class LLMModelCatalogEntry(BaseModel):
+    value: str
+    label: str
+    description: Optional[str] = None
+    recommended: bool = False
+    deprecated: bool = False
+
+
+class LLMProviderCatalog(BaseModel):
+    value: str
+    label: str
+    description: Optional[str] = None
+    requires_api_key: bool = True
+    supports_base_url: bool = False
+    supports_custom_model: bool = False
+    models: list[LLMModelCatalogEntry] = Field(default_factory=list)
+
+
+class LLMModelCatalogResponse(BaseModel):
+    providers: list[LLMProviderCatalog] = Field(default_factory=list)

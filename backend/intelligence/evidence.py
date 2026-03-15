@@ -400,8 +400,11 @@ def _build_link_block(
             ),
         ]
     elif evidence_type == "RISK_FACTOR":
+        tender_id, _, factor_key = reference_id.partition(":")
         factor_type = metadata.get("type") or reference_id.split(":")[-1] or "UNKNOWN"
-        chunk_id = f"risk_factor:{reference_id}"
+        if tender_id and factor_key:
+            reference_id = tender_id
+            chunk_id = f"risk_factor:{tender_id}:{factor_key}"
         body_lines = [
             f"Type: {factor_type}",
             f"Weight: {metadata.get('weight') if metadata.get('weight') is not None else 'Unknown'}",

@@ -46,7 +46,10 @@ from routes.auth import router as auth_router
 from routes.users import router as users_router
 from routes.companies import router as companies_router
 from routes.intelligence import router as intelligence_router
-from routes.settings import router as settings_router
+from routes.settings import (
+    router as settings_router,
+    sync_runtime_llm_settings_from_db,
+)
 from auth.dependencies import SupervisorOrAdmin, CurrentUser
 
 
@@ -400,6 +403,8 @@ async def lifespan(app: FastAPI):
             "\n" + "=" * 70 + "\nWARNING: Using default JWT secret key. "
             "Set JWT_SECRET_KEY in production!\n" + "=" * 70
         )
+
+    await sync_runtime_llm_settings_from_db()
 
     stats = await load_persisted_analysis(app)
     if stats is None:

@@ -4,10 +4,11 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getAgentSettings,
+  getLLMModelCatalog,
   updateAgentSettings,
   testLLMConnection,
 } from "@/lib/api";
-import type { AgentSettingsUpdate } from "@/lib/types";
+import type { AgentSettingsUpdate, LLMProviderCatalog } from "@/lib/types";
 import { AuthGuard } from "@/components/AuthGuard";
 import { useAuth } from "@/lib/auth";
 import {
@@ -39,26 +40,6 @@ import {
   Cpu,
 } from "lucide-react";
 
-const LLM_PROVIDERS = [
-  { value: "openai", label: "OpenAI" },
-  { value: "anthropic", label: "Anthropic" },
-  { value: "google_genai", label: "Google AI" },
-  { value: "ollama", label: "Ollama (Local)" },
-];
-
-const OPENAI_MODELS = [
-  "gpt-4o",
-  "gpt-4o-mini",
-  "gpt-4-turbo",
-  "gpt-3.5-turbo",
-];
-
-const ANTHROPIC_MODELS = [
-  "claude-3-5-sonnet-20241022",
-  "claude-3-opus-20240229",
-  "claude-3-haiku-20240307",
-];
-
 function AgentSettingsContent() {
   const queryClient = useQueryClient();
   const { isAdmin } = useAuth();
@@ -72,6 +53,12 @@ function AgentSettingsContent() {
   const { data: settings, isLoading } = useQuery({
     queryKey: ["agent-settings"],
     queryFn: getAgentSettings,
+    enabled: isAdmin,
+  });
+
+  const { data: catalog, isLoading: isCatalogLoading } = useQuery({
+    queryKey: ["llm-model-catalog"],
+    queryFn: getLLMModelCatalog,
     enabled: isAdmin,
   });
 
@@ -102,21 +89,39 @@ function AgentSettingsContent() {
     },
   });
 
-  const currentProvider = formData.llm_provider ?? settings?.llm_provider ?? "openai";
-  const currentModel = formData.llm_model ?? settings?.llm_model ?? "";
-  const currentTemp = formData.llm_temperature ?? settings?.llm_temperature ?? 0;
-  const currentBaseUrl = formData.llm_base_url ?? settings?.llm_base_url ?? "";
-
-  const getModelsForProvider = (provider: string) => {
-    switch (provider) {
-      case "openai":
-        return OPENAI_MODELS;
-      case "anthropic":
-        return ANTHROPIC_MODELS;
-      default:
-        return [];
+  const getDefaultModelForProvider = (provider: LLMProviderCatalog | undefined) => {
+    if (!provider) {
+      return undefined;
     }
+
+    return (
+      provider.models.find((model) => model.recommended)?.value ?? provider.models[0]?.value
+    );
   };
+
+  const providers = catalog?.providers ?? [];
+  const currentProvider =
+    formData.llm_provider ?? settings?.llm_provider ?? providers[0]?.value ?? "openai";
+  const selectedProvider = providers.find(
+    (provider) => provider.value === currentProvider,
+  );
+  const currentModel =
+    formData.llm_model ??
+    settings?.llm_model ??
+    getDefaultModelForProvider(selectedProvider) ??
+    "";
+  const currentTemp = formData.llm_temperature ?? settings?.llm_temperature ?? 0.7;
+  const currentBaseUrl = formData.llm_base_url ?? settings?.llm_base_url ?? "";
+  const providerModels = selectedProvider?.models ?? [];
+  const selectedModel = providerModels.find((model) => model.value === currentModel);
+  const supportsCustomModel = selectedProvider?.supports_custom_model ?? true;
+  const hasPresetModel = providerModels.some((model) => model.value === currentModel);
+  const showCustomModelInput = supportsCustomModel && (!currentModel || !hasPresetModel);
+  const modelSelectValue = hasPresetModel
+    ? currentModel
+    : showCustomModelInput
+      ? "__custom__"
+      : undefined;
 
   const handleSave = () => {
     if (Object.keys(formData).length > 0) {
@@ -141,6 +146,14 @@ function AgentSettingsContent() {
   }
 
   if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (isCatalogLoading) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -176,53 +189,88 @@ function AgentSettingsContent() {
             </Label>
             <Select
               value={currentProvider}
-              onValueChange={(v) =>
-                setFormData((prev) => ({ ...prev, llm_provider: v, llm_model: undefined }))
-              }
+              onValueChange={(value) => {
+                const nextProvider = providers.find(
+                  (provider) => provider.value === value,
+                );
+                setFormData((prev) => ({
+                  ...prev,
+                  llm_provider: value,
+                  llm_model: getDefaultModelForProvider(nextProvider) ?? "",
+                }));
+                setTestResult(null);
+              }}
             >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {LLM_PROVIDERS.map((p) => (
-                  <SelectItem key={p.value} value={p.value}>
-                    {p.label}
+                {providers.map((provider) => (
+                  <SelectItem key={provider.value} value={provider.value}>
+                    {provider.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            <p className="text-xs text-muted-foreground">
+              {selectedProvider?.description ?? "Select which provider powers the agent runtime."}
+            </p>
           </div>
 
           {/* Model */}
           <div className="space-y-2">
             <Label>Model</Label>
-            {getModelsForProvider(currentProvider).length > 0 ? (
+            {providerModels.length > 0 ? (
               <Select
-                value={currentModel}
-                onValueChange={(v) =>
-                  setFormData((prev) => ({ ...prev, llm_model: v }))
-                }
+                value={modelSelectValue}
+                onValueChange={(value) => {
+                  setFormData((prev) => ({
+                    ...prev,
+                    llm_model: value === "__custom__" ? "" : value,
+                  }));
+                  setTestResult(null);
+                }}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select a model" />
                 </SelectTrigger>
                 <SelectContent>
-                  {getModelsForProvider(currentProvider).map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {m}
+                  {providerModels.map((model) => (
+                    <SelectItem key={model.value} value={model.value}>
+                      {model.label}
                     </SelectItem>
                   ))}
+                  {supportsCustomModel && (
+                    <SelectItem value="__custom__">Custom model</SelectItem>
+                  )}
                 </SelectContent>
               </Select>
             ) : (
               <Input
                 value={currentModel}
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, llm_model: e.target.value }))
-                }
+                onChange={(e) => {
+                  setFormData((prev) => ({ ...prev, llm_model: e.target.value }));
+                  setTestResult(null);
+                }}
                 placeholder="Enter model name"
               />
             )}
+            {showCustomModelInput && providerModels.length > 0 && (
+              <Input
+                value={currentModel}
+                onChange={(e) => {
+                  setFormData((prev) => ({ ...prev, llm_model: e.target.value }));
+                  setTestResult(null);
+                }}
+                placeholder="Enter custom model name"
+              />
+            )}
+            <p className="text-xs text-muted-foreground">
+              {selectedModel?.description ??
+                (supportsCustomModel
+                  ? "Choose a catalog model or enter any provider-supported model name."
+                  : "Choose a supported model for this provider.")}
+            </p>
           </div>
 
           {/* API Key */}
@@ -239,18 +287,21 @@ function AgentSettingsContent() {
                     ? "••••••••••••••••"
                     : "Enter API key"
                 }
-                onChange={(e) =>
-                  setFormData((prev) => ({ ...prev, llm_api_key: e.target.value }))
-                }
+                onChange={(e) => {
+                  setFormData((prev) => ({ ...prev, llm_api_key: e.target.value }));
+                  setTestResult(null);
+                }}
               />
               {settings?.llm_api_key_set && (
                 <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0" />
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              {settings?.llm_api_key_set
-                ? "API key is configured. Enter a new value to update."
-                : "No API key configured."}
+              {selectedProvider?.requires_api_key === false
+                ? "This provider does not require an API key for the default setup."
+                : settings?.llm_api_key_set
+                  ? "API key is configured. Enter a new value to update."
+                  : "No API key configured."}
             </p>
           </div>
 
@@ -262,13 +313,16 @@ function AgentSettingsContent() {
             </Label>
             <Input
               value={currentBaseUrl}
-              onChange={(e) =>
-                setFormData((prev) => ({ ...prev, llm_base_url: e.target.value }))
-              }
+              onChange={(e) => {
+                setFormData((prev) => ({ ...prev, llm_base_url: e.target.value }));
+                setTestResult(null);
+              }}
               placeholder="https://api.example.com or http://localhost:11434"
             />
             <p className="text-xs text-muted-foreground">
-              For Ollama or custom API endpoints. Leave empty for default.
+              {selectedProvider?.supports_base_url
+                ? "Use this for Ollama, proxies, or custom-compatible endpoints. Leave empty for the provider default."
+                : "Leave empty to use the provider's default hosted endpoint."}
             </p>
           </div>
 
@@ -280,9 +334,10 @@ function AgentSettingsContent() {
             </Label>
             <Slider
               value={[currentTemp]}
-              onValueChange={([v]) =>
-                setFormData((prev) => ({ ...prev, llm_temperature: v }))
-              }
+              onValueChange={([v]) => {
+                setFormData((prev) => ({ ...prev, llm_temperature: v }));
+                setTestResult(null);
+              }}
               min={0}
               max={1}
               step={0.1}
@@ -310,8 +365,8 @@ function AgentSettingsContent() {
           <div className="flex gap-2 pt-4">
             <Button
               variant="outline"
-              onClick={() => testMutation.mutate()}
-              disabled={testMutation.isPending}
+              onClick={() => testMutation.mutate(formData)}
+              disabled={testMutation.isPending || !currentModel.trim()}
             >
               {testMutation.isPending ? (
                 <>

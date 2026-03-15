@@ -23,6 +23,7 @@ import type {
   CaseNotification,
   WorkloadItem,
   KnowledgeDocument,
+  KnowledgeDocumentUpdate,
   KnowledgeChunk,
   KnowledgeStats,
   ChatThread,
@@ -30,6 +31,7 @@ import type {
   ChatStreamEvent,
   AgentSettings,
   AgentSettingsUpdate,
+  LLMModelCatalogResponse,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -562,6 +564,13 @@ export async function uploadKnowledgeDocument(
   return response.json();
 }
 
+export async function updateKnowledgeDocument(
+  id: string,
+  data: KnowledgeDocumentUpdate,
+): Promise<KnowledgeDocument> {
+  return patchApi<KnowledgeDocument>(`/api/knowledge/documents/${id}`, data);
+}
+
 export async function deleteKnowledgeDocument(id: string): Promise<void> {
   const response = await fetch(`${API_BASE}/api/knowledge/documents/${id}`, {
     method: "DELETE",
@@ -666,6 +675,10 @@ export async function getAgentSettings(): Promise<AgentSettings> {
   return fetchApi<AgentSettings>("/api/settings/llm");
 }
 
+export async function getLLMModelCatalog(): Promise<LLMModelCatalogResponse> {
+  return fetchApi<LLMModelCatalogResponse>("/api/settings/llm/catalog");
+}
+
 export async function updateAgentSettings(settings: AgentSettingsUpdate): Promise<AgentSettings> {
   const response = await fetch(`${API_BASE}/api/settings/llm`, {
     method: "PATCH",
@@ -684,12 +697,14 @@ export async function updateAgentSettings(settings: AgentSettingsUpdate): Promis
   return response.json();
 }
 
-export async function testLLMConnection(): Promise<{
+export async function testLLMConnection(
+  settings?: AgentSettingsUpdate,
+): Promise<{
   success: boolean;
   provider: string;
   model: string;
   response?: string;
   error?: string;
 }> {
-  return postApi("/api/settings/llm/test", {});
+  return postApi("/api/settings/llm/test", settings ?? {});
 }

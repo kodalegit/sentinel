@@ -1,14 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getKnowledgeDocuments,
   uploadKnowledgeDocument,
+  updateKnowledgeDocument,
   deleteKnowledgeDocument,
   getKnowledgeStats,
 } from "@/lib/api";
-import type { KnowledgeDocument, KnowledgeDocumentCategory } from "@/lib/types";
+import type {
+  KnowledgeDocument,
+  KnowledgeDocumentCategory,
+  KnowledgeDocumentUpdate,
+} from "@/lib/types";
 import { AuthGuard } from "@/components/AuthGuard";
 import { useAuth } from "@/lib/auth";
 import {
@@ -30,6 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -37,6 +43,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -45,8 +52,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import {
+  ArrowUpRight,
+  BookMarked,
+  Files,
   FileText,
   Upload,
   Trash2,
@@ -55,6 +64,9 @@ import {
   FileCheck,
   AlertCircle,
   Loader2,
+  PencilLine,
+  Search,
+  Link2,
 } from "lucide-react";
 
 const CATEGORY_LABELS: Record<KnowledgeDocumentCategory, string> = {
@@ -64,26 +76,60 @@ const CATEGORY_LABELS: Record<KnowledgeDocumentCategory, string> = {
   GUIDELINE: "Guideline",
 };
 
-const CATEGORY_ICONS: Record<KnowledgeDocumentCategory, React.ReactNode> = {
+const CATEGORY_ICONS: Record<KnowledgeDocumentCategory, ReactNode> = {
   LAW: <Scale className="h-4 w-4" />,
   CASE_LAW: <BookOpen className="h-4 w-4" />,
   REGULATION: <FileCheck className="h-4 w-4" />,
   GUIDELINE: <FileText className="h-4 w-4" />,
 };
 
+const CATEGORY_OPTIONS: Array<{
+  value: KnowledgeDocumentCategory;
+  label: string;
+  helper: string;
+}> = [
+  { value: "LAW", label: "Law", helper: "Acts of Parliament and statutes" },
+  { value: "CASE_LAW", label: "Case Law", helper: "Court decisions and precedents" },
+  { value: "REGULATION", label: "Regulation", helper: "PPADR, circulars, and compliance rules" },
+  { value: "GUIDELINE", label: "Guideline", helper: "PPRA, EACC, and policy guidance" },
+];
+
+type DocumentFormState = {
+  title: string;
+  category: KnowledgeDocumentCategory;
+  description: string;
+  sourceUrl: string;
+};
+
+const EMPTY_DOCUMENT_FORM: DocumentFormState = {
+  title: "",
+  category: "LAW",
+  description: "",
+  sourceUrl: "",
+};
+
+function formatDocumentPayload(form: DocumentFormState): KnowledgeDocumentUpdate {
+  return {
+    title: form.title.trim(),
+    category: form.category,
+    description: form.description.trim() || null,
+    source_url: form.sourceUrl.trim() || null,
+  };
+}
+
 function KnowledgeBaseContent() {
   const queryClient = useQueryClient();
   const { isAdmin } = useAuth();
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [editingDocument, setEditingDocument] = useState<KnowledgeDocument | null>(null);
 
   const [uploadForm, setUploadForm] = useState({
     file: null as File | null,
-    title: "",
-    category: "LAW" as KnowledgeDocumentCategory,
-    description: "",
-    sourceUrl: "",
+    ...EMPTY_DOCUMENT_FORM,
   });
+  const [editForm, setEditForm] = useState<DocumentFormState>(EMPTY_DOCUMENT_FORM);
 
   const { data: documents, isLoading: docsLoading } = useQuery({
     queryKey: ["knowledge-documents"],
@@ -99,10 +145,10 @@ function KnowledgeBaseContent() {
     mutationFn: () =>
       uploadKnowledgeDocument(
         uploadForm.file!,
-        uploadForm.title,
+        uploadForm.title.trim(),
         uploadForm.category,
-        uploadForm.description || undefined,
-        uploadForm.sourceUrl || undefined
+        uploadForm.description.trim() || undefined,
+        uploadForm.sourceUrl.trim() || undefined,
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["knowledge-documents"] });
@@ -110,11 +156,19 @@ function KnowledgeBaseContent() {
       setUploadOpen(false);
       setUploadForm({
         file: null,
-        title: "",
-        category: "LAW",
-        description: "",
-        sourceUrl: "",
+        ...EMPTY_DOCUMENT_FORM,
       });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: KnowledgeDocumentUpdate }) =>
+      updateKnowledgeDocument(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["knowledge-documents"] });
+      queryClient.invalidateQueries({ queryKey: ["knowledge-stats"] });
+      setEditingDocument(null);
+      setEditForm(EMPTY_DOCUMENT_FORM);
     },
   });
 
@@ -138,6 +192,44 @@ function KnowledgeBaseContent() {
     }
   };
 
+  const filteredDocuments = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) {
+      return documents ?? [];
+    }
+    return (documents ?? []).filter((doc) => {
+      const haystack = [
+        doc.title,
+        doc.description ?? "",
+        CATEGORY_LABELS[doc.category],
+        doc.file_name ?? "",
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [documents, searchQuery]);
+
+  const handleEditOpen = (doc: KnowledgeDocument) => {
+    setEditingDocument(doc);
+    setEditForm({
+      title: doc.title,
+      category: doc.category,
+      description: doc.description ?? "",
+      sourceUrl: doc.source_url ?? "",
+    });
+  };
+
+  const handleEditSave = () => {
+    if (!editingDocument) {
+      return;
+    }
+    updateMutation.mutate({
+      id: editingDocument.id,
+      data: formatDocumentPayload(editForm),
+    });
+  };
+
   if (!isAdmin) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
@@ -155,283 +247,442 @@ function KnowledgeBaseContent() {
   }
 
   return (
-    <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Knowledge Base</h1>
-          <p className="text-muted-foreground">
-            Manage Kenyan legal documents for AI-powered analysis
-          </p>
-        </div>
-        <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Upload className="h-4 w-4 mr-2" />
-              Upload Document
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Upload Legal Document</DialogTitle>
-              <DialogDescription>
-                Upload a PDF document to add to the knowledge base. The document
-                will be chunked and embedded for RAG retrieval.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 py-4">
-              <div className="space-y-2">
-                <Label htmlFor="file">PDF File</Label>
-                <Input
-                  id="file"
-                  type="file"
-                  accept=".pdf"
-                  onChange={handleFileChange}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="title">Title</Label>
-                <Input
-                  id="title"
-                  value={uploadForm.title}
-                  onChange={(e) =>
-                    setUploadForm((prev) => ({ ...prev, title: e.target.value }))
-                  }
-                  placeholder="e.g., Public Procurement and Asset Disposal Act 2015"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="category">Category</Label>
-                <Select
-                  value={uploadForm.category}
-                  onValueChange={(v) =>
-                    setUploadForm((prev) => ({
-                      ...prev,
-                      category: v as KnowledgeDocumentCategory,
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="LAW">Law (Acts of Parliament)</SelectItem>
-                    <SelectItem value="CASE_LAW">Case Law (Court Decisions)</SelectItem>
-                    <SelectItem value="REGULATION">Regulation (PPADR, Circulars)</SelectItem>
-                    <SelectItem value="GUIDELINE">Guideline (PPRA/EACC)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="description">Description (optional)</Label>
-                <Input
-                  id="description"
-                  value={uploadForm.description}
-                  onChange={(e) =>
-                    setUploadForm((prev) => ({
-                      ...prev,
-                      description: e.target.value,
-                    }))
-                  }
-                  placeholder="Brief description of the document"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="sourceUrl">Source URL (optional)</Label>
-                <Input
-                  id="sourceUrl"
-                  value={uploadForm.sourceUrl}
-                  onChange={(e) =>
-                    setUploadForm((prev) => ({
-                      ...prev,
-                      sourceUrl: e.target.value,
-                    }))
-                  }
-                  placeholder="https://..."
-                />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => setUploadOpen(false)}
-                disabled={uploadMutation.isPending}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={() => uploadMutation.mutate()}
-                disabled={!uploadForm.file || !uploadForm.title || uploadMutation.isPending}
-              >
-                {uploadMutation.isPending ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  "Upload"
-                )}
-              </Button>
-            </DialogFooter>
-            {uploadMutation.isError && (
-              <p className="text-sm text-red-500 mt-2">
-                {(uploadMutation.error as Error).message}
+    <div className="container mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+      <Card className="border-border/70 bg-card/80 shadow-sm">
+        <CardContent className="flex flex-col gap-6 p-6 lg:flex-row lg:items-end lg:justify-between">
+          <div className="space-y-3">
+            <Badge variant="outline" className="w-fit rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.18em]">
+              Knowledge operations
+            </Badge>
+            <div>
+              <h1 className="text-3xl font-semibold tracking-tight">Knowledge Base</h1>
+              <p className="mt-2 max-w-2xl text-sm text-muted-foreground sm:text-base">
+                Curate the legal and policy corpus that grounds Sentinel’s analysis, citations, and case reasoning.
               </p>
-            )}
-          </DialogContent>
-        </Dialog>
-      </div>
+            </div>
+          </div>
+          <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+            <DialogTrigger asChild>
+              <Button size="lg" className="w-full sm:w-auto">
+                <Upload className="h-4 w-4" />
+                Upload document
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>Upload legal document</DialogTitle>
+                <DialogDescription>
+                  Upload a PDF document and enrich its metadata before Sentinel chunks and embeds it for retrieval.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-4 py-4 sm:grid-cols-2">
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="file">PDF file</Label>
+                  <Input
+                    id="file"
+                    type="file"
+                    accept=".pdf"
+                    onChange={handleFileChange}
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="title">Title</Label>
+                  <Input
+                    id="title"
+                    value={uploadForm.title}
+                    onChange={(e) =>
+                      setUploadForm((prev) => ({ ...prev, title: e.target.value }))
+                    }
+                    placeholder="Public Procurement and Asset Disposal Act 2015"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="category">Category</Label>
+                  <Select
+                    value={uploadForm.category}
+                    onValueChange={(value) =>
+                      setUploadForm((prev) => ({
+                        ...prev,
+                        category: value as KnowledgeDocumentCategory,
+                      }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CATEGORY_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="sourceUrl">Source URL</Label>
+                  <Input
+                    id="sourceUrl"
+                    value={uploadForm.sourceUrl}
+                    onChange={(e) =>
+                      setUploadForm((prev) => ({ ...prev, sourceUrl: e.target.value }))
+                    }
+                    placeholder="https://..."
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="description">Description</Label>
+                  <Textarea
+                    id="description"
+                    value={uploadForm.description}
+                    onChange={(e) =>
+                      setUploadForm((prev) => ({ ...prev, description: e.target.value }))
+                    }
+                    placeholder="Explain what investigators should know about this document."
+                    rows={4}
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setUploadOpen(false)}
+                  disabled={uploadMutation.isPending}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => uploadMutation.mutate()}
+                  disabled={!uploadForm.file || !uploadForm.title.trim() || uploadMutation.isPending}
+                >
+                  {uploadMutation.isPending ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Uploading...
+                    </>
+                  ) : (
+                    "Upload"
+                  )}
+                </Button>
+              </DialogFooter>
+              {uploadMutation.isError && (
+                <p className="text-sm text-red-500">
+                  {(uploadMutation.error as Error).message}
+                </p>
+              )}
+            </DialogContent>
+          </Dialog>
+        </CardContent>
+      </Card>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total Documents
-            </CardTitle>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Card className="border-border/70 bg-card/80 shadow-sm">
+          <CardHeader className="space-y-1 p-4 pb-1">
+            <CardDescription className="text-[11px] uppercase tracking-[0.14em]">
+              Total documents
+            </CardDescription>
+            <CardTitle className="text-xl sm:text-2xl">{stats?.total_documents ?? 0}</CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{stats?.total_documents ?? 0}</p>
+          <CardContent className="px-4 pb-4 pt-1">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <BookMarked className="h-4 w-4" />
+              Tracked legal and policy sources
+            </div>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total Chunks
-            </CardTitle>
+        <Card className="border-border/70 bg-card/80 shadow-sm">
+          <CardHeader className="space-y-1 p-4 pb-1">
+            <CardDescription className="text-[11px] uppercase tracking-[0.14em]">
+              Total chunks
+            </CardDescription>
+            <CardTitle className="text-xl sm:text-2xl">{stats?.total_chunks ?? 0}</CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{stats?.total_chunks ?? 0}</p>
+          <CardContent className="px-4 pb-4 pt-1">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Files className="h-4 w-4" />
+              Embedded retrieval units
+            </div>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
+        <Card className="border-border/70 bg-card/80 shadow-sm">
+          <CardHeader className="space-y-1 p-4 pb-1">
+            <CardDescription className="text-[11px] uppercase tracking-[0.14em]">
               Laws
-            </CardTitle>
+            </CardDescription>
+            <CardTitle className="text-xl sm:text-2xl">{stats?.by_category?.LAW ?? 0}</CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{stats?.by_category?.LAW ?? 0}</p>
+          <CardContent className="px-4 pb-4 pt-1">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Scale className="h-4 w-4" />
+              Core statutory references
+            </div>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
+        <Card className="border-border/70 bg-card/80 shadow-sm">
+          <CardHeader className="space-y-1 p-4 pb-1">
+            <CardDescription className="text-[11px] uppercase tracking-[0.14em]">
               Regulations
-            </CardTitle>
+            </CardDescription>
+            <CardTitle className="text-xl sm:text-2xl">{stats?.by_category?.REGULATION ?? 0}</CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">
-              {stats?.by_category?.REGULATION ?? 0}
-            </p>
+          <CardContent className="px-4 pb-4 pt-1">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Link2 className="h-4 w-4" />
+              Procedural and compliance guidance
+            </div>
           </CardContent>
         </Card>
       </div>
 
       {/* Documents Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Documents</CardTitle>
-          <CardDescription>
-            All legal documents in the knowledge base
-          </CardDescription>
+      <Card className="border-border/70 bg-card/80 shadow-sm">
+        <CardHeader className="gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <CardTitle>Documents</CardTitle>
+            <CardDescription>
+              Review metadata, update titles and sources, and keep the RAG corpus clean and current.
+            </CardDescription>
+          </div>
+          <div className="relative w-full lg:w-80">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search documents, categories, or descriptions"
+              className="pl-9"
+            />
+          </div>
         </CardHeader>
         <CardContent>
           {docsLoading ? (
-            <div className="flex items-center justify-center py-8">
+            <div className="flex items-center justify-center py-10">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
-          ) : documents?.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p>No documents uploaded yet.</p>
-              <p className="text-sm">Upload your first document to get started.</p>
+          ) : filteredDocuments.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-12 text-center text-muted-foreground">
+              <FileText className="h-12 w-12 opacity-50" />
+              <div className="space-y-1">
+                <p className="font-medium text-foreground">
+                  {documents?.length ? "No documents match your search" : "No documents uploaded yet"}
+                </p>
+                <p className="text-sm">
+                  {documents?.length
+                    ? "Try a different keyword or clear the search to see the full corpus."
+                    : "Upload your first legal document to start grounding Sentinel’s answers."}
+                </p>
+              </div>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Title</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Chunks</TableHead>
-                  <TableHead>Uploaded By</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead className="w-[100px]">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {documents?.map((doc) => (
-                  <TableRow key={doc.id}>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        {CATEGORY_ICONS[doc.category]}
-                        <div>
-                          <p className="font-medium">{doc.title}</p>
-                          {doc.description && (
-                            <p className="text-sm text-muted-foreground truncate max-w-md">
-                              {doc.description}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">
-                        {CATEGORY_LABELS[doc.category]}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{doc.chunk_count}</TableCell>
-                    <TableCell>{doc.uploaded_by ?? "Unknown"}</TableCell>
-                    <TableCell>
-                      {new Date(doc.created_at).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell>
-                      <Dialog
-                        open={deleteId === doc.id}
-                        onOpenChange={(open) => !open && setDeleteId(null)}
-                      >
-                        <DialogTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => setDeleteId(doc.id)}
-                          >
-                            <Trash2 className="h-4 w-4 text-red-500" />
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent>
-                          <DialogHeader>
-                            <DialogTitle>Delete Document</DialogTitle>
-                            <DialogDescription>
-                              Are you sure you want to delete &quot;{doc.title}&quot;?
-                              This will also delete all {doc.chunk_count} chunks.
-                              This action cannot be undone.
-                            </DialogDescription>
-                          </DialogHeader>
-                          <DialogFooter>
-                            <Button
-                              variant="outline"
-                              onClick={() => setDeleteId(null)}
-                            >
-                              Cancel
-                            </Button>
-                            <Button
-                              variant="destructive"
-                              onClick={() => deleteMutation.mutate(doc.id)}
-                              disabled={deleteMutation.isPending}
-                            >
-                              {deleteMutation.isPending ? "Deleting..." : "Delete"}
-                            </Button>
-                          </DialogFooter>
-                        </DialogContent>
-                      </Dialog>
-                    </TableCell>
+            <div className="overflow-hidden rounded-2xl border border-border/60 bg-background/70">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/30 hover:bg-muted/30">
+                    <TableHead className="px-4 text-[11px] uppercase tracking-wider text-muted-foreground">Document</TableHead>
+                    <TableHead className="text-[11px] uppercase tracking-wider text-muted-foreground">Category</TableHead>
+                    <TableHead className="text-[11px] uppercase tracking-wider text-muted-foreground">Chunks</TableHead>
+                    <TableHead className="text-[11px] uppercase tracking-wider text-muted-foreground">Uploaded by</TableHead>
+                    <TableHead className="text-[11px] uppercase tracking-wider text-muted-foreground">Created</TableHead>
+                    <TableHead className="text-[11px] uppercase tracking-wider text-muted-foreground">Source</TableHead>
+                    <TableHead className="px-4 text-right text-[11px] uppercase tracking-wider text-muted-foreground">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {filteredDocuments.map((doc) => (
+                    <TableRow key={doc.id}>
+                      <TableCell className="px-4 py-3 align-top whitespace-normal">
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/40 text-muted-foreground">
+                            {CATEGORY_ICONS[doc.category]}
+                          </span>
+                          <div className="min-w-0 space-y-1">
+                            <p className="truncate text-sm font-medium text-foreground">{doc.title}</p>
+                            <p className="line-clamp-2 text-xs text-muted-foreground">
+                              {doc.description ?? "No description provided yet."}
+                            </p>
+                            <p className="truncate text-[11px] text-muted-foreground/80">
+                              {doc.file_name ?? "Uploaded PDF"}
+                            </p>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="py-3 align-top">
+                        <Badge variant="outline" className="text-[11px]">
+                          {CATEGORY_LABELS[doc.category]}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="py-3 align-top text-sm text-muted-foreground">
+                        {doc.chunk_count}
+                      </TableCell>
+                      <TableCell className="py-3 align-top text-sm text-muted-foreground whitespace-normal">
+                        {doc.uploaded_by ?? "Unknown"}
+                      </TableCell>
+                      <TableCell className="py-3 align-top text-sm text-muted-foreground">
+                        {new Date(doc.created_at).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell className="py-3 align-top">
+                        {doc.source_url ? (
+                          <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" asChild>
+                            <a href={doc.source_url} target="_blank" rel="noreferrer">
+                              Open
+                              <ArrowUpRight className="h-3.5 w-3.5" />
+                            </a>
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">No source</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="px-4 py-3 align-top">
+                        <div className="flex items-center justify-end gap-2">
+                          <Button variant="outline" size="sm" className="h-8 px-3 text-xs" onClick={() => handleEditOpen(doc)}>
+                            <PencilLine className="h-3.5 w-3.5" />
+                            Edit
+                          </Button>
+                          <Dialog
+                            open={deleteId === doc.id}
+                            onOpenChange={(open) => !open && setDeleteId(null)}
+                          >
+                            <DialogTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                onClick={() => setDeleteId(doc.id)}
+                              >
+                                <Trash2 className="h-4 w-4 text-red-500" />
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent>
+                              <DialogHeader>
+                                <DialogTitle>Delete document</DialogTitle>
+                                <DialogDescription>
+                                  Are you sure you want to delete &quot;{doc.title}&quot;? This will also remove all {doc.chunk_count} chunks and cannot be undone.
+                                </DialogDescription>
+                              </DialogHeader>
+                              <DialogFooter>
+                                <Button variant="outline" onClick={() => setDeleteId(null)}>
+                                  Cancel
+                                </Button>
+                                <Button
+                                  variant="destructive"
+                                  onClick={() => deleteMutation.mutate(doc.id)}
+                                  disabled={deleteMutation.isPending}
+                                >
+                                  {deleteMutation.isPending ? "Deleting..." : "Delete"}
+                                </Button>
+                              </DialogFooter>
+                            </DialogContent>
+                          </Dialog>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>
+
+      <Dialog
+        open={Boolean(editingDocument)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditingDocument(null);
+            setEditForm(EMPTY_DOCUMENT_FORM);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit document metadata</DialogTitle>
+            <DialogDescription>
+              Update the title, category, description, and source URL without reprocessing the PDF chunks.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4 sm:grid-cols-2">
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="edit-title">Title</Label>
+              <Input
+                id="edit-title"
+                value={editForm.title}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, title: e.target.value }))}
+                placeholder="Document title"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-category">Category</Label>
+              <Select
+                value={editForm.category}
+                onValueChange={(value) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    category: value as KnowledgeDocumentCategory,
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CATEGORY_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-source-url">Source URL</Label>
+              <Input
+                id="edit-source-url"
+                value={editForm.sourceUrl}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, sourceUrl: e.target.value }))}
+                placeholder="https://..."
+              />
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="edit-description">Description</Label>
+              <Textarea
+                id="edit-description"
+                value={editForm.description}
+                onChange={(e) => setEditForm((prev) => ({ ...prev, description: e.target.value }))}
+                placeholder="Summarize why this document matters for Sentinel investigators."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditingDocument(null);
+                setEditForm(EMPTY_DOCUMENT_FORM);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleEditSave}
+              disabled={!editingDocument || !editForm.title.trim() || updateMutation.isPending}
+            >
+              {updateMutation.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save changes"
+              )}
+            </Button>
+          </DialogFooter>
+          {updateMutation.isError && (
+            <p className="text-sm text-red-500">
+              {(updateMutation.error as Error).message}
+            </p>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
