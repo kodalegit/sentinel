@@ -6,9 +6,10 @@ Uses LangChain v1 create_agent with tool-calling for RAG.
 Supports OpenAI, Anthropic, Google, and local models via config.
 """
 
+import os
 import re
 from dataclasses import replace
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 import logging
 
@@ -50,6 +51,31 @@ from intelligence.tools import (
 logger = logging.getLogger(__name__)
 
 
+def _init_langfuse_handler() -> Any | None:
+    if not settings.langfuse_public_key or not settings.langfuse_secret_key:
+        return None
+    try:
+        os.environ["LANGFUSE_PUBLIC_KEY"] = settings.langfuse_public_key
+        os.environ["LANGFUSE_SECRET_KEY"] = settings.langfuse_secret_key
+        os.environ["LANGFUSE_HOST"] = settings.langfuse_host
+        os.environ["LANGFUSE_BASE_URL"] = settings.langfuse_host
+        os.environ["LANGFUSE_TRACING_ENVIRONMENT"] = (
+            settings.langfuse_tracing_environment
+        )
+
+        from langfuse import get_client
+        from langfuse.langchain import CallbackHandler
+
+        langfuse = get_client()
+        if not langfuse.auth_check():
+            logger.warning("Langfuse authentication failed; tracing disabled")
+            return None
+        return CallbackHandler()
+    except Exception:
+        logger.exception("Failed to initialize Langfuse callback handler")
+        return None
+
+
 @dynamic_prompt
 def runtime_system_prompt(request: ModelRequest) -> str:
     runtime = request.runtime
@@ -78,6 +104,7 @@ class InvestigationAgent:
     def __init__(self):
         self.llm = None
         self.agent = None
+        self.langfuse_handler = _init_langfuse_handler()
         self._init_llm()
         self._init_agent()
 
@@ -308,6 +335,7 @@ Provide a grounded assessment using only the evidence above and any additional l
             result = await self.agent.ainvoke(
                 {"messages": [{"role": "user", "content": prompt}]},
                 context=AgentRuntimeContext(action="risk_analysis"),
+                config=self._agent_config(action="risk_analysis", runtime_context=None),
             )
 
             # Extract the final response
@@ -342,6 +370,27 @@ Provide a grounded assessment using only the evidence above and any additional l
         if len(result) <= 150:
             return result
         return result[:150] + "..."
+
+    def _agent_config(
+        self, *, action: str, runtime_context: AgentRuntimeContext | None
+    ) -> dict:
+        config: dict[str, Any] = {}
+        if self.langfuse_handler is None:
+            return config
+
+        metadata = {
+            "feature": "investigation_agent",
+            "action": action,
+            "langfuse_tags": ["investigation_agent", action],
+        }
+        if runtime_context and runtime_context.case_id:
+            metadata["case_id"] = str(runtime_context.case_id)
+        if runtime_context and runtime_context.tender_id:
+            metadata["tender_id"] = str(runtime_context.tender_id)
+
+        config["callbacks"] = [self.langfuse_handler]
+        config["metadata"] = metadata
+        return config
 
     async def stream(
         self,
@@ -393,6 +442,9 @@ Provide a grounded assessment using only the evidence above and any additional l
             stream = self.agent.astream(
                 {"messages": messages},
                 context=prepared_runtime_context,
+                config=self._agent_config(
+                    action=action, runtime_context=prepared_runtime_context
+                ),
                 stream_mode=["updates", "messages"],
             )
 

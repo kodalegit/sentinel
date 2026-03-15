@@ -20,6 +20,7 @@ dependencies = [
     "langchain>=1.2.9",
     "langchain-openai>=1.1.7",
     "langgraph>=1.0.8",
+    "langfuse>=4.0.0",
     "shap==0.50.0",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
