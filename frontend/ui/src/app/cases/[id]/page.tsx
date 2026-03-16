@@ -264,24 +264,23 @@ function CaseDetailContent() {
   );
 
   return (
-    <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground selection:bg-primary/30">
+    <div className="flex h-svh min-h-svh flex-col overflow-hidden bg-background text-foreground selection:bg-primary/30">
       
       {/* Top Application Bar */}
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-border/60 bg-card/40 px-4 md:px-6 backdrop-blur-md z-30">
+      <header className="z-30 flex min-h-14 shrink-0 items-start justify-between border-b border-border/60 bg-card/40 px-3 pt-3 pb-2 md:min-h-14 md:items-center md:px-6 md:py-0 backdrop-blur-md">
         <div className="min-w-0 flex-1">
           <Button 
             variant="ghost" 
             size="icon" 
-            className="h-8 w-8 text-muted-foreground hover:text-foreground shrink-0 rounded-md bg-muted/50" 
+            className="h-8 w-8 shrink-0 rounded-md bg-muted/50 text-muted-foreground hover:text-foreground" 
             onClick={() => router.push("/cases")}
             title="Back to Database"
           >
             <ArrowLeft size={16} />
           </Button>
           
-          <div className="h-4 w-px bg-border/80 hidden sm:block"></div>
-
-          <div className="flex items-center gap-3 overflow-hidden">
+          <div className="mt-2 flex items-center gap-3 overflow-hidden md:mt-0">
+            <div className="hidden h-4 w-px bg-border/80 sm:block"></div>
             <span className={`flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono tracking-widest uppercase font-semibold ${statusCfg.color} rounded`}>
               {statusCfg.icon}
               {statusCfg.label}
@@ -289,11 +288,11 @@ function CaseDetailContent() {
             <span className={`text-[10px] font-mono font-bold tracking-widest px-2 py-1 rounded bg-muted/40 uppercase items-center flex border border-border/40 ${PRIORITY_COLOR[c.priority]}`}>
               <ShieldAlert className="w-3 h-3 mr-1.5 opacity-70" /> {c.priority} RISK
             </span>
-            <h1 className="text-sm font-semibold truncate max-w-xs md:max-w-xl text-foreground/90 pl-1">{c.title}</h1>
+            <h1 className="min-w-0 flex-1 truncate pl-1 text-sm font-semibold text-foreground/90 md:max-w-xl">{c.title}</h1>
           </div>
         </div>
 
-        <div className="flex items-center gap-4 shrink-0">
+        <div className="ml-3 flex shrink-0 items-start gap-3 pt-0.5 md:items-center md:gap-4 md:pt-0">
           <div className="hidden sm:flex flex-col items-end mr-2">
             <div className="flex items-baseline gap-1.5">
               <span className={`text-xl font-bold font-mono tracking-tight leading-none ${PRIORITY_COLOR[caseData.risk_category]}`}>
@@ -319,7 +318,7 @@ function CaseDetailContent() {
         
         {/* Left Context Sidebar */}
         <div className={`
-          absolute inset-y-0 left-0 z-20 flex h-full min-h-0 w-full max-w-full flex-col sm:w-[380px] lg:relative lg:w-[420px] 
+          fixed inset-x-0 top-14 bottom-0 z-20 flex min-h-0 w-full max-w-full flex-col sm:w-[380px] lg:relative lg:inset-auto lg:h-full lg:w-[420px] 
           bg-card/95 lg:bg-card/30 border-r border-border/50 shadow-2xl lg:shadow-none 
           transition-transform duration-300 ease-out select-none shrink-0
           backdrop-blur-xl lg:backdrop-blur-none
@@ -368,6 +367,9 @@ function CaseDetailContent() {
                        <div className="p-4 rounded-lg bg-card border border-border/60 text-[13px] leading-relaxed text-foreground/80 shadow-sm relative overflow-hidden">
                          <div className="absolute top-0 left-0 w-1 h-full bg-primary/40"></div>
                          {c.summary}
+                       </div>
+                       <div className="mt-3 rounded-lg border border-border/40 bg-muted/20 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                         Why this matters: this summary is grounded in the tender record, linked evidence, and investigator actions so reviewers can trace the narrative before making a decision.
                        </div>
                      </section>
                    )}
@@ -496,6 +498,9 @@ function CaseDetailContent() {
                 <h3 className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-4 font-semibold">
                    Linked Source Data <span className="opacity-50 ml-auto">({evidence.length})</span>
                 </h3>
+                <div className="mb-4 rounded-lg border border-border/40 bg-muted/20 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                  Evidence shown here is the reviewable record behind the case. Baseline tender signals stay canonical, while linked items add investigator context and supporting references.
+                </div>
                 {evidence.length === 0 ? (
                   <div className="border border-dashed border-border/60 rounded-lg p-8 flex flex-col items-center justify-center text-center opacity-60 bg-muted/20">
                     <Link2 size={24} className="mb-3 text-muted-foreground" />
@@ -694,7 +699,7 @@ function CaseDetailContent() {
            {/* Mobile Sidebar Overlay mask */}
            {sidebarOpen && (
               <div 
-                 className="absolute inset-0 bg-background/80 backdrop-blur-sm z-10 lg:hidden cursor-pointer animate-in fade-in"
+                 className="fixed inset-x-0 top-14 bottom-0 bg-background/80 backdrop-blur-sm z-10 lg:hidden cursor-pointer animate-in fade-in"
                  onClick={() => setSidebarOpen(false)}
               ></div>
            )}

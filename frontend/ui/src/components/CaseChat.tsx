@@ -238,7 +238,7 @@ function PersistedEventsSection({ events }: { events: ChatStreamEvent[] }) {
     if (e.type === "tool_start" && e.tool_call_id && e.input) {
       toolInputMap.set(e.tool_call_id, e.input);
     }
-  }
+  };
 
   const toolEndEvents = events.filter((e) => e.type === "tool_end");
   const reasoningEvents = events.filter((e) => e.type === "reasoning");
@@ -334,6 +334,7 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
   const [showThreads, setShowThreads] = useState(false);
   const [threadToDelete, setThreadToDelete] = useState<string | null>(null);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const syncingFromUrlRef = useRef(false);
   const lastSeenUrlThreadIdRef = useRef<string | null | undefined>(undefined);
   const router = useRouter();
@@ -430,6 +431,7 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
     threadIdFromUrl,
     threads,
     activeThreadId,
+    markInitialScroll,
     selectThread,
     updateThreadUrl,
   ]);
@@ -459,12 +461,22 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
     await runStream(userMessage, "chat");
   };
 
+  useEffect(() => {
+    const textarea = composerTextareaRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "0px";
+    const nextHeight = Math.min(textarea.scrollHeight, 160);
+    textarea.style.height = `${Math.max(nextHeight, 44)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > 160 ? "auto" : "hidden";
+  }, [input]);
+
   const handleSuggestedQuery = useCallback(
     (message: string) => {
       markShouldAnchor();
       runStream(message, "chat");
     },
-    [runStream],
+    [markShouldAnchor, runStream],
   );
 
   const handleNewThread = useCallback(() => {
@@ -758,16 +770,17 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
       </div>
 
       {/* Input Area */}
-      <div className="shrink-0 p-4 border-t border-border/40 bg-background">
-        <div className="max-w-4xl mx-auto">
+      <div className="shrink-0 border-t border-border/40 bg-background px-3 pb-3 pt-2 sm:p-4">
+        <div className="mx-auto max-w-4xl">
           <form
             onSubmit={(e) => {
               e.preventDefault();
               handleSend();
             }}
-            className="relative flex items-end gap-2 bg-card rounded-xl border border-border pb-1 pl-4 pr-2 pt-1 shadow-lg shadow-black/5 ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:border-transparent transition-all"
+            className="relative flex items-end gap-2 rounded-2xl border border-border bg-card px-3 py-2 shadow-lg shadow-black/5 transition-all ring-offset-background focus-within:border-transparent focus-within:ring-2 focus-within:ring-ring"
           >
             <textarea
+              ref={composerTextareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -779,15 +792,15 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
               placeholder="Message Sentinel (Press Enter to send)..."
               disabled={isStreaming}
               rows={1}
-              className="flex-1 max-h-32 min-h-[44px] py-3 text-sm resize-none bg-transparent focus:outline-none placeholder:text-muted-foreground/50 disabled:opacity-50"
-              style={{ overflowY: "auto" }}
+              className="flex-1 min-h-[44px] max-h-40 bg-transparent py-2.5 text-sm leading-6 resize-none focus:outline-none placeholder:text-muted-foreground/50 disabled:opacity-50"
+              style={{ overflowY: "hidden" }}
             />
-            <div className="flex shrink-0 items-center justify-center p-1">
+            <div className="flex shrink-0 items-center justify-center self-end pb-0.5">
               <Button
                 type="submit"
                 size="icon"
                 disabled={!input.trim() || isStreaming}
-                className="h-9 w-9 rounded-lg"
+                className="h-10 w-10 rounded-xl shadow-sm"
               >
                 {isStreaming ? (
                   <Loader2 className="h-4 w-4 animate-spin text-primary-foreground" />
@@ -797,8 +810,13 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
               </Button>
             </div>
           </form>
-          <div className="text-center mt-2 pb-1">
-            <span className="text-[10px] font-mono text-muted-foreground/60 uppercase tracking-widest">Responses may be synthesized from multiple sources.</span>
+          <div className="mt-2 flex items-center justify-between gap-3 px-1">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground/60">
+              Responses may be synthesized from multiple sources.
+            </span>
+            <span className="shrink-0 text-[10px] text-muted-foreground/60">
+              Enter to send • Shift+Enter for newline
+            </span>
           </div>
         </div>
       </div>
