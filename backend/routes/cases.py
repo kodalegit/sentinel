@@ -1,9 +1,12 @@
 """Case management routes with authentication and role-based permissions."""
 
+import csv
 import uuid as _uuid
 from datetime import datetime, timezone
+from io import StringIO
 
 from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi.responses import StreamingResponse
 from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -278,6 +281,88 @@ async def list_cases(
             )
         )
     return results
+
+
+@router.get("/cases/export.csv")
+async def export_cases_csv(
+    state: State,
+    current_user: CurrentUser,
+    status: Optional[CaseStatus] = Query(None),
+    priority: Optional[RiskCategory] = Query(None),
+    assigned_to_id: Optional[str] = Query(
+        None, description="Filter by assignee UUID, 'unassigned', or 'me'"
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export filtered investigation cases as CSV."""
+    assignee_filter = assigned_to_id
+    if assigned_to_id == "me":
+        assignee_filter = current_user.id
+    elif assigned_to_id and assigned_to_id != "unassigned":
+        assignee_filter = _uuid.UUID(assigned_to_id)
+
+    cases_db = await repo.get_cases_with_filters(
+        db,
+        status=status.value if status else None,
+        priority=priority.value if priority else None,
+        assigned_to_id=assignee_filter,
+    )
+
+    buffer = StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        [
+            "case_id",
+            "title",
+            "status",
+            "priority",
+            "risk_score",
+            "risk_category",
+            "tender_id",
+            "tender_title",
+            "assigned_to",
+            "created_by",
+            "created_at",
+            "updated_at",
+            "closed_at",
+            "notes_count",
+            "decision_type",
+            "finding",
+        ]
+    )
+
+    for case_db in cases_db:
+        tender_id = str(case_db.tender_id)
+        risk = state.risk_scores.get(
+            tender_id, RiskScore(overall=0, category=RiskCategory.LOW)
+        )
+        writer.writerow(
+            [
+                str(case_db.id),
+                case_db.title,
+                case_db.status,
+                case_db.priority,
+                risk.overall,
+                risk.category.value,
+                tender_id,
+                case_db.tender.title if case_db.tender else "Unknown",
+                case_db.assigned_to.full_name if case_db.assigned_to else "",
+                case_db.created_by.full_name if case_db.created_by else "System",
+                case_db.created_at.isoformat() if case_db.created_at else "",
+                case_db.updated_at.isoformat() if case_db.updated_at else "",
+                case_db.closed_at.isoformat() if case_db.closed_at else "",
+                len(case_db.notes or []),
+                case_db.decision_type or "",
+                case_db.finding or "",
+            ]
+        )
+
+    filename = "sentinel-cases.csv"
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/cases/stats")

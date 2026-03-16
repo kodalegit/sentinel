@@ -33,4 +33,5 @@ dependencies = [
     "pgvector>=0.3.0",
     "cryptography>=44.0.0",
     "langchain-text-splitters>=1.1.0",
+    "reportlab>=4.4.4",
 ]

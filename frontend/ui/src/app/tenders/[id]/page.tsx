@@ -9,7 +9,12 @@ import { use, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTenderDetail, useTenderGraph } from "@/hooks/useTenders";
-import { formatKES, createCase, getTenderCases } from "@/lib/api";
+import {
+  createCase,
+  downloadTenderRiskReport,
+  formatKES,
+  getTenderCases,
+} from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { Case, RiskFactor, RiskFactorType, RiskCategory } from "@/lib/types";
 import { RiskBadge, StatusBadge } from "@/components/ui/RiskBadge";
@@ -39,6 +44,7 @@ import {
   Tag,
   Mail,
   MapPin,
+  Download,
 } from "lucide-react";
 
 const RISK_SCORE_COLORS: Record<RiskCategory, string> = {
@@ -101,6 +107,7 @@ export default function TenderDetailPage({
   const { isSupervisorOrAdmin } = useAuth();
   const [showGraph, setShowGraph] = useState(false);
   const [caseActionError, setCaseActionError] = useState<string | null>(null);
+  const [exportingReport, setExportingReport] = useState(false);
   const { graph, loading: graphLoading } = useTenderGraph(showGraph ? id : null);
   const { data: tenderCases = [] } = useQuery<Case[]>({
     queryKey: ["tender-cases", id],
@@ -154,6 +161,15 @@ export default function TenderDetailPage({
       setCaseActionError(
         error instanceof Error ? error.message : "Failed to open investigation case.",
       );
+    }
+  };
+
+  const handleExportReport = async () => {
+    setExportingReport(true);
+    try {
+      await downloadTenderRiskReport(id);
+    } finally {
+      setExportingReport(false);
     }
   };
 
@@ -309,6 +325,16 @@ export default function TenderDetailPage({
               >
                 <Network size={14} />
                 Explore Connections
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleExportReport}
+                disabled={exportingReport}
+                className="w-full text-xs"
+              >
+                {exportingReport ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                Export Risk Report
               </Button>
               {activeCase ? (
                 <Button
