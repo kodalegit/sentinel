@@ -735,6 +735,7 @@ export async function* streamChat(
   options?: {
     threadId?: string;
     action?: StreamAction;
+    signal?: AbortSignal;
   }
 ): AsyncGenerator<ChatStreamEvent> {
   const response = await fetch(`${API_BASE}/api/cases/${caseId}/chat/stream`, {
@@ -748,6 +749,7 @@ export async function* streamChat(
       thread_id: options?.threadId,
       action: options?.action || "chat",
     }),
+    signal: options?.signal,
   });
 
   if (!response.ok) {
@@ -760,24 +762,28 @@ export async function* streamChat(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
 
-    for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        try {
-          const event = JSON.parse(line.slice(6)) as ChatStreamEvent;
-          yield event;
-        } catch {
-          // Ignore parse errors
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            const event = JSON.parse(line.slice(6)) as ChatStreamEvent;
+            yield event;
+          } catch {
+            // Ignore parse errors
+          }
         }
       }
     }
+  } finally {
+    reader.releaseLock();
   }
 }
 

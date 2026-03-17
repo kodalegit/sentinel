@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   deleteChatThread,
@@ -56,6 +56,9 @@ export function useStreamChat(caseId: string) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [pendingUserMessage, setPendingUserMessage] = useState<string | null>(null);
   const [dynamicTitle, setDynamicTitle] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const streamThreadIdRef = useRef<string | null>(null);
+  const activeRunIdRef = useRef(0);
 
   // -----------------------------------------------------------------------
   // Server state queries
@@ -65,12 +68,25 @@ export function useStreamChat(caseId: string) {
     queryFn: () => getChatThreads(caseId),
   });
 
-  const { data: messages = [], refetch: refetchMessages } = useQuery({
+  const { data: messages = [] } = useQuery({
     queryKey: ["chat-messages", caseId, activeThreadId],
     queryFn: () =>
       activeThreadId ? getThreadMessages(caseId, activeThreadId) : Promise.resolve([]),
     enabled: !!activeThreadId,
   });
+
+  const syncThreadMessages = useCallback(
+    async (threadId: string) => {
+      await queryClient.invalidateQueries({
+        queryKey: ["chat-messages", caseId, threadId],
+      });
+      await queryClient.fetchQuery({
+        queryKey: ["chat-messages", caseId, threadId],
+        queryFn: () => getThreadMessages(caseId, threadId),
+      });
+    },
+    [caseId, queryClient],
+  );
 
   // -----------------------------------------------------------------------
   // Stream event handler — builds interleaved items array
@@ -152,6 +168,10 @@ export function useStreamChat(caseId: string) {
         if (event.title) {
           setDynamicTitle(event.title);
         }
+        if (event.thread_id) {
+          streamThreadIdRef.current = event.thread_id;
+          setActiveThreadId((prev) => prev ?? event.thread_id ?? null);
+        }
         break;
 
       case "done":
@@ -164,6 +184,9 @@ export function useStreamChat(caseId: string) {
           }
           return { ...prev, isComplete: true, citations: newCitations };
         });
+        if (event.thread_id) {
+          streamThreadIdRef.current = event.thread_id;
+        }
         break;
 
       case "error":
@@ -177,6 +200,17 @@ export function useStreamChat(caseId: string) {
   // -----------------------------------------------------------------------
   const runStream = useCallback(
     async (message: string, action: StreamAction) => {
+      // Abort any existing stream
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+
+      const runId = activeRunIdRef.current + 1;
+      activeRunIdRef.current = runId;
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+      streamThreadIdRef.current = activeThreadId;
+
       setIsStreaming(true);
       setStreamingState(createInitialStreamingState());
       if (!activeThreadId) {
@@ -191,26 +225,71 @@ export function useStreamChat(caseId: string) {
         for await (const event of streamChat(caseId, message, {
           threadId: activeThreadId || undefined,
           action,
+          signal: abortController.signal,
         })) {
+          if (activeRunIdRef.current !== runId) {
+            break;
+          }
+
           handleStreamEvent(event);
 
           if (event.type === "done") {
-            if (event.thread_id && !activeThreadId) {
-              setActiveThreadId(event.thread_id);
-            } else if (activeThreadId) {
-              await refetchMessages();
+            const effectiveThreadId =
+              event.thread_id || streamThreadIdRef.current || activeThreadId;
+
+            if (effectiveThreadId) {
+              streamThreadIdRef.current = effectiveThreadId;
+              setActiveThreadId(effectiveThreadId);
+              await syncThreadMessages(effectiveThreadId);
             }
-            queryClient.invalidateQueries({ queryKey: ["chat-threads", caseId] });
+
+            await queryClient.invalidateQueries({ queryKey: ["chat-threads", caseId] });
           }
         }
       } catch (error) {
-        console.error("Stream error:", error);
+        if (error instanceof Error && error.name === "AbortError") {
+          if (activeRunIdRef.current !== runId) {
+            return;
+          }
+
+          setStreamingState((prev) => ({ ...prev, isComplete: true }));
+          const effectiveThreadId = streamThreadIdRef.current || activeThreadId;
+          if (effectiveThreadId) {
+            setActiveThreadId(effectiveThreadId);
+            await syncThreadMessages(effectiveThreadId);
+          }
+          await queryClient.invalidateQueries({ queryKey: ["chat-threads", caseId] });
+        } else {
+          console.error("Stream error:", error);
+        }
       } finally {
-        setIsStreaming(false);
+        if (activeRunIdRef.current === runId) {
+          setIsStreaming(false);
+        }
+        if (abortControllerRef.current === abortController) {
+          abortControllerRef.current = null;
+        }
       }
     },
-    [caseId, activeThreadId, queryClient, refetchMessages, handleStreamEvent],
+    [caseId, activeThreadId, queryClient, handleStreamEvent, syncThreadMessages],
   );
+
+  const stopStream = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      activeRunIdRef.current += 1;
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!pendingUserMessage) {
@@ -257,6 +336,12 @@ export function useStreamChat(caseId: string) {
     "Current Session";
 
   const selectThread = useCallback((threadId: string | null) => {
+    activeRunIdRef.current += 1;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    streamThreadIdRef.current = null;
     setDynamicTitle(null);
     setActiveThreadId(threadId);
     setStreamingState(createInitialStreamingState());
@@ -264,6 +349,12 @@ export function useStreamChat(caseId: string) {
   }, []);
 
   const handleNewThread = useCallback(() => {
+    activeRunIdRef.current += 1;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    streamThreadIdRef.current = null;
     setActiveThreadId(null);
     setDynamicTitle(null);
     setStreamingState(createInitialStreamingState());
@@ -307,6 +398,7 @@ export function useStreamChat(caseId: string) {
     selectThread,
     deleteThread,
     runStream,
+    stopStream,
     handleNewThread,
   };
 }

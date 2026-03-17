@@ -61,14 +61,16 @@ const ROLE_LABELS: Record<string, string> = {
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { theme, resolvedTheme, setTheme } = useTheme();
-  const { user, logout, isAdmin } = useAuth();
   const router = useRouter();
+  const { user, logout } = useAuth();
+  const { theme, setTheme } = useTheme();
+  // Initialize as true to avoid hydration mismatch; next-themes handles SSR safely
+  const isDarkTheme = theme === "dark";
+  const isAdmin = user?.role === "admin";
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
-  const isDarkTheme = (resolvedTheme ?? theme) === "dark";
 
   // M3: Notification queries
   const { data: notificationCount } = useQuery({
