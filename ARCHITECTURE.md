@@ -15,9 +15,9 @@ Living document capturing key design decisions, trade-offs, and rationale for th
 | `price_ratio`         | Ratio   | awarded / estimated — self-normalizing              |
 | `price_zscore`        | Z-score | Per-category z-score of awarded amount              |
 | `timeline_days`       | Natural | Submission window in days                           |
-| `bidder_count`        | Natural | Number of bids on the tender                        |
-| `bid_spread_ratio`    | Ratio   | (max bid - min bid) / estimated_value               |
-| `winner_margin_ratio` | Ratio   | (2nd place - winner) / estimated_value              |
+| `bidder_count`        | Natural | Number of known participants on the tender          |
+| `bid_spread_ratio`    | Ratio   | (max disclosed bid - min disclosed bid) / estimate  |
+| `winner_margin_ratio` | Ratio   | (best losing disclosed bid - winner) / estimate     |
 | `company_age_days`    | Natural | Winner's age at tender deadline                     |
 | `win_rate`            | Ratio   | Winner's historical win rate                        |
 | `graph_degree`        | Natural | Winner's degree in the shadow graph                 |
@@ -27,6 +27,18 @@ Living document capturing key design decisions, trade-offs, and rationale for th
 
 **Key decision: ratio features instead of absolute KES values.**
 `bid_spread` and `winner_margin` were originally in absolute KES. A road construction tender's spread (~10M KES) vs office supplies (~600K KES) caused the Isolation Forest to flag category differences rather than within-category anomalies. Converting to ratios of `estimated_value` makes them dimensionless and domain-agnostic. This is critical for a system spanning Kenyan procurement domains (roads, medical, IT, security, etc.).
+
+**Key decision: bidder participation is distinct from priced bidding.**
+Real procurement feeds do not always publish full bid-price ladders. The canonical `Bid` model now allows `amount = NULL` so the system can preserve bidder participation without fabricating prices. `bidder_count` always reflects known participants, while `bid_spread_ratio` and `winner_margin_ratio` activate only when real disclosed bid amounts exist.
+
+**Key decision: synthetic data trains the pattern vocabulary; sparse real data calibrates production behavior.**
+Sentinel should not be trained only on synthetic data or only on sparse production data. Synthetic data is useful for development because it provides complete attribute coverage and controllable examples of Kenyan procurement risk patterns such as shell entities, cartel-style overlap, rushed tenders, and conflict signals. But real PPIP/e-GP style data contains the missingness patterns, disclosure gaps, and source-specific sparsity that the system must survive in production. The practical approach is:
+
+- use synthetic data to develop the feature pipeline, benchmark fraud-pattern detection, and demonstrate intended behavior
+- use sparse real data to calibrate thresholds, review false positives, and verify graceful degradation under incomplete evidence
+- include source-aware features such as pricing coverage, bidder participation known, and evidence-quality scores so the model learns the difference between suspicious patterns and low-information records
+
+This supports a key Sentinel principle: low evidence coverage is not automatically evidence of wrongdoing.
 
 **Key decision: single model, not per-category.**
 With current data volumes (~20-50 tenders across ~5 categories), per-category models would have insufficient samples. The ratio-based feature design makes a single model work across categories. When data volume grows (hundreds per category), per-category models become a clean migration path since features are already category-agnostic.
@@ -94,7 +106,8 @@ Heterogeneous NetworkX graph with:
 
 - **Node types**: COMPANY, DIRECTOR, OFFICIAL, TENDER
 - **Edge types**: DIRECTOR_OF, BID_ON, WON, AWARDED_BY, RELATED_TO, SHARES_ADDRESS, SHARES_PHONE, SHARES_EMAIL
-- Suspicious edges flagged for: family connections, specific shared addresses, non-generic shared phone numbers, and non-generic shared emails
+- bidder edges preserve participation even when pricing is undisclosed via `has_pricing`
+- suspicious edges flagged for: family connections, specific shared addresses, non-generic shared phone numbers, and non-generic shared emails
 
 **Key decision: Hash-based shared attribute detection (O(n) instead of O(n²)).**
 The original pairwise comparison of all companies for shared attributes caused edge explosion (22M edges for 10K tenders). Hash-based grouping by normalized attribute keys reduces complexity to O(n) and limits edges per company to 50.
@@ -140,6 +153,11 @@ Communities are computed once in `lifespan` alongside risk scores and stored in 
 
 The `get_cartel_sets()` helper extracts simple `list[set[str]]` from Louvain clusters for the rule engine's cartel check, maintaining the same interface.
 
+**Design decision: NetworkX is the canonical community source for risk until Neo4j semantics match.**
+
+- The recompute pipeline and rule-based cartel detection use the NetworkX communities built from the strict co-bid rule (edges require ≥2 shared tenders). This keeps the analysis snapshot, risk scoring, and UI summaries aligned.
+- Neo4j remains the primary graph-exploration engine (pathfinding, neighborhoods) and can run community algorithms, but its current fallback groups one-off co-bidders and would drift from the stricter NetworkX signal. We keep NetworkX as the authoritative source until Neo4j community construction enforces the same co-bid and filtering rules.
+
 ### Suspicion Scoring
 
 Cluster suspicion score (0-100) based on:
@@ -170,16 +188,16 @@ Categories: HIGH (≥50), MEDIUM (≥25), LOW (<25)
 
 Shell company risk is computed as a composite of multiple signals, each with independent weights:
 
-| Signal                        | Weight | Rationale                                    |
-| ----------------------------- | ------ | -------------------------------------------- |
-| Company age < 30 days         | 25     | Classic shell indicator                      |
-| Company age < 90 days         | 15     | Recent registration                          |
-| Missing registration date     | 10     | Unverifiable entity age                      |
-| Address quality = PLACEHOLDER | 15     | "PO Box 123" default in e-GP data            |
-| Address quality = VAGUE       | 8      | "MOI AVENUE" — not specific enough to verify |
-| Zero directors listed         | 12     | Missing director info = opacity              |
-| Generic email domain          | 5      | Gmail/yahoo instead of business domain       |
-| Large contract + new company  | 20     | Disproportionate award to new entity         |
+| Signal                        | Weight | Rationale                                     |
+| ----------------------------- | ------ | --------------------------------------------- |
+| Company age < 30 days         | 25     | Classic shell indicator                       |
+| Company age < 90 days         | 15     | Recent registration                           |
+| Missing registration date     | 10     | Unverifiable entity age                       |
+| Address quality = PLACEHOLDER | 15     | "PO Box 123" default in e-GP data             |
+| Address quality = VAGUE       | 8      | "MOI AVENUE" — not specific enough to verify  |
+| Zero directors listed         | 12     | Missing director info where source expects it |
+| Generic email domain          | 5      | Gmail/yahoo instead of business domain        |
+| Large contract + new company  | 20     | Disproportionate award to new entity          |
 
 **Threshold**: Composite score ≥ 40 triggers shell company flag.
 
@@ -190,13 +208,13 @@ Kenyan e-GP data frequently has placeholder addresses ("PO Box 123") or vague ad
 
 **Null-safe operations throughout the pipeline:**
 
-1. **ML features** (`ml/features.py`): `estimated_value` can be `None` for tenders without published estimates. All ratio features use `est = tender.estimated_value or 0.0` to avoid division errors.
+1. **ML features** (`ml/features.py`): `estimated_value` can be `None` for tenders without published estimates, and bidder records can exist without disclosed prices. All ratio features use `est = tender.estimated_value or 0.0` to avoid division errors, while price-spread features fall back to zero when priced bids are unavailable.
 
 2. **Stats calculation** (`routes/stats.py`): `total_value = sum((t.estimated_value or 0) for t in state.tenders.values())` prevents `TypeError` when aggregating.
 
-3. **Shell company detection** (`risk/engine.py`): All optional fields (`winner.registration_date`, `winner.contact_email`, `tender.awarded_amount`) are checked before use. Missing data is treated as a signal (e.g., "missing_registration" adds 10 points) rather than causing analysis failure.
+3. **Shell company detection** (`risk/engine.py`): All optional fields (`winner.registration_date`, `winner.contact_email`, `tender.awarded_amount`) are checked before use. Missing data is treated as a signal, but source-aware expectations prevent sparse PPIP/OCDS records from being penalized the same way as richer supplier-profile feeds.
 
-4. **Data quality flags**: Companies have a `data_quality_flags` JSON field with `quality_score` (0-100) based on field coverage (directors listed? ownership info? valid address? contact details?). Low-quality companies are flagged for elevated shell risk but not excluded from analysis.
+4. **Data quality flags**: Companies have a `data_quality_flags` JSON field that now captures source-aware evidence quality. `completeness_score` measures how much structured evidence a source provided, `verification_score` measures how strongly the supplier identity can be verified, and `quality_score` blends the two. These flags inform shell-risk scoring and evidence presentation without excluding sparse records from analysis.
 
 **Key design principle: "Missing data as signal, not failure."**
 Sparse Kenyan procurement data is a reality. The system uses explicit data-quality flags and multi-signal scoring instead of failing when critical attributes are missing. This allows Sentinel to work with real-world data while still producing reliable risk assessments.
@@ -288,7 +306,7 @@ The schema was extended to handle real Kenyan procurement data from PPIP (OCDS) 
 - `source_system`: `ppip`, `egp`, `manual`, or `synthetic`
 - `source_record_id`: Original platform record ID
 - `ingested_at`: Timestamp of ingestion
-- `data_quality_flags`: JSON with `quality_score` (0-100) based on field coverage
+- `data_quality_flags`: JSON with source-aware `completeness_score`, `verification_score`, and `quality_score`
 
 **Tender fields:**
 
@@ -304,6 +322,12 @@ The schema was extended to handle real Kenyan procurement data from PPIP (OCDS) 
 
 - `ContractDB`: Links tender → supplier with contract metadata, AGPO fields
 - `OwnershipDB`: Captures e-GP ownership info distinct from directors
+
+**Bid semantics:**
+
+- `BidDB.amount`: Nullable so the same canonical model can represent priced bids or participation-only bidder rosters
+- bidder participation is preserved even when a source discloses only the roster and the award outcome
+- downstream analytics distinguish between participant counts and priced-bid availability
 
 All fields are nullable where appropriate to handle sparse Kenyan data.
 
@@ -335,6 +359,8 @@ NEO4J_ENABLED=true  # Set to false for NetworkX-only mode
 **Docker Compose** includes Neo4j with GDS and APOC plugins pre-installed.
 
 ### Data Sources & Ingestion
+
+Sentinel uses a source-agnostic canonical model. Connectors normalize source-specific payloads into shared domain entities, while provenance and source-aware evidence-quality flags preserve what each source actually proves.
 
 **Connectors:**
 
@@ -368,10 +394,12 @@ NEO4J_ENABLED=true  # Set to false for NetworkX-only mode
 
 4. **Ratio features for domain-agnostic ML**: Use ratios instead of absolute KES values to make features work across procurement domains (roads, medical, IT, etc.).
 
-5. **Evidence-grounded intelligence**: LLM outputs are grounded in structured evidence packs to prevent hallucination. Template fallback ensures system works without LLM.
+5. **Source-aware evidence quality**: Preserve a stable canonical model, but interpret supplier evidence in the context of what each source is expected to publish.
 
-6. **Null-safe operations**: All optional fields are checked before use. Missing data is treated as a signal rather than causing analysis failure.
+6. **Evidence-grounded intelligence**: LLM outputs are grounded in structured evidence packs to prevent hallucination. Template fallback ensures system works without LLM.
 
-7. **Hybrid graph architecture**: PostgreSQL as source of truth, Neo4j for analytics. Graceful fallback to NetworkX if Neo4j unavailable.
+7. **Null-safe operations**: All optional fields are checked before use. Missing data is treated as a signal rather than causing analysis failure.
 
-8. **Hash-based edge detection**: O(n) complexity instead of O(n²) for shared attribute detection. Edge limits per entity prevent explosion.
+8. **Hybrid graph architecture**: PostgreSQL as source of truth, Neo4j for analytics. Graceful fallback to NetworkX if Neo4j unavailable.
+
+9. **Hash-based edge detection**: O(n) complexity instead of O(n²) for shared attribute detection. Edge limits per entity prevent explosion.

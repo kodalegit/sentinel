@@ -188,6 +188,7 @@ Without an LLM key, the system falls back to structured template explanations.
 - **Community detection**: Neo4j GDS Louvain with NetworkX fallback
 - **Path finding**: Neo4j shortest paths with sub-millisecond traversals
 - **Cluster-first UX**: Ranked suspicious communities, progressive disclosure
+- **Explainable cluster scoring**: Suspicion score messaging now reflects the shared scoring contract across NetworkX and Neo4j
 - **Performance**: Hash-based edge detection (O(n) vs O(n²)), edge limits per entity, and strict filtering of vague/generic shared attributes
 
 ### Analysis Persistence
@@ -200,6 +201,7 @@ Without an LLM key, the system falls back to structured template explanations.
 
 - **Evidence packs**: Structured JSON with risk factors, metrics, graph paths
 - **Grounded explanations**: Every explanation cites real evidence items
+- **Canonical evidence assembly**: Baseline risk factors and linked case evidence no longer duplicate the same signal in agent context
 - **Template fallback**: Works without LLM API key
 
 ### Case Management
@@ -207,6 +209,14 @@ Without an LLM key, the system falls back to structured template explanations.
 - **5-state workflow**: OPEN → INVESTIGATING → ESCALATED → RESOLVED/DISMISSED
 - **Typed notes**: Timestamped, user-attributed investigation notes
 - **Audit trail**: All actions logged
+- **Notification workflow**: Bell-triggered slide-over with unread tracking and direct case navigation
+
+### Admin & Investigator UX
+
+- **Responsive shell**: Desktop sidebar with mobile drawer support across dashboard, cases, admin, and settings flows
+- **Backend-owned model catalog**: Admin settings consume a static backend catalog instead of hardcoded provider/model lists
+- **Knowledge base polish**: Compact, mobile-friendlier document management with metadata-only editing flow support
+- **Exports**: PDF tender risk reports plus CSV bulk export for tender and case views
 
 ### Authentication & Authorization
 
@@ -237,13 +247,97 @@ Without an LLM key, the system falls back to structured template explanations.
 - [x] **Graph Noise Reduction** (specific-only shared address edges, generic phone/email suppression, aligned Neo4j filtering)
 - [x] **Investigation Workflow Hardening** (case assignment, supervisor dashboard, case timeline)
 - [x] **System Robustness** (Async job tracking, Pytest core logic suite, JWT guards)
+- [x] **Milestone 7 Polish** (responsive shell, notifications panel, backend model catalog, knowledge-base refresh, export flows, evidence/scoring consistency)
 
 **Next Up:**
 
-- [ ] LLM Agentic Analysis (Case Summaries, Evidence Q&A)
-- [ ] CSV/PDF ingestion for additional data sources
+- [x] LLM Agentic Analysis (Case Summaries, Evidence Q&A)
 
 ---
+
+## Data Reset & Demo Seed Workflow
+
+- **Reset application state only**:
+  `uv run --prerelease=allow python seed.py reset`
+- **Reset and reseed synthetic demo data**:
+  `uv run --prerelease=allow python seed.py`
+
+The reset flow is **schema-preserving**. It clears procurement, case, chat, analysis snapshot, and Neo4j graph state without dropping tables or bypassing Alembic-managed schema.
+
+By default it:
+
+- preserves default users and auth setup
+- preserves knowledge-base documents
+- preserves agent settings
+
+### Recommended Operational Flow
+
+- **For real-source ingestion**
+  - run `uv run --prerelease=allow python seed.py reset`
+  - ingest one or more real datasets via `/api/ingest/ppip/sync`, `/api/ingest/egp/tenders`, or `/api/ingest/egp/contracts`
+  - trigger `/api/recompute`
+
+- **For demo presentations**
+  - run `uv run --prerelease=allow python seed.py`
+  - use the synthetic seeded dataset for stable, repeatable fraud-pattern walkthroughs
+
+### Real-Source Ingestion Notes
+
+- Sentinel now uses a source-agnostic canonical model across PPIP, e-GP, synthetic fixtures, and future connectors.
+- Current ingest semantics preserve three distinct procurement signals whenever available:
+  - bidder participation
+  - award outcome on the tender
+  - downstream contract execution
+- This lets the analysis pipeline stay useful even when a source publishes bidder rosters but not full bid pricing.
+- Company `data_quality_flags` are now interpreted as **evidence quality**, not just raw entity quality:
+  - `completeness_score` reflects how much structured evidence the source provided
+  - `verification_score` reflects how strongly the supplier identity can be verified
+  - `quality_score` blends the two while respecting source expectations
+
+### Awards Modeling Guidance
+
+Current schema support is intentionally lightweight:
+
+- `Tender.awarded_to` captures the winning supplier used by rules, ML features, and graph construction
+- `Tender.awarded_amount` captures headline outcome value
+- `Bid.amount` is now nullable so the same model can represent either priced bids or participation-only bidder rosters
+- `ContractDB` captures downstream contract linkage when contract records exist
+
+This is a good default for now because it keeps the ingest path simple and aligned with what the current analytics stack actually consumes.
+
+**Upside of adding a separate `AwardDB`:**
+
+- preserves full OCDS award history rather than flattening to a single winner
+- supports multi-award/framework tenders
+- preserves award-level metadata such as award status, descriptions, periods, and multiple suppliers
+- enables richer downstream analysis of award amendments and outcome provenance
+
+**Downside of adding a separate `AwardDB`:**
+
+- introduces another central entity that must be loaded, synced, and kept consistent across PostgreSQL, NetworkX, Neo4j, and evidence packs
+- increases ingest and recompute complexity before the current analytics pipeline fully consumes award-level detail
+- may add storage and modeling overhead without immediate scoring benefit
+
+**Note on award dates and registration checks:**
+
+- The current schema does not store a dedicated award date; risk checks use the tender deadline as the closest proxy. This is sufficient to flag the strong case of a company registering after the deadline, but it cannot distinguish finer cases such as registration after a formal award date but before a later deadline artifact.
+- If/when you add `AwardDB` (or a dedicated `award_date` on `Tender`), update the shell-company and chronology checks to compare registration to the true award date and contract timings for stronger evidence.
+
+**Recommended path:**
+
+- keep the current tender + bid + contract model as the operational baseline
+- add `AwardDB` only when you are ready to use multi-award or award-lifecycle analysis in scoring, evidence, or case workflows
+- if added later, keep `Tender.awarded_to` as a denormalized convenience field for the current risk and graph pipeline
+
+### Data Quality & Shared-Attribute Heuristics
+
+The current direction is designed to stay robust across Kenyan procurement sources with uneven fidelity:
+
+- shared email/phone/address links remain conservative to avoid graph noise and false-positive cartel clusters
+- missing supplier profile fields are treated as limited evidence, not automatic proof of suspicious behavior
+- bidder participation is preserved even when price disclosures are absent
+- price-spread and winner-margin analytics activate only when actual bid amounts exist
+- synthetic data remains the clearest way to communicate the intended product behavior, while real-source ingestion demonstrates graceful degradation under sparse or uneven data
 
 ## Default Credentials
 

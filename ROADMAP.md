@@ -277,27 +277,36 @@ _Completed milestone: graph investigation UX, detection quality, and path highli
 
 ### Deliverables
 
-- [ ] **Export Features**
-  - [ ] PDF risk report per tender (evidence, graph snapshot, recommendation)
-  - [ ] CSV bulk export of risk scores
-- [ ] **Performance & Quality**
-  - [ ] Test with 100–500 tender dataset from configurable generator
-  - [ ] Database index optimization
-  - [ ] Frontend lazy loading and responsiveness
-- [ ] **Documentation**
-  - [ ] Updated architecture documentation
-  - [ ] User guide: auditor workflows
-  - [ ] Multi-tenancy architecture documented (deployment-per-client model)
-  - [ ] API documentation (Swagger/OpenAPI — already auto-generated)
+- [x] **Milestone 7 shipped product polish**
+  - [x] PDF risk report per tender
+  - [x] CSV bulk export of tender and case risk views
+  - [x] Responsive application shell for dashboard, admin, settings, and case-review flows
+  - [x] Bell-triggered notifications slide-over
+  - [x] Backend-owned static model catalog with improved admin settings UX
+  - [x] Knowledge base refresh with metadata-only editing flow and denser responsive document management
+  - [x] Canonicalized case-evidence assembly to remove duplicate risk-factor context
+  - [x] Suspicion-score parity across NetworkX and Neo4j, plus user-facing explanation microcopy
+- [ ] **Performance & Quality follow-up**
+  - [x] Test with 100–500 tender dataset from configurable generator
+  - [x] Database index optimization
+  - [x] Frontend responsiveness across dashboard, admin, settings, and case-review flows
+  - [x] Broader frontend lazy loading review
+- [~] **Documentation**
+  - [x] Roadmap/README updated to match shipped Milestone 7 behavior
+  - [x] Updated architecture documentation
+  - [x] User guide: auditor workflows
+  - [x] Multi-tenancy architecture documented (deployment-per-client model)
+  - [x] API documentation (Swagger/OpenAPI — already auto-generated)
 - [ ] **Demo Preparation**
-  - [ ] Demo script: 3 scenarios (cartel, shell company, conflict of interest)
-  - [ ] Backup: recorded demo video
-  - [ ] "Under questioning" prep: FAQs, technical deep-dives
-  - [ ] Pitch deck: problem, solution, impact, tech
+  - [x] Demo script: 3 scenarios (cartel, shell company, conflict of interest)
+  - [x] "Under questioning" prep: FAQs, technical deep-dives
+  - [x] Pitch deck: problem, solution, impact, tech
 
 ### Success Criteria
 
 - PDF risk report downloadable for any tender
+- CSV export works from dashboard and case-management views with active filters applied
+- Mobile case review and admin flows use the full viewport without broken layout states
 - System handles 500 tenders without noticeable degradation
 - Demo runs end-to-end without errors across all 3 scenarios
 - Team can answer technical questions confidently
@@ -339,18 +348,19 @@ _Completed milestone: graph investigation UX, detection quality, and path highli
 
 ### Stage 2: Performance + Trust (Weeks 5–7)
 
-- [ ] CSV/PDF ingestion working
-- [ ] Case workflow with real user roles
-- [ ] LLM case analysis with grounded summaries
-- [ ] Graph UX improvements with fuzzy detection
-- [ ] Latency: < 300ms per tender assessment
+- [x] Case workflow with real user roles
+- [x] LLM case analysis with grounded summaries
+- [x] Graph UX improvements with fuzzy detection
+- [x] Latency: < 300ms per tender assessment
 
 ### Stage 3: Deployable Value (Weeks 8–9)
 
-- [ ] Export: PDF reports, CSV bulk export
-- [ ] Scale: 500-tender dataset tested
-- [ ] Multi-tenancy architecture documented
-- [ ] Polished demo across 3 scenarios
+- [x] Export: PDF reports, CSV bulk export
+- [x] Product polish: responsive shell, notifications, settings catalog, knowledge-base refresh
+- [x] Trust hardening: canonical evidence assembly and aligned suspicion scoring
+- [x] Scale: 500-tender dataset tested
+- [x] Multi-tenancy architecture documented
+- [x] Polished demo across 3 scenarios
 
 ---
 
@@ -362,7 +372,7 @@ _Completed milestone: graph investigation UX, detection quality, and path highli
 - [x] Trigger: Cluster view flags co-bidding
 - [x] Evidence: Graph shows shared address, rotation
 - [x] Action: Create case, flag for investigation
-- [ ] Script: < 2 min walkthrough (polish in Week 8–9)
+- [x] Script: < 2 min walkthrough (polish in Week 8–9)
 
 ### Scenario B: Shell Company
 
@@ -370,8 +380,8 @@ _Completed milestone: graph investigation UX, detection quality, and path highli
 - [x] Trigger: Isolation Forest + shell rule
 - [x] Evidence: Registration vs deadline, no history
 - [x] Explanation: LLM narrative (or template fallback)
-- [ ] Action: Payment freeze recommendation via case workflow
-- [ ] Script: < 2 min walkthrough (polish in Week 8–9)
+- [x] Action: Payment freeze recommendation via case workflow
+- [x] Script: < 2 min walkthrough (polish in Week 8–9)
 
 ### Scenario C: Conflict of Interest
 
@@ -379,8 +389,8 @@ _Completed milestone: graph investigation UX, detection quality, and path highli
 - [x] Trigger: Rule-based detection
 - [x] Evidence: Graph path with RELATED_TO edge
 - [x] Explanation: Relationship citation
-- [ ] Action: Conflict declaration via case workflow
-- [ ] Script: < 2 min walkthrough (polish in Week 8–9)
+- [x] Action: Conflict declaration via case workflow
+- [x] Script: < 2 min walkthrough (polish in Week 8–9)
 
 ---
 
@@ -429,6 +439,6 @@ _Completed milestone: graph investigation UX, detection quality, and path highli
 
 ---
 
-**Roadmap Version**: 2.1  
-**Last Updated**: March 2026 (Week 6)  
-**Next Review**: End of Week 6
+**Roadmap Version**: 3.0  
+**Last Updated**: March 2026 (Week 9)  
+**Next Review**: End of Week 9
