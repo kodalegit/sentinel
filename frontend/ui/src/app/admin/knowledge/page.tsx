@@ -247,27 +247,55 @@ function KnowledgeBaseContent() {
   }
 
   return (
-    <div className="container mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
-      <Card className="border-border/70 bg-card/80 shadow-sm">
-        <CardContent className="flex flex-col gap-6 p-6 lg:flex-row lg:items-end lg:justify-between">
-          <div className="space-y-3">
-            <Badge variant="outline" className="w-fit rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.18em]">
-              Knowledge operations
+    <div className="container mx-auto max-w-7xl space-y-8 px-4 py-8 sm:px-6 lg:px-8">
+      {/* Header Section */}
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-semibold tracking-tight">Knowledge Base</h1>
+            <Badge variant="secondary" className="rounded-md px-2 py-0.5 text-xs font-medium">
+              Admin
             </Badge>
-            <div>
-              <h1 className="text-3xl font-semibold tracking-tight">Knowledge Base</h1>
-              <p className="mt-2 max-w-2xl text-sm text-muted-foreground sm:text-base">
-                Curate the legal and policy corpus that grounds Sentinel’s analysis, citations, and case reasoning.
-              </p>
+          </div>
+          <p className="max-w-2xl text-sm text-muted-foreground sm:text-base leading-relaxed">
+            Curate the legal and policy corpus that grounds Sentinel’s analysis, citations, and case reasoning.
+          </p>
+          
+          {/* Compact Stats */}
+          <div className="flex flex-wrap items-center gap-4 text-sm mt-2">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <BookMarked className="h-4 w-4 text-primary/70" />
+              <span className="font-medium text-foreground">{stats?.total_documents ?? 0}</span>
+              <span>Documents</span>
+            </div>
+            <div className="h-4 w-px bg-border/60" />
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Files className="h-4 w-4 text-primary/70" />
+              <span className="font-medium text-foreground">{stats?.total_chunks ?? 0}</span>
+              <span>Chunks</span>
+            </div>
+            <div className="h-4 w-px bg-border/60" />
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Scale className="h-4 w-4 text-primary/70" />
+              <span className="font-medium text-foreground">{stats?.by_category?.LAW ?? 0}</span>
+              <span>Laws</span>
+            </div>
+            <div className="h-4 w-px bg-border/60" />
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Link2 className="h-4 w-4 text-primary/70" />
+              <span className="font-medium text-foreground">{stats?.by_category?.REGULATION ?? 0}</span>
+              <span>Regulations</span>
             </div>
           </div>
-          <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-            <DialogTrigger asChild>
-              <Button size="lg" className="w-full sm:w-auto">
-                <Upload className="h-4 w-4" />
-                Upload document
-              </Button>
-            </DialogTrigger>
+        </div>
+
+        <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+          <DialogTrigger asChild>
+            <Button size="default" className="w-full sm:w-auto shadow-sm">
+              <Upload className="h-4 w-4 mr-2" />
+              Upload Document
+            </Button>
+          </DialogTrigger>
             <DialogContent className="sm:max-w-2xl">
               <DialogHeader>
                 <DialogTitle>Upload legal document</DialogTitle>
@@ -372,75 +400,14 @@ function KnowledgeBaseContent() {
               )}
             </DialogContent>
           </Dialog>
-        </CardContent>
-      </Card>
-
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card className="border-border/70 bg-card/80 shadow-sm">
-          <CardHeader className="space-y-1 p-4 pb-1">
-            <CardDescription className="text-[11px] uppercase tracking-[0.14em]">
-              Total documents
-            </CardDescription>
-            <CardTitle className="text-xl sm:text-2xl">{stats?.total_documents ?? 0}</CardTitle>
-          </CardHeader>
-          <CardContent className="px-4 pb-4 pt-1">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <BookMarked className="h-4 w-4" />
-              Tracked legal and policy sources
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-border/70 bg-card/80 shadow-sm">
-          <CardHeader className="space-y-1 p-4 pb-1">
-            <CardDescription className="text-[11px] uppercase tracking-[0.14em]">
-              Total chunks
-            </CardDescription>
-            <CardTitle className="text-xl sm:text-2xl">{stats?.total_chunks ?? 0}</CardTitle>
-          </CardHeader>
-          <CardContent className="px-4 pb-4 pt-1">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Files className="h-4 w-4" />
-              Embedded retrieval units
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-border/70 bg-card/80 shadow-sm">
-          <CardHeader className="space-y-1 p-4 pb-1">
-            <CardDescription className="text-[11px] uppercase tracking-[0.14em]">
-              Laws
-            </CardDescription>
-            <CardTitle className="text-xl sm:text-2xl">{stats?.by_category?.LAW ?? 0}</CardTitle>
-          </CardHeader>
-          <CardContent className="px-4 pb-4 pt-1">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Scale className="h-4 w-4" />
-              Core statutory references
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-border/70 bg-card/80 shadow-sm">
-          <CardHeader className="space-y-1 p-4 pb-1">
-            <CardDescription className="text-[11px] uppercase tracking-[0.14em]">
-              Regulations
-            </CardDescription>
-            <CardTitle className="text-xl sm:text-2xl">{stats?.by_category?.REGULATION ?? 0}</CardTitle>
-          </CardHeader>
-          <CardContent className="px-4 pb-4 pt-1">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Link2 className="h-4 w-4" />
-              Procedural and compliance guidance
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
       {/* Documents Table */}
-      <Card className="border-border/70 bg-card/80 shadow-sm">
-        <CardHeader className="gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <Card className="border-border/70 bg-card/80 shadow-sm overflow-hidden border-t-4 border-t-primary/20">
+        <CardHeader className="gap-4 lg:flex-row lg:items-end lg:justify-between bg-muted/20 pb-4 border-b border-border/40">
           <div>
-            <CardTitle>Documents</CardTitle>
-            <CardDescription>
+            <CardTitle className="text-xl">Document Corpus</CardTitle>
+            <CardDescription className="mt-1">
               Review metadata, update titles and sources, and keep the RAG corpus clean and current.
             </CardDescription>
           </div>
@@ -449,24 +416,26 @@ function KnowledgeBaseContent() {
             <Input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search documents, categories, or descriptions"
-              className="pl-9"
+              placeholder="Search documents..."
+              className="pl-9 bg-background/50 focus-visible:bg-background"
             />
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           {docsLoading ? (
             <div className="flex items-center justify-center py-10">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
           ) : filteredDocuments.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-3 py-12 text-center text-muted-foreground">
-              <FileText className="h-12 w-12 opacity-50" />
+            <div className="flex flex-col items-center justify-center gap-3 py-16 text-center text-muted-foreground">
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted/50 mb-2">
+                <FileText className="h-8 w-8 text-muted-foreground/60" />
+              </div>
               <div className="space-y-1">
-                <p className="font-medium text-foreground">
+                <p className="text-lg font-medium text-foreground">
                   {documents?.length ? "No documents match your search" : "No documents uploaded yet"}
                 </p>
-                <p className="text-sm">
+                <p className="text-sm max-w-sm mx-auto">
                   {documents?.length
                     ? "Try a different keyword or clear the search to see the full corpus."
                     : "Upload your first legal document to start grounding Sentinel’s answers."}
@@ -474,69 +443,71 @@ function KnowledgeBaseContent() {
               </div>
             </div>
           ) : (
-            <div className="overflow-hidden rounded-2xl border border-border/60 bg-background/70">
+            <div className="w-full">
               <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/30 hover:bg-muted/30">
-                    <TableHead className="px-4 text-[11px] uppercase tracking-wider text-muted-foreground">Document</TableHead>
-                    <TableHead className="text-[11px] uppercase tracking-wider text-muted-foreground">Category</TableHead>
-                    <TableHead className="text-[11px] uppercase tracking-wider text-muted-foreground">Chunks</TableHead>
-                    <TableHead className="text-[11px] uppercase tracking-wider text-muted-foreground">Uploaded by</TableHead>
-                    <TableHead className="text-[11px] uppercase tracking-wider text-muted-foreground">Created</TableHead>
-                    <TableHead className="text-[11px] uppercase tracking-wider text-muted-foreground">Source</TableHead>
-                    <TableHead className="px-4 text-right text-[11px] uppercase tracking-wider text-muted-foreground">Actions</TableHead>
+                <TableHeader className="bg-muted/50">
+                  <TableRow className="hover:bg-transparent border-border/40">
+                    <TableHead className="px-6 h-11 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Document</TableHead>
+                    <TableHead className="h-11 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Category</TableHead>
+                    <TableHead className="h-11 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Chunks</TableHead>
+                    <TableHead className="h-11 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Uploaded by</TableHead>
+                    <TableHead className="h-11 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Created</TableHead>
+                    <TableHead className="h-11 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Source</TableHead>
+                    <TableHead className="px-6 h-11 text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredDocuments.map((doc) => (
-                    <TableRow key={doc.id}>
-                      <TableCell className="px-4 py-3 align-top whitespace-normal">
+                    <TableRow key={doc.id} className="group hover:bg-muted/20 border-border/40 transition-colors">
+                      <TableCell className="px-6 py-4 align-top whitespace-normal w-[35%]">
                         <div className="flex items-start gap-3">
-                          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/40 text-muted-foreground">
+                          <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/50 bg-background shadow-sm text-primary/80">
                             {CATEGORY_ICONS[doc.category]}
                           </span>
-                          <div className="min-w-0 space-y-1">
-                            <p className="truncate text-sm font-medium text-foreground">{doc.title}</p>
-                            <p className="line-clamp-2 text-xs text-muted-foreground">
+                          <div className="min-w-0 space-y-1.5">
+                            <p className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">{doc.title}</p>
+                            <p className="line-clamp-2 text-xs text-muted-foreground leading-relaxed">
                               {doc.description ?? "No description provided yet."}
                             </p>
-                            <p className="truncate text-[11px] text-muted-foreground/80">
+                            <p className="truncate text-[11px] font-mono text-muted-foreground/60">
                               {doc.file_name ?? "Uploaded PDF"}
                             </p>
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="py-3 align-top">
-                        <Badge variant="outline" className="text-[11px]">
+                      <TableCell className="py-4 align-top">
+                        <Badge variant="secondary" className="text-[10px] font-medium tracking-wide">
                           {CATEGORY_LABELS[doc.category]}
                         </Badge>
                       </TableCell>
-                      <TableCell className="py-3 align-top text-sm text-muted-foreground">
-                        {doc.chunk_count}
+                      <TableCell className="py-4 align-top">
+                        <div className="inline-flex items-center justify-center rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
+                          {doc.chunk_count}
+                        </div>
                       </TableCell>
-                      <TableCell className="py-3 align-top text-sm text-muted-foreground whitespace-normal">
+                      <TableCell className="py-4 align-top text-xs text-muted-foreground whitespace-normal">
                         {doc.uploaded_by ?? "Unknown"}
                       </TableCell>
-                      <TableCell className="py-3 align-top text-sm text-muted-foreground">
-                        {new Date(doc.created_at).toLocaleDateString()}
+                      <TableCell className="py-4 align-top text-xs text-muted-foreground">
+                        {new Date(doc.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
                       </TableCell>
-                      <TableCell className="py-3 align-top">
+                      <TableCell className="py-4 align-top">
                         {doc.source_url ? (
-                          <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" asChild>
+                          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs hover:bg-primary/10 hover:text-primary" asChild>
                             <a href={doc.source_url} target="_blank" rel="noreferrer">
-                              Open
-                              <ArrowUpRight className="h-3.5 w-3.5" />
+                              Open Link
+                              <ArrowUpRight className="h-3 w-3 ml-1" />
                             </a>
                           </Button>
                         ) : (
-                          <span className="text-xs text-muted-foreground">No source</span>
+                          <span className="text-xs text-muted-foreground italic">No source</span>
                         )}
                       </TableCell>
-                      <TableCell className="px-4 py-3 align-top">
-                        <div className="flex items-center justify-end gap-2">
-                          <Button variant="outline" size="sm" className="h-8 px-3 text-xs" onClick={() => handleEditOpen(doc)}>
-                            <PencilLine className="h-3.5 w-3.5" />
-                            Edit
+                      <TableCell className="px-6 py-4 align-top">
+                        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => handleEditOpen(doc)}>
+                            <PencilLine className="h-4 w-4" />
+                            <span className="sr-only">Edit</span>
                           </Button>
                           <Dialog
                             open={deleteId === doc.id}
@@ -545,10 +516,12 @@ function KnowledgeBaseContent() {
                             <DialogTrigger asChild>
                               <Button
                                 variant="ghost"
-                                size="icon-sm"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
                                 onClick={() => setDeleteId(doc.id)}
                               >
-                                <Trash2 className="h-4 w-4 text-red-500" />
+                                <Trash2 className="h-4 w-4" />
+                                <span className="sr-only">Delete</span>
                               </Button>
                             </DialogTrigger>
                             <DialogContent>
