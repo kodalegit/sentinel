@@ -44,7 +44,9 @@ def _collect_tender_results(
         if status and tender.status != status:
             continue
 
-        bidder_count = len(state.bids_by_tender.get(tender_id, []))
+        bidder_count = len(
+            {b.company_id for b in state.bids_by_tender.get(tender_id, [])}
+        )
         results.append(
             TenderWithRisk(tender=tender, risk=risk, bidder_count=bidder_count)
         )
@@ -160,7 +162,7 @@ def _build_tender_report_pdf(detail: TenderDetail) -> bytes:
                 else "Unknown"
             ),
         ],
-        ["Bidder Count", str(len(detail.bids))],
+        ["Bidder Count", str(len({b.company_id for b in detail.bids}))],
     ]
     summary_table = Table(summary_rows, colWidths=[170, 320])
     summary_table.setStyle(
@@ -213,11 +215,11 @@ def _build_tender_report_pdf(detail: TenderDetail) -> bytes:
         )
 
     if detail.bids:
-        story.append(Paragraph("Submitted Bids", section_style))
+        story.append(Paragraph("Bidder Participation", section_style))
         bid_rows = [
             [
                 Paragraph("Company ID", header_compact_style),
-                Paragraph("Amount (KES)", header_compact_style),
+                Paragraph("Price (KES)", header_compact_style),
                 Paragraph("Submitted", header_compact_style),
                 Paragraph("Technical Score", header_compact_style),
             ]
@@ -226,7 +228,14 @@ def _build_tender_report_pdf(detail: TenderDetail) -> bytes:
             bid_rows.append(
                 [
                     Paragraph(str(bid.company_id), compact_style),
-                    Paragraph(f"{bid.amount:,.0f}", compact_style),
+                    Paragraph(
+                        (
+                            f"{bid.amount:,.0f}"
+                            if bid.amount is not None
+                            else "Not disclosed"
+                        ),
+                        compact_style,
+                    ),
                     Paragraph(
                         (
                             bid.submission_date.isoformat()

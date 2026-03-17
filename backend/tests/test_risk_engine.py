@@ -106,6 +106,7 @@ def _bid(**kwargs) -> Bid:
 # check_conflict_of_interest
 # ---------------------------------------------------------------------------
 
+
 class TestConflictOfInterest:
     def test_no_conflict_when_no_award(self):
         tender = _tender(awarded_to=None, procurement_officer_id="official-1")
@@ -149,13 +150,16 @@ class TestConflictOfInterest:
         G.add_node("official-1", type="OFFICIAL")
         # No path between them
 
-        factor = check_conflict_of_interest(tender, company, {}, {"official-1": official}, G)
+        factor = check_conflict_of_interest(
+            tender, company, {}, {"official-1": official}, G
+        )
         assert factor is None
 
 
 # ---------------------------------------------------------------------------
 # check_cartel_pattern
 # ---------------------------------------------------------------------------
+
 
 class TestCartelPattern:
     def test_detects_cartel_when_all_bidders_in_cluster(self):
@@ -204,6 +208,7 @@ class TestCartelPattern:
 # check_shell_company
 # ---------------------------------------------------------------------------
 
+
 class TestShellCompany:
     def test_detects_newly_registered_company(self):
         """Company registered 10 days before award deadline AND high value → shell signal."""
@@ -232,6 +237,25 @@ class TestShellCompany:
         factor = check_shell_company(tender, company)
         assert factor is None
 
+    def test_ppip_sparse_profile_is_not_penalized_for_missing_directors(self):
+        tender = _tender(awarded_to="company-1", awarded_amount=750_000.0)
+        company = _company(
+            registration_date=date(2018, 1, 1),
+            address="5th Floor Kimathi House Nairobi",
+            contact_email="supplier@firm.co.ke",
+            data_quality_flags={
+                "director_count": 0,
+                "has_ownership": False,
+                "email_is_public_webmail": False,
+                "source_expectations": {
+                    "expects_directors": False,
+                    "expects_ownership": False,
+                },
+            },
+        )
+        factor = check_shell_company(tender, company)
+        assert factor is None
+
     def test_no_flag_when_no_winner(self):
         tender = _tender(awarded_to=None)
         factor = check_shell_company(tender, None)
@@ -241,6 +265,7 @@ class TestShellCompany:
 # ---------------------------------------------------------------------------
 # check_price_anomaly
 # ---------------------------------------------------------------------------
+
 
 class TestPriceAnomaly:
     def test_detects_large_price_deviation(self):
@@ -272,6 +297,7 @@ class TestPriceAnomaly:
 # ---------------------------------------------------------------------------
 # check_rushed_timeline
 # ---------------------------------------------------------------------------
+
 
 class TestRushedTimeline:
     def test_flags_very_short_window(self):

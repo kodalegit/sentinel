@@ -1,9 +1,13 @@
 """Intelligence routes for chat, summaries, and knowledge base management."""
 
+import asyncio
 import json
+import logging
 import uuid as _uuid
 import re
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
@@ -372,10 +376,15 @@ async def chat_stream(
         final_content = ""
         final_citations: list[dict] = []
         events_log: list[dict] = []
+        aborted = False
+        persisted_assistant_message = False
 
         try:
             if is_new_thread and thread.title:
-                title_event = TitleEvent(title=thread.title)
+                title_event = TitleEvent(
+                    title=thread.title,
+                    thread_id=str(thread_id) if thread_id else None,
+                )
                 yield f"data: {json.dumps(title_event.to_dict())}\n\n"
 
             async for event in agent.stream(
@@ -426,11 +435,32 @@ async def chat_stream(
                 )
 
                 await db.commit()
+                persisted_assistant_message = True
 
             yield f"data: {json.dumps({'type': 'done', 'citations': final_citations, 'thread_id': str(thread_id) if thread_id else None})}\n\n"
 
+        except asyncio.CancelledError:
+            # Client disconnected / aborted - persist partial response
+            aborted = True
+            raise
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)[:200], 'code': 'STREAM_ERROR', 'recoverable': False})}\n\n"
+        finally:
+            # Persist partial response on abort (shielded against cancellation)
+            if (
+                aborted
+                and thread_id
+                and final_content
+                and not persisted_assistant_message
+            ):
+                try:
+                    await asyncio.shield(
+                        _persist_partial_response(
+                            db, thread_id, final_content, final_citations, events_log
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"Error persisting partial response: {e}")
 
     return StreamingResponse(
         generate(),
@@ -441,6 +471,30 @@ async def chat_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+async def _persist_partial_response(
+    db: AsyncSession,
+    thread_id: _uuid.UUID,
+    content: str,
+    citations: list[dict],
+    events: list[dict],
+) -> None:
+    """Persist a partial assistant response when stream is aborted."""
+    # Append a note indicating the response was interrupted
+    partial_content = content.rstrip()
+    if partial_content:
+        partial_content += "\n\n*[Response interrupted]*"
+
+    await repo.add_chat_message(
+        db,
+        thread_id,
+        "assistant",
+        partial_content,
+        citations=citations,
+        events=events if events else None,
+    )
+    await db.commit()
 
 
 def _derive_thread_title(message: str, action: str) -> str:

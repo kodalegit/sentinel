@@ -7,6 +7,7 @@ import type {
   DashboardStats,
   TenderWithRisk,
   TenderDetail,
+  TenderEvidencePack,
   GraphData,
   GraphPathResult,
   GraphSearchResult,
@@ -278,6 +279,12 @@ export async function getTenders(options?: {
 
 export async function getTenderDetail(tenderId: string): Promise<TenderDetail> {
   return fetchApi<TenderDetail>(`/api/tenders/${tenderId}`);
+}
+
+export async function getTenderEvidencePack(
+  tenderId: string,
+): Promise<TenderEvidencePack> {
+  return fetchApi<TenderEvidencePack>(`/api/tenders/${tenderId}/evidence`);
 }
 
 export async function downloadTenderRiskReport(tenderId: string): Promise<void> {

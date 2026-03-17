@@ -13,10 +13,17 @@ import {
   createCase,
   downloadTenderRiskReport,
   formatKES,
+  getTenderEvidencePack,
   getTenderCases,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { Case, RiskFactor, RiskFactorType, RiskCategory } from "@/lib/types";
+import type {
+  Case,
+  RiskFactor,
+  RiskFactorType,
+  RiskCategory,
+  TenderEvidencePack,
+} from "@/lib/types";
 import { RiskBadge, StatusBadge } from "@/components/ui/RiskBadge";
 import { ShadowGraph } from "@/components/ShadowGraph";
 import { Button } from "@/components/ui/button";
@@ -109,6 +116,11 @@ export default function TenderDetailPage({
   const [caseActionError, setCaseActionError] = useState<string | null>(null);
   const [exportingReport, setExportingReport] = useState(false);
   const { graph, loading: graphLoading } = useTenderGraph(showGraph ? id : null);
+  const { data: evidencePack } = useQuery<TenderEvidencePack>({
+    queryKey: ["tender-evidence-pack", id],
+    queryFn: () => getTenderEvidencePack(id),
+    enabled: !!id,
+  });
   const { data: tenderCases = [] } = useQuery<Case[]>({
     queryKey: ["tender-cases", id],
     queryFn: () => getTenderCases(id),
@@ -138,6 +150,24 @@ export default function TenderDetailPage({
   }
 
   const { tender, risk, bids, winning_company } = detail;
+  const winnerEvidence = (evidencePack?.evidence_profile?.winner_company ?? {}) as {
+    completeness_score?: number | null;
+    verification_score?: number | null;
+    quality_score?: number | null;
+    interpretation?: string | null;
+  };
+  const dataQualityFlags = winning_company?.data_quality_flags as
+    | { quality_score?: number | null }
+    | null
+    | undefined;
+  const qualityScore =
+    typeof winnerEvidence.quality_score === "number"
+      ? winnerEvidence.quality_score
+      : typeof dataQualityFlags?.quality_score === "number"
+        ? dataQualityFlags.quality_score
+        : 0;
+  const bidderContext = evidencePack?.bidder_context;
+  const evidenceProfile = evidencePack?.evidence_profile;
   const activeCase = tenderCases.find((item) =>
     ["OPEN", "INVESTIGATING", "ESCALATED"].includes(item.status),
   );
@@ -278,8 +308,30 @@ export default function TenderDetailPage({
               <div>
                 <h2 className="text-sm font-semibold mb-4 flex items-center gap-2">
                   <Users size={16} className="text-primary" />
-                  Submitted Bids ({bids.length})
+                  Bidder Participation ({bidderContext?.participant_count ?? bids.length})
                 </h2>
+                {bidderContext && (
+                  <div className="mb-4 rounded-2xl border border-border/60 bg-muted/20 p-4">
+                    <div className="flex flex-wrap items-center gap-2 mb-3">
+                      <EvidencePill
+                        label="Participants"
+                        value={String(bidderContext.participant_count)}
+                      />
+                      <EvidencePill
+                        label="Priced bids"
+                        value={String(bidderContext.priced_bid_count)}
+                      />
+                      <EvidencePill
+                        label="Pricing coverage"
+                        value={`${bidderContext.pricing_coverage_pct}%`}
+                        tone={bidderContext.pricing_coverage_pct >= 70 ? "good" : bidderContext.pricing_coverage_pct > 0 ? "warn" : "muted"}
+                      />
+                    </div>
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      {bidderContext.analysis_note}
+                    </p>
+                  </div>
+                )}
                 <div className="rounded-2xl border border-border/70 bg-card/90 overflow-hidden divide-y divide-border/40">
                   {bids.map((bid) => (
                     <div key={bid.id} className="px-5 py-3 flex items-center justify-between">
@@ -292,7 +344,14 @@ export default function TenderDetailPage({
                         </p>
                       </div>
                       <div className="text-right">
-                        <p className="text-sm font-display font-medium">{formatKES(bid.amount)}</p>
+                        <p className="text-sm font-display font-medium">
+                          {bid.amount !== null ? formatKES(bid.amount) : "Not disclosed"}
+                        </p>
+                        {bid.amount === null && (
+                          <p className="text-[11px] text-muted-foreground">
+                            Participation confirmed
+                          </p>
+                        )}
                         {bid.technical_score !== null && (
                           <p className="text-xs text-muted-foreground">
                             Score: {bid.technical_score}
@@ -390,7 +449,7 @@ export default function TenderDetailPage({
                 </MetaItem>
               )}
               <MetaItem icon={<Users size={14} />} label="Bidders">
-                {bids.length} companies
+                {bidderContext?.participant_count ?? bids.length} companies
               </MetaItem>
               {tender.procurement_method && (
                 <MetaItem icon={<Tag size={14} />} label="Procurement Method">
@@ -461,15 +520,72 @@ export default function TenderDetailPage({
                         {winning_company.supplier_type}
                       </span>
                     )}
-                    {winning_company.data_quality_flags && (
+                    {dataQualityFlags && (
                       <div className="mt-2 pt-2 border-t border-border/30">
-                        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Data Quality</span>
-                        <div className="flex items-center gap-2 mt-1">
-                          <QualityBar score={winning_company.data_quality_flags.quality_score as number | undefined} />
+                        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                          Evidence Quality
+                        </span>
+                        <div className="flex items-center gap-2 mt-1 mb-2">
+                          <QualityBar score={qualityScore} />
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 text-[11px] text-muted-foreground">
+                          <div className="flex items-center justify-between gap-3">
+                            <span>Completeness</span>
+                            <span className="font-mono text-foreground/80">
+                              {winnerEvidence.completeness_score ?? "Unknown"}
+                              {winnerEvidence.completeness_score !== undefined ? "%" : ""}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3">
+                            <span>Verification strength</span>
+                            <span className="font-mono text-foreground/80">
+                              {winnerEvidence.verification_score ?? "Unknown"}
+                              {winnerEvidence.verification_score !== undefined ? "%" : ""}
+                            </span>
+                          </div>
+                          {typeof winnerEvidence.interpretation === "string" && (
+                            <p className="rounded-lg border border-border/40 bg-muted/20 px-3 py-2 leading-relaxed text-muted-foreground">
+                              {winnerEvidence.interpretation}
+                            </p>
+                          )}
                         </div>
                       </div>
                     )}
                   </div>
+                </div>
+              </div>
+            )}
+
+            {evidenceProfile && (
+              <div className="rounded-2xl border border-border/70 bg-card/90 p-5 space-y-4">
+                <div>
+                  <h3 className="text-[11px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">
+                    Evidence Coverage
+                  </h3>
+                  <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                    This panel shows what the source actually proves for this tender so investigators can distinguish hard evidence from missing or undisclosed fields.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <EvidencePill
+                    label="Source"
+                    value={String(evidenceProfile.source_system ?? tender.source_system ?? "unknown").toUpperCase()}
+                  />
+                  <EvidencePill
+                    label="Participation"
+                    value={evidenceProfile.bidder_participation_known ? "Known" : "Unavailable"}
+                    tone={evidenceProfile.bidder_participation_known ? "good" : "muted"}
+                  />
+                  <EvidencePill
+                    label="Bid pricing"
+                    value={evidenceProfile.bid_pricing_disclosed ? "Disclosed" : "Partial / none"}
+                    tone={evidenceProfile.bid_pricing_disclosed ? "good" : "warn"}
+                  />
+                  <EvidencePill
+                    label="Award outcome"
+                    value={evidenceProfile.tender_has_awarded_supplier ? "Known" : "Unavailable"}
+                    tone={evidenceProfile.tender_has_awarded_supplier ? "good" : "muted"}
+                  />
                 </div>
               </div>
             )}
@@ -537,6 +653,32 @@ function MetaItem({
         </div>
         <div className="text-sm font-medium mt-0.5">{children}</div>
       </div>
+    </div>
+  );
+}
+
+function EvidencePill({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  tone?: "neutral" | "good" | "warn" | "muted";
+}) {
+  const toneClass =
+    tone === "good"
+      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+      : tone === "warn"
+        ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+        : tone === "muted"
+          ? "border-border/60 bg-muted/30 text-muted-foreground"
+          : "border-border/60 bg-background text-foreground/80";
+
+  return (
+    <div className={`rounded-full border px-3 py-1.5 text-[11px] ${toneClass}`}>
+      <span className="mr-1 font-mono uppercase tracking-wider opacity-70">{label}:</span>
+      <span className="font-semibold">{value}</span>
     </div>
   );
 }

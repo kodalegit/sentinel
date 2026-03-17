@@ -119,7 +119,7 @@ def extract_tender_features(
     rows = []
     for tid, tender in tenders.items():
         tender_bids = bids_by_tender.get(tid, [])
-        bid_amounts = [b.amount for b in tender_bids]
+        bid_amounts = [b.amount for b in tender_bids if b.amount is not None]
         est = tender.estimated_value or 0.0
 
         # Price features
@@ -142,7 +142,7 @@ def extract_tender_features(
         )
 
         # Competition features (ratios of estimated_value — category-agnostic)
-        bidder_count = len(tender_bids)
+        bidder_count = len({b.company_id for b in tender_bids})
         raw_spread = (
             max(bid_amounts) - min(bid_amounts) if len(bid_amounts) >= 2 else 0.0
         )
@@ -151,7 +151,11 @@ def extract_tender_features(
         winner_margin_ratio = 0.0
         if tender.awarded_to and len(bid_amounts) >= 2:
             winning_bid = next(
-                (b.amount for b in tender_bids if b.company_id == tender.awarded_to),
+                (
+                    b.amount
+                    for b in tender_bids
+                    if b.company_id == tender.awarded_to and b.amount is not None
+                ),
                 None,
             )
             if winning_bid is not None:

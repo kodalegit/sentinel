@@ -74,7 +74,7 @@ export interface Bid {
   id: string;
   tender_id: string;
   company_id: string;
-  amount: number;
+  amount: number | null;
   submission_date: string;
   technical_score: number | null;
 }
@@ -106,6 +106,41 @@ export interface TenderDetail {
   risk: RiskScore;
   bids: Bid[];
   winning_company: Company | null;
+}
+
+export interface TenderEvidencePack {
+  tender_id: string;
+  tender_summary: Record<string, unknown>;
+  evidence_profile: {
+    source_system: string | null;
+    tender_has_estimated_value: boolean;
+    tender_has_awarded_amount: boolean;
+    tender_has_awarded_supplier: boolean;
+    bidder_participation_known: boolean;
+    bid_pricing_disclosed: boolean;
+    pricing_coverage_pct: number;
+    graph_path_available: boolean;
+    winner_company: Record<string, unknown>;
+    agent_guidance: Record<string, boolean>;
+  };
+  risk_factors: Array<{
+    type: string;
+    description: string;
+    weight: number;
+    evidence: string[];
+  }>;
+  key_metrics: Record<string, unknown>;
+  bidder_context: {
+    participant_count: number;
+    priced_bid_count: number;
+    participation_only_count: number;
+    pricing_disclosed: boolean;
+    pricing_coverage_pct: number;
+    analysis_note: string;
+    participants: Array<Record<string, unknown>>;
+  };
+  graph_paths: Array<Record<string, unknown>>;
+  recommendations: string[];
 }
 
 // Graph

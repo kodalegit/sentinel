@@ -18,6 +18,16 @@ from intelligence.model_catalog import get_llm_model_catalog
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
+ENV_LLM_DEFAULTS = {
+    "llm_provider": app_settings.llm_provider,
+    "llm_model": app_settings.llm_model,
+    "llm_base_url": app_settings.llm_base_url,
+    "llm_temperature": app_settings.llm_temperature,
+    "openai_api_key": app_settings.openai_api_key,
+    "anthropic_api_key": app_settings.anthropic_api_key,
+    "google_api_key": app_settings.google_api_key,
+}
+
 
 def _build_fernet(secret: str) -> Fernet:
     """Build a Fernet instance from an application secret."""
@@ -65,15 +75,23 @@ def _resolve_runtime_llm_settings(
     *,
     override_api_key: str | None = None,
 ) -> tuple[str, str, str | None, float, str | None]:
-    provider = settings_dict.get("llm_provider") or app_settings.llm_provider
-    model = settings_dict.get("llm_model") or app_settings.llm_model
-    base_url = settings_dict.get("llm_base_url") or None
+    provider = settings_dict.get("llm_provider") or ENV_LLM_DEFAULTS["llm_provider"]
+    model = settings_dict.get("llm_model") or ENV_LLM_DEFAULTS["llm_model"]
+    base_url = settings_dict.get("llm_base_url") or ENV_LLM_DEFAULTS["llm_base_url"]
     temperature = float(
-        settings_dict.get("llm_temperature", app_settings.llm_temperature)
+        settings_dict.get("llm_temperature", ENV_LLM_DEFAULTS["llm_temperature"])
     )
     api_key = override_api_key
     if api_key is None and settings_dict.get("llm_api_key"):
         api_key = _decrypt_value(settings_dict["llm_api_key"])
+    if api_key is None:
+        normalized_provider = provider.lower()
+        if normalized_provider == "openai":
+            api_key = ENV_LLM_DEFAULTS["openai_api_key"]
+        elif normalized_provider == "anthropic":
+            api_key = ENV_LLM_DEFAULTS["anthropic_api_key"]
+        elif normalized_provider in {"google", "google_genai"}:
+            api_key = ENV_LLM_DEFAULTS["google_api_key"]
 
     return provider, model, base_url, temperature, api_key
 
@@ -125,15 +143,16 @@ async def get_llm_settings(
 ):
     """Get current LLM configuration (admin only)."""
     settings_dict = await repo.get_agent_settings(db)
+    provider, model, base_url, temperature, api_key = _resolve_runtime_llm_settings(
+        settings_dict
+    )
 
     return AgentSettingsResponse(
-        llm_provider=settings_dict.get("llm_provider") or app_settings.llm_provider,
-        llm_model=settings_dict.get("llm_model") or app_settings.llm_model,
-        llm_api_key_set=bool(settings_dict.get("llm_api_key")),
-        llm_base_url=settings_dict.get("llm_base_url") or app_settings.llm_base_url,
-        llm_temperature=float(
-            settings_dict.get("llm_temperature", app_settings.llm_temperature)
-        ),
+        llm_provider=provider,
+        llm_model=model,
+        llm_api_key_set=bool(api_key),
+        llm_base_url=base_url,
+        llm_temperature=temperature,
         embedding_provider=settings_dict.get("embedding_provider", "openai"),
         embedding_model=settings_dict.get("embedding_model", "text-embedding-3-small"),
     )

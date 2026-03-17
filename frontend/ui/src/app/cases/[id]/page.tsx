@@ -499,7 +499,7 @@ function CaseDetailContent() {
                    Linked Source Data <span className="opacity-50 ml-auto">({evidence.length})</span>
                 </h3>
                 <div className="mb-4 rounded-lg border border-border/40 bg-muted/20 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-                  Evidence shown here is the reviewable record behind the case. Baseline tender signals stay canonical, while linked items add investigator context and supporting references.
+                  Evidence shown here is the reviewable record behind the case. Baseline tender signals stay canonical, while linked items add investigator context, source coverage, and confidence cues about what the data actually proves.
                 </div>
                 {evidence.length === 0 ? (
                   <div className="border border-dashed border-border/60 rounded-lg p-8 flex flex-col items-center justify-center text-center opacity-60 bg-muted/20">
@@ -529,9 +529,52 @@ function CaseDetailContent() {
                         </div>
                         <p className="text-[13px] font-medium leading-snug pl-2">{e.label}</p>
                         <p className="mt-2 pl-2 text-[10px] font-mono text-muted-foreground break-all">Ref: {e.reference_id}</p>
+                        {e.evidence_type === "TENDER" && e.link_metadata && typeof e.link_metadata === 'object' ? (
+                          <div className="mt-3 ml-2 grid grid-cols-1 gap-2 rounded-md border border-border/40 bg-muted/20 p-3 text-[11px] text-muted-foreground">
+                            {'reference_number' in e.link_metadata && e.link_metadata.reference_number ? (
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="uppercase tracking-wider text-[10px] opacity-70">Tender ref</span>
+                                <span className="font-mono text-foreground/80">{String(e.link_metadata.reference_number)}</span>
+                              </div>
+                            ) : null}
+                            {'procuring_entity' in e.link_metadata && e.link_metadata.procuring_entity ? (
+                              <div className="flex items-start justify-between gap-3">
+                                <span className="uppercase tracking-wider text-[10px] opacity-70">Entity</span>
+                                <span className="max-w-[60%] text-right text-foreground/80">{String(e.link_metadata.procuring_entity)}</span>
+                              </div>
+                            ) : null}
+                            {'estimated_value' in e.link_metadata ? (
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="uppercase tracking-wider text-[10px] opacity-70">Estimate</span>
+                                <span className="font-mono text-foreground/80">
+                                  {typeof e.link_metadata.estimated_value === 'number'
+                                    ? `KES ${Number(e.link_metadata.estimated_value).toLocaleString()}`
+                                    : 'Unknown'}
+                                </span>
+                              </div>
+                            ) : null}
+                            <p className="rounded-md border border-border/30 bg-background/60 px-2 py-2 leading-relaxed">
+                              Treat missing bidder prices or sparse company fields as reduced evidence coverage, not proof of wrongdoing by themselves.
+                            </p>
+                          </div>
+                        ) : null}
                         {e.link_metadata && typeof e.link_metadata === 'object' && 'description' in e.link_metadata && e.evidence_type === "RISK_FACTOR" && e.link_metadata.description ? (
                           <div className="mt-3 pl-2 text-xs text-muted-foreground bg-muted/30 p-2 rounded border border-border/40">
                             {String(e.link_metadata.description)}
+                          </div>
+                        ) : null}
+                        {e.evidence_type === "RISK_FACTOR" && e.link_metadata && typeof e.link_metadata === 'object' ? (
+                          <div className="mt-2 pl-2 flex flex-wrap gap-2">
+                            {'type' in e.link_metadata && e.link_metadata.type ? (
+                              <span className="rounded-full border border-border/50 bg-background px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                                {String(e.link_metadata.type).replaceAll('_', ' ')}
+                              </span>
+                            ) : null}
+                            {'weight' in e.link_metadata && e.link_metadata.weight !== undefined ? (
+                              <span className="rounded-full border border-border/50 bg-background px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                                Weight {String(e.link_metadata.weight)}
+                              </span>
+                            ) : null}
                           </div>
                         ) : null}
                         {e.evidence_type === "TENDER" && (

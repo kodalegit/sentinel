@@ -140,10 +140,11 @@ class DoneEvent(StreamEvent):
 @dataclass
 class TitleEvent(StreamEvent):
     title: str
+    thread_id: Optional[str] = None
     type: str = field(default="title")
 
     def to_dict(self) -> dict:
-        return {"type": self.type, "title": self.title}
+        return {"type": self.type, "title": self.title, "thread_id": self.thread_id}
 
 
 @dataclass

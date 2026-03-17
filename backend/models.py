@@ -167,7 +167,7 @@ class Bid(BaseModel):
     id: str
     tender_id: str
     company_id: str
-    amount: float  # KES
+    amount: Optional[float] = None
     submission_date: datetime
     technical_score: Optional[float] = None
 

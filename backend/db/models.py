@@ -278,7 +278,7 @@ class BidDB(Base):
         ForeignKey("companies.id", ondelete="CASCADE"),
         nullable=False,
     )
-    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     submission_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     technical_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

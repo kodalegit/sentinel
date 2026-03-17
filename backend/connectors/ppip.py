@@ -5,6 +5,7 @@ normalizes to internal schema, and persists with provenance.
 """
 
 import logging
+import re
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -13,20 +14,116 @@ import httpx
 
 from connectors.normalize import (
     parse_date,
+    parse_datetime,
     normalize_name,
     clean_amount,
-    classify_address,
     compute_company_quality_flags,
 )
 from models import (
+    Bid,
     Tender,
     Company,
     Contract,
     TenderStatus,
-    AddressQuality,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _canonical_company_name(name: Optional[str]) -> Optional[str]:
+    normalized = normalize_name(name)
+    if not normalized:
+        return None
+    normalized = re.sub(r"\bLIMITED\b", "LTD", normalized)
+    normalized = re.sub(r"\bCOMPANY\b", "CO", normalized)
+    normalized = re.sub(r"[^A-Z0-9]+", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized or None
+
+
+def _build_company(party: dict, release: dict) -> Optional[Company]:
+    identifier = party.get("identifier", {})
+    address = party.get("address", {})
+    contact = party.get("contactPoint", {})
+
+    name = (
+        party.get("name") or identifier.get("legalName") or contact.get("name") or ""
+    ).strip()
+    if not name:
+        return None
+
+    reg_number = (
+        identifier.get("id")
+        or str(party.get("id") or "").strip()
+        or f"PPIP-{_canonical_company_name(name) or normalize_name(name)}"
+    )
+
+    physical_addr = (address.get("streetAddress") or "").strip()
+    postal_code = (address.get("postalCode") or "").strip()
+    locality = (address.get("locality") or "").strip()
+    region = (address.get("region") or "").strip()
+    addr_parts = [part for part in [physical_addr, locality, region] if part]
+    combined_address = ", ".join(addr_parts) if addr_parts else None
+
+    quality_flags = compute_company_quality_flags(
+        name=name,
+        physical_address=physical_addr or None,
+        postal_address=None,
+        contact_email=contact.get("email"),
+        brs_number=None,
+        directors=[],
+        ownership=[],
+        source_system="ppip",
+    )
+
+    return Company(
+        id=str(uuid.uuid4()),
+        name=name,
+        registration_number=reg_number,
+        address=combined_address,
+        physical_address=physical_addr or None,
+        postal_code=postal_code or None,
+        contact_email=contact.get("email"),
+        phone=contact.get("telephone"),
+        source_system="ppip",
+        source_record_id=str(
+            party.get("id") or identifier.get("id") or release.get("ocid") or reg_number
+        ),
+        data_quality_flags=quality_flags,
+    )
+
+
+def _build_company_lookup(
+    companies: list[Company],
+) -> tuple[dict[str, str], dict[str, str]]:
+    by_registration: dict[str, str] = {}
+    by_name: dict[str, str] = {}
+    for company in companies:
+        by_registration[company.registration_number] = company.id
+        canonical_name = _canonical_company_name(company.name)
+        if canonical_name and canonical_name not in by_name:
+            by_name[canonical_name] = company.id
+    return by_registration, by_name
+
+
+def _resolve_company_id(
+    supplier: dict,
+    by_registration: dict[str, str],
+    by_name: dict[str, str],
+) -> Optional[str]:
+    supplier_id = str(
+        supplier.get("id") or supplier.get("identifier", {}).get("id") or ""
+    ).strip()
+    if supplier_id and supplier_id in by_registration:
+        return by_registration[supplier_id]
+
+    supplier_name = supplier.get("name") or supplier.get("identifier", {}).get(
+        "legalName"
+    )
+    canonical_name = _canonical_company_name(supplier_name)
+    if canonical_name:
+        return by_name.get(canonical_name)
+    return None
 
 
 async def fetch_ocds_releases(
@@ -52,7 +149,9 @@ async def fetch_ocds_releases(
     return releases
 
 
-def normalize_ocds_tender(release: dict) -> Optional[Tender]:
+def normalize_ocds_tender(
+    release: dict, awarded_to: Optional[str] = None
+) -> Optional[Tender]:
     """
     Normalize an OCDS release into our internal Tender model.
     Handles both 'tender'-only and 'contract' tagged releases.
@@ -60,7 +159,6 @@ def normalize_ocds_tender(release: dict) -> Optional[Tender]:
     ocid = release.get("ocid")
     tender_data = release.get("tender", {})
     buyer = release.get("buyer", {})
-    tags = release.get("tag", [])
 
     if not tender_data:
         return None
@@ -122,6 +220,7 @@ def normalize_ocds_tender(release: dict) -> Optional[Tender]:
         published_date=published_date,
         deadline=deadline,
         status=tender_status,
+        awarded_to=awarded_to,
         awarded_amount=awarded_amount,
         procurement_method=method_details or method,
         procurement_category=tender_data.get("mainProcurementCategory"),
@@ -139,65 +238,89 @@ def extract_ocds_companies(release: dict) -> list[Company]:
     Parties with role 'supplier' or 'tenderer' become Company objects.
     """
     parties = release.get("parties", [])
-    companies = []
+    companies: list[Company] = []
+    seen_registration_numbers: set[str] = set()
+    seen_names: set[str] = set()
 
     for party in parties:
         roles = party.get("roles", [])
         if not any(r in roles for r in ("supplier", "tenderer")):
             continue
 
-        identifier = party.get("identifier", {})
-        address = party.get("address", {})
-        contact = party.get("contactPoint", {})
-
-        name = party.get("name", "")
-        if not name:
+        company = _build_company(party, release)
+        if company is None:
             continue
 
-        reg_number = identifier.get("id", "")
-        if not reg_number:
-            # Generate a stable ID from name
-            reg_number = f"PPIP-{normalize_name(name)}"
+        canonical_name = _canonical_company_name(company.name)
+        if company.registration_number in seen_registration_numbers:
+            continue
+        if canonical_name and canonical_name in seen_names:
+            continue
 
-        physical_addr = address.get("streetAddress", "")
-        postal_code = address.get("postalCode", "")
-        locality = address.get("locality", "")
-        region = address.get("region", "")
+        seen_registration_numbers.add(company.registration_number)
+        if canonical_name:
+            seen_names.add(canonical_name)
+        companies.append(company)
 
-        # Build a combined address string
-        addr_parts = [p for p in [physical_addr, locality, region] if p]
-        combined_address = ", ".join(addr_parts) if addr_parts else None
-
-        quality_flags = compute_company_quality_flags(
-            name=name,
-            physical_address=physical_addr,
-            postal_address=None,
-            contact_email=contact.get("email"),
-            brs_number=None,
-            directors=[],
-            ownership=[],
-        )
-
-        companies.append(
-            Company(
-                id=str(uuid.uuid4()),
-                name=name,
-                registration_number=reg_number,
-                address=combined_address,
-                physical_address=physical_addr or None,
-                postal_code=postal_code or None,
-                contact_email=contact.get("email"),
-                phone=contact.get("telephone"),
-                source_system="ppip",
-                source_record_id=release.get("ocid"),
-                data_quality_flags=quality_flags,
-            )
-        )
+    for award in release.get("awards", []):
+        for supplier in award.get("suppliers", []):
+            company = _build_company(supplier, release)
+            if company is None:
+                continue
+            canonical_name = _canonical_company_name(company.name)
+            if company.registration_number in seen_registration_numbers:
+                continue
+            if canonical_name and canonical_name in seen_names:
+                continue
+            seen_registration_numbers.add(company.registration_number)
+            if canonical_name:
+                seen_names.add(canonical_name)
+            companies.append(company)
 
     return companies
 
 
-def extract_ocds_contracts(release: dict) -> list[Contract]:
+def extract_ocds_bids(
+    release: dict, tender: Tender, companies: list[Company]
+) -> list[Bid]:
+    by_registration, by_name = _build_company_lookup(companies)
+    tender_period = release.get("tender", {}).get("tenderPeriod", {})
+    submission_date = parse_datetime(tender_period.get("endDate")) or parse_datetime(
+        release.get("date")
+    )
+    if submission_date is None:
+        submission_date = datetime.utcnow()
+
+    bids: list[Bid] = []
+    for company in companies:
+        supplier_ref = {
+            "id": company.source_record_id,
+            "name": company.name,
+            "identifier": {
+                "id": company.registration_number,
+                "legalName": company.name,
+            },
+        }
+        company_id = (
+            _resolve_company_id(supplier_ref, by_registration, by_name) or company.id
+        )
+        bids.append(
+            Bid(
+                id=str(uuid.uuid4()),
+                tender_id=tender.id,
+                company_id=company_id,
+                amount=None,
+                submission_date=submission_date,
+            )
+        )
+    return bids
+
+
+def extract_ocds_contracts(
+    release: dict,
+    tender: Tender,
+    companies: list[Company],
+) -> list[Contract]:
     """
     Extract contract entities from OCDS release.
     Only present in releases tagged with 'contract'.
@@ -205,6 +328,7 @@ def extract_ocds_contracts(release: dict) -> list[Contract]:
     raw_contracts = release.get("contracts", [])
     awards = {a.get("id"): a for a in release.get("awards", [])}
     buyer = release.get("buyer", {})
+    by_registration, by_name = _build_company_lookup(companies)
     contracts = []
 
     for rc in raw_contracts:
@@ -215,13 +339,18 @@ def extract_ocds_contracts(release: dict) -> list[Contract]:
         value = rc.get("value", {})
         period = rc.get("period", {})
 
-        # Get supplier from linked award
         award_id = rc.get("awardID")
         award = awards.get(award_id, {})
+        company_id = None
+        suppliers = award.get("suppliers", [])
+        if suppliers:
+            company_id = _resolve_company_id(suppliers[0], by_registration, by_name)
 
         contracts.append(
             Contract(
                 id=str(uuid.uuid4()),
+                tender_id=tender.id,
+                company_id=company_id,
                 contract_number=contract_id,
                 title=rc.get("title"),
                 description=rc.get("description"),
@@ -233,7 +362,7 @@ def extract_ocds_contracts(release: dict) -> list[Contract]:
                 status=rc.get("status"),
                 pe_name=buyer.get("name"),
                 source_system="ppip",
-                source_record_id=release.get("ocid"),
+                source_record_id=contract_id,
             )
         )
 
@@ -243,42 +372,68 @@ def extract_ocds_contracts(release: dict) -> list[Contract]:
 async def sync_ppip_fiscal_year(fiscal_year: str) -> dict:
     """
     Full sync pipeline: fetch OCDS releases, normalize, return structured data.
-    Returns dict with tenders, companies, and contracts ready for persistence.
+    Returns dict with release bundles ready for persistence.
     """
     releases = await fetch_ocds_releases(fiscal_year)
 
+    normalized_releases = []
     all_tenders = []
     all_companies = []
+    all_bids = []
     all_contracts = []
     skipped = 0
 
     for release in releases:
-        tender = normalize_ocds_tender(release)
+        companies = extract_ocds_companies(release)
+        by_registration, by_name = _build_company_lookup(companies)
+
+        awarded_to = None
+        for award in release.get("awards", []):
+            suppliers = award.get("suppliers", [])
+            if suppliers:
+                awarded_to = _resolve_company_id(suppliers[0], by_registration, by_name)
+                if awarded_to:
+                    break
+
+        tender = normalize_ocds_tender(release, awarded_to=awarded_to)
         if tender:
             all_tenders.append(tender)
         else:
             skipped += 1
 
-        companies = extract_ocds_companies(release)
         all_companies.extend(companies)
-
-        contracts = extract_ocds_contracts(release)
+        bids = extract_ocds_bids(release, tender, companies) if tender else []
+        all_bids.extend(bids)
+        contracts = extract_ocds_contracts(release, tender, companies) if tender else []
         all_contracts.extend(contracts)
+        if tender:
+            normalized_releases.append(
+                {
+                    "tender": tender,
+                    "companies": companies,
+                    "bids": bids,
+                    "contracts": contracts,
+                }
+            )
 
     logger.info(
         f"PPIP sync complete: {len(all_tenders)} tenders, "
-        f"{len(all_companies)} companies, {len(all_contracts)} contracts, "
+        f"{len(all_companies)} companies, {len(all_bids)} bids, "
+        f"{len(all_contracts)} contracts, "
         f"{skipped} skipped"
     )
 
     return {
+        "releases": normalized_releases,
         "tenders": all_tenders,
         "companies": all_companies,
+        "bids": all_bids,
         "contracts": all_contracts,
         "stats": {
             "releases_fetched": len(releases),
             "tenders_normalized": len(all_tenders),
             "companies_extracted": len(all_companies),
+            "bids_extracted": len(all_bids),
             "contracts_extracted": len(all_contracts),
             "skipped": skipped,
         },

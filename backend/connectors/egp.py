@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 # e-GP Tender List Ingestion
 # ---------------------------------------------------------------------------
 
+
 def normalize_egp_tenders(payload: dict) -> list[Tender]:
     """
     Normalize e-GP tender list response.
@@ -49,20 +50,22 @@ def normalize_egp_tenders(payload: dict) -> list[Tender]:
         deadline = parse_datetime(item.get("bidsubmissionenddate"))
         published = parse_datetime(item.get("bidsubmissionstartdate"))
 
-        tenders.append(Tender(
-            id=str(uuid.uuid4()),
-            reference_number=ref,
-            title=item.get("tendertitle", "Untitled").strip(),
-            procuring_entity=item.get("procuringEntity", "Unknown").strip(),
-            category=item.get("procurementCategory"),
-            procurement_method=item.get("procurementMethod"),
-            procurement_category=item.get("procurementCategory"),
-            published_date=published.date() if published else None,
-            deadline=deadline.date() if deadline else None,
-            status=TenderStatus.OPEN,
-            source_system="egp",
-            source_record_id=str(item.get("tenderdetailid", ref)),
-        ))
+        tenders.append(
+            Tender(
+                id=str(uuid.uuid4()),
+                reference_number=ref,
+                title=item.get("tendertitle", "Untitled").strip(),
+                procuring_entity=item.get("procuringEntity", "Unknown").strip(),
+                category=item.get("procurementCategory"),
+                procurement_method=item.get("procurementMethod"),
+                procurement_category=item.get("procurementCategory"),
+                published_date=published.date() if published else None,
+                deadline=deadline.date() if deadline else None,
+                status=TenderStatus.OPEN,
+                source_system="egp",
+                source_record_id=str(item.get("tenderdetailid", ref)),
+            )
+        )
 
     logger.info(f"e-GP: Normalized {len(tenders)} tenders from payload")
     return tenders
@@ -71,6 +74,7 @@ def normalize_egp_tenders(payload: dict) -> list[Tender]:
 # ---------------------------------------------------------------------------
 # e-GP Contract Detail Ingestion
 # ---------------------------------------------------------------------------
+
 
 def normalize_egp_contract(payload: dict) -> dict:
     """
@@ -110,6 +114,7 @@ def normalize_egp_contract(payload: dict) -> dict:
         brs_number=brs_number,
         directors=director_info,
         ownership=ownership_info,
+        source_system="egp",
     )
 
     company_id = str(uuid.uuid4())
@@ -135,11 +140,13 @@ def normalize_egp_contract(payload: dict) -> dict:
         name = d.get("name", "").strip()
         if not name:
             continue
-        directors.append(Director(
-            id=str(uuid.uuid4()),
-            name=normalize_name(name) or name,
-            company_ids=[company_id],
-        ))
+        directors.append(
+            Director(
+                id=str(uuid.uuid4()),
+                name=normalize_name(name) or name,
+                company_ids=[company_id],
+            )
+        )
 
     # --- Build Ownership records ---
     ownership_records = []
@@ -152,13 +159,15 @@ def normalize_egp_contract(payload: dict) -> dict:
         if normalized in seen_owners:
             continue
         seen_owners.add(normalized)
-        ownership_records.append(Ownership(
-            id=str(uuid.uuid4()),
-            company_id=company_id,
-            owner_name=normalized or name,
-            nationality=o.get("nationality"),
-            postal_address=o.get("postalAddress"),
-        ))
+        ownership_records.append(
+            Ownership(
+                id=str(uuid.uuid4()),
+                company_id=company_id,
+                owner_name=normalized or name,
+                nationality=o.get("nationality"),
+                postal_address=o.get("postalAddress"),
+            )
+        )
 
     # --- Build Contract ---
     agpo_name = main.get("agpoName", "-")
@@ -181,7 +190,8 @@ def normalize_egp_contract(payload: dict) -> dict:
         end_date=parse_date(main.get("endDate")),
         effective_date=parse_date(main.get("effectiveDate")),
         status=main.get("status"),
-        procurement_method=main.get("procurementMethod") or more.get("procurementMethod"),
+        procurement_method=main.get("procurementMethod")
+        or more.get("procurementMethod"),
         procurement_category=main.get("procurementCategory"),
         agpo_group=agpo_name if agpo_name != "-" else None,
         reservation_group=reservation if reservation != "-" else None,
