@@ -200,6 +200,7 @@ def check_cartel_pattern(
 _SHELL_SIGNAL_WEIGHTS = {
     "company_age_very_new": 25,  # < 30 days old
     "company_age_new": 12,  # < 90 days old
+    "registered_after_deadline": 35,
     "address_placeholder": 15,  # "PO Box 123" default
     "address_vague": 8,  # "MOI AVENUE" — road name only
     "address_missing": 10,  # No address at all
@@ -231,7 +232,13 @@ def check_shell_company(tender: Tender, winner: Company | None) -> RiskFactor | 
     # --- Signal 1: Company age ---
     if winner.registration_date and tender.deadline:
         company_age_days = (tender.deadline - winner.registration_date).days
-        if company_age_days < 30:
+        if company_age_days < 0:
+            composite_score += _SHELL_SIGNAL_WEIGHTS["registered_after_deadline"]
+            signals.append("registered_after_deadline")
+            evidence.append(
+                f"Registration date {winner.registration_date.isoformat()} is after tender deadline {tender.deadline.isoformat()}"
+            )
+        elif company_age_days < 30:
             composite_score += _SHELL_SIGNAL_WEIGHTS["company_age_very_new"]
             signals.append("company_age_very_new")
             evidence.append(f"Registered only {company_age_days} days before deadline")

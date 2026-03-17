@@ -7,7 +7,7 @@ import networkx as nx
 from collections import defaultdict
 from dataclasses import dataclass
 
-from models import Company, Bid
+from models import Company, Bid, Tender
 from models import AddressQuality
 from connectors.normalize import classify_address
 from graph.normalization import normalize_address_key, normalize_phone, is_generic_phone
@@ -29,6 +29,7 @@ class Cluster:
 
 def detect_communities(
     G: nx.Graph,
+    tenders: dict[str, Tender],
     bids: list[Bid],
     companies: dict[str, Company],
     min_cluster_size: int = 2,
@@ -63,7 +64,7 @@ def detect_communities(
 
         shared = _find_shared_attributes(G, company_ids, companies)
         co_bids = _count_co_bids(bids, set(company_ids))
-        wins = _analyze_win_pattern(bids, set(company_ids), companies)
+        wins = _analyze_win_pattern(tenders, bids, set(company_ids), companies)
         suspicious_edge_count = _count_suspicious_edges(G, company_ids)
         score = calculate_suspicion_score(
             shared, co_bids, len(company_ids), suspicious_edge_count
@@ -252,24 +253,36 @@ def _count_co_bids(bids: list[Bid], company_ids: set[str]) -> int:
 
 
 def _analyze_win_pattern(
+    tenders: dict[str, Tender],
     bids: list[Bid],
     company_ids: set[str],
     companies: dict[str, Company],
 ) -> dict:
-    """Analyze win distribution within a cluster."""
-    # This is a simplified version; in production we'd check tender.awarded_to
-    wins = defaultdict(int)
-    total = 0
+    bid_counts = defaultdict(int)
+    total_bids = 0
     for b in bids:
         if b.company_id in company_ids:
-            total += 1
-            wins[b.company_id] += 1
+            total_bids += 1
+            bid_counts[b.company_id] += 1
+
+    award_counts = defaultdict(int)
+    total_awards = 0
+    for tender in tenders.values():
+        awarded_to = tender.awarded_to
+        if awarded_to in company_ids:
+            total_awards += 1
+            award_counts[awarded_to] += 1
 
     return {
-        "total_bids": total,
+        "total_bids": total_bids,
         "bids_per_company": {
             companies[cid].name if cid in companies else cid: count
-            for cid, count in wins.items()
+            for cid, count in bid_counts.items()
+        },
+        "total_awards": total_awards,
+        "awards_per_company": {
+            companies[cid].name if cid in companies else cid: count
+            for cid, count in award_counts.items()
         },
     }
 

@@ -35,7 +35,6 @@ from ml.hybrid_scorer import HybridRiskScorer
 from ml.features import materialize_company_graph_features
 from graph.neo4j_driver import close_neo4j_driver, check_neo4j_health
 from graph.neo4j_sync import sync_graph_to_neo4j
-from graph.neo4j_communities import detect_communities_neo4j
 from routes.stats import router as stats_router
 from routes.tenders import router as tenders_router
 from routes.tenders_graph import router as tenders_graph_router
@@ -248,7 +247,9 @@ async def recompute_app_state(app: FastAPI) -> dict:
 
     # Detect communities using NetworkX (always available)
     # Neo4j sync happens in background after initial load
-    communities = detect_communities(graph, data["bids"], data["companies"])
+    communities = detect_communities(
+        graph, data["tenders"], data["bids"], data["companies"]
+    )
     company_graph_features = materialize_company_graph_features(graph)
 
     scorer = HybridRiskScorer()
@@ -310,7 +311,7 @@ async def recompute_app_state(app: FastAPI) -> dict:
 
 async def sync_neo4j_background(app: FastAPI):
     """
-    Background task to sync graph to Neo4j and update communities.
+    Background task to sync graph to Neo4j.
     This runs after the main recompute completes, so the API remains responsive.
     """
     if not settings.neo4j_enabled:
@@ -331,14 +332,6 @@ async def sync_neo4j_background(app: FastAPI):
             bids=state.bids,
         )
         logger.info(f"Neo4j sync complete: {neo4j_stats}")
-
-        # Update communities using Neo4j GDS if available
-        try:
-            communities = await detect_communities_neo4j()
-            state.communities = communities
-            logger.info(f"Updated communities from Neo4j: {len(communities)} clusters")
-        except Exception as e:
-            logger.warning(f"Neo4j community detection failed: {e}")
 
     except Exception as e:
         logger.error(f"Neo4j background sync failed: {e}")

@@ -223,6 +223,19 @@ class TestShellCompany:
         assert factor is not None
         assert factor.type == RiskFactorType.SHELL_COMPANY
 
+    def test_detects_registration_after_tender_deadline(self):
+        tender = _tender(
+            awarded_to="company-1",
+            estimated_value=5_000_000.0,
+            awarded_amount=5_000_000.0,
+            deadline=date(2025, 6, 1),
+        )
+        company = _company(registration_date=date(2025, 6, 10))
+        factor = check_shell_company(tender, company)
+        assert factor is not None
+        assert factor.type == RiskFactorType.SHELL_COMPANY
+        assert any("after tender deadline" in item.lower() for item in factor.evidence)
+
     def test_no_flag_for_established_company(self):
         """Old company with specific address, directors, and corporate email → no flag."""
         tender = _tender(awarded_to="company-1")

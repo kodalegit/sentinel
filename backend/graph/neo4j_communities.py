@@ -109,7 +109,12 @@ async def _detect_communities_gds(min_cluster_size: int = 2) -> list[Cluster]:
                     suspicion_score=score,
                     shared_attributes=shared,
                     co_bid_count=co_bids,
-                    win_pattern={"total_bids": 0, "bids_per_company": {}},
+                    win_pattern={
+                        "total_bids": 0,
+                        "bids_per_company": {},
+                        "total_awards": 0,
+                        "awards_per_company": {},
+                    },
                 )
             )
 
@@ -181,11 +186,16 @@ async def _detect_communities_basic() -> list[Cluster]:
                     id=f"cluster-{idx}",
                     company_ids=company_ids,
                     company_names=cluster_company_names,
-                    size=len(company_ids),
+                    size=len(component),
                     suspicion_score=score,
                     shared_attributes=shared,
                     co_bid_count=co_bids,
-                    win_pattern={"total_bids": 0, "bids_per_company": {}},
+                    win_pattern={
+                        "total_bids": 0,
+                        "bids_per_company": {},
+                        "total_awards": 0,
+                        "awards_per_company": {},
+                    },
                 )
             )
             idx += 1

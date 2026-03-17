@@ -239,6 +239,8 @@ export interface CommunityCluster {
   win_pattern: {
     total_bids: number;
     bids_per_company: Record<string, number>;
+    total_awards: number;
+    awards_per_company: Record<string, number>;
   };
 }
 
@@ -374,6 +376,12 @@ export interface IngestionResponse {
   status: string;
   message: string;
   counts: Record<string, number>;
+}
+
+export interface PPIPSyncResponse {
+  status: string;
+  fiscal_year: string;
+  stats: Record<string, number>;
 }
 
 export interface RecomputeResponse {
