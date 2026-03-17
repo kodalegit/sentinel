@@ -71,12 +71,12 @@ export default function DataSourcesPage() {
     addLog("info", `Starting PPIP OCDS sync for FY ${fiscalYear}...`);
     try {
       const result = await syncPPIP(fiscalYear);
-      addLog("success", `PPIP sync complete: ${result.message}`);
-      if (result.counts) {
-        const parts = Object.entries(result.counts)
+      addLog("success", `PPIP sync completed for FY ${result.fiscal_year}.`);
+      if (result.stats) {
+        const parts = Object.entries(result.stats)
           .map(([k, v]) => `${k}: ${v}`)
           .join(", ");
-        addLog("info", `Counts — ${parts}`);
+        addLog("info", `PPIP sync stats — ${parts}`);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unknown error";

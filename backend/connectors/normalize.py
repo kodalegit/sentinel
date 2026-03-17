@@ -4,7 +4,7 @@ Handles dates, addresses, and data quality classification.
 """
 
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from models import AddressQuality
@@ -54,6 +54,14 @@ def _parse_iso_datetime(value: str) -> Optional[datetime]:
         return None
 
 
+def normalize_datetime(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def parse_date(value: Optional[str]) -> Optional[date]:
     """Parse a date string trying multiple Kenyan formats. Returns None on failure."""
     if not value or not value.strip():
@@ -77,10 +85,10 @@ def parse_datetime(value: Optional[str]) -> Optional[datetime]:
     value = value.strip()
     iso_parsed = _parse_iso_datetime(value)
     if iso_parsed is not None:
-        return iso_parsed
+        return normalize_datetime(iso_parsed)
     for fmt in _DATE_FORMATS:
         try:
-            return datetime.strptime(value, fmt)
+            return normalize_datetime(datetime.strptime(value, fmt))
         except ValueError:
             continue
     return None

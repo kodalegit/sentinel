@@ -24,6 +24,7 @@ from db.models import (
     OwnershipDB,
     CompanyDirectorDB,
 )
+from connectors.normalize import normalize_datetime
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ingest", tags=["ingestion"])
@@ -204,6 +205,8 @@ async def _persist_bid(db, bid, tender_db_id, company_db_id) -> Optional[BidDB]:
     """Persist a bid, skipping duplicates by tender/company."""
     from sqlalchemy import select
 
+    normalized_submission_date = normalize_datetime(bid.submission_date)
+
     result = await db.execute(
         select(BidDB).where(
             BidDB.tender_id == tender_db_id,
@@ -227,7 +230,7 @@ async def _persist_bid(db, bid, tender_db_id, company_db_id) -> Optional[BidDB]:
         tender_id=tender_db_id,
         company_id=company_db_id,
         amount=bid.amount,
-        submission_date=bid.submission_date,
+        submission_date=normalized_submission_date,
         technical_score=bid.technical_score,
     )
     db.add(db_bid)
