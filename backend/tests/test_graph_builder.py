@@ -1,8 +1,10 @@
+from datetime import datetime, timezone
+
 import networkx as nx
 
 from models import Company, Director, PublicOfficial, Tender, TenderStatus
 from graph.builder import build_procurement_graph
-from graph.communities import _find_shared_attributes
+from graph.communities import _find_shared_attributes, _analyze_win_pattern
 
 
 def _company(**kwargs) -> Company:
@@ -165,3 +167,57 @@ def test_find_shared_attributes_ignores_vague_addresses_and_generic_phones():
 
     assert shared["addresses"] == []
     assert shared["phones"] == []
+
+
+def test_analyze_win_pattern_distinguishes_bids_from_awards():
+    now = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    companies = {
+        "company-1": _company(id="company-1", name="Acme Ltd"),
+        "company-2": _company(id="company-2", name="Beta Ltd"),
+    }
+    tenders = {
+        "tender-1": _tender(
+            id="tender-1", awarded_to="company-1", status=TenderStatus.AWARDED
+        ),
+        "tender-2": _tender(
+            id="tender-2", awarded_to="company-2", status=TenderStatus.AWARDED
+        ),
+        "tender-3": _tender(id="tender-3", awarded_to=None, status=TenderStatus.OPEN),
+    }
+    bids = [
+        {
+            "id": "bid-1",
+            "tender_id": "tender-1",
+            "company_id": "company-1",
+            "amount": 1000.0,
+            "submission_date": now,
+        },
+        {
+            "id": "bid-2",
+            "tender_id": "tender-1",
+            "company_id": "company-2",
+            "amount": 1100.0,
+            "submission_date": now,
+        },
+        {
+            "id": "bid-3",
+            "tender_id": "tender-2",
+            "company_id": "company-1",
+            "amount": 1200.0,
+            "submission_date": now,
+        },
+    ]
+
+    from models import Bid
+
+    pattern = _analyze_win_pattern(
+        tenders,
+        [Bid(**bid) for bid in bids],
+        {"company-1", "company-2"},
+        companies,
+    )
+
+    assert pattern["total_bids"] == 3
+    assert pattern["bids_per_company"] == {"Acme Ltd": 2, "Beta Ltd": 1}
+    assert pattern["total_awards"] == 2
+    assert pattern["awards_per_company"] == {"Acme Ltd": 1, "Beta Ltd": 1}

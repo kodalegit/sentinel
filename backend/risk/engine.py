@@ -200,6 +200,7 @@ def check_cartel_pattern(
 _SHELL_SIGNAL_WEIGHTS = {
     "company_age_very_new": 25,  # < 30 days old
     "company_age_new": 12,  # < 90 days old
+    "registered_after_deadline": 35,
     "address_placeholder": 15,  # "PO Box 123" default
     "address_vague": 8,  # "MOI AVENUE" — road name only
     "address_missing": 10,  # No address at all
@@ -225,11 +226,19 @@ def check_shell_company(tender: Tender, winner: Company | None) -> RiskFactor | 
     signals = []
     composite_score = 0
     evidence = [f"Company: {winner.name}"]
+    quality = winner.data_quality_flags or {}
+    source_expectations = quality.get("source_expectations", {})
 
     # --- Signal 1: Company age ---
     if winner.registration_date and tender.deadline:
         company_age_days = (tender.deadline - winner.registration_date).days
-        if company_age_days < 30:
+        if company_age_days < 0:
+            composite_score += _SHELL_SIGNAL_WEIGHTS["registered_after_deadline"]
+            signals.append("registered_after_deadline")
+            evidence.append(
+                f"Registration date {winner.registration_date.isoformat()} is after tender deadline {tender.deadline.isoformat()}"
+            )
+        elif company_age_days < 30:
             composite_score += _SHELL_SIGNAL_WEIGHTS["company_age_very_new"]
             signals.append("company_age_very_new")
             evidence.append(f"Registered only {company_age_days} days before deadline")
@@ -259,21 +268,25 @@ def check_shell_company(tender: Tender, winner: Company | None) -> RiskFactor | 
         evidence.append("No address on record")
 
     # --- Signal 3: Director count ---
-    quality = winner.data_quality_flags or {}
     director_count = quality.get("director_count", len(winner.director_ids))
-    if director_count == 0:
+    if director_count == 0 and source_expectations.get("expects_directors", True):
         composite_score += _SHELL_SIGNAL_WEIGHTS["no_directors"]
         signals.append("no_directors")
         evidence.append("No directors listed")
 
     # --- Signal 4: Ownership info ---
-    if quality.get("has_ownership") is False:
+    if quality.get("has_ownership") is False and source_expectations.get(
+        "expects_ownership", True
+    ):
         composite_score += _SHELL_SIGNAL_WEIGHTS["no_ownership"]
         signals.append("no_ownership")
         evidence.append("No ownership records")
 
     # --- Signal 5: Generic email domain ---
-    if quality.get("email_is_generic") is True:
+    if (
+        quality.get("email_is_public_webmail") is True
+        or quality.get("email_is_generic") is True
+    ):
         composite_score += _SHELL_SIGNAL_WEIGHTS["generic_email"]
         signals.append("generic_email")
         evidence.append(f"Generic email: {winner.contact_email}")

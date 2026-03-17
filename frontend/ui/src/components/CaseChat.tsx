@@ -44,6 +44,9 @@ import {
   Trash2,
   Terminal,
   BookOpen,
+  Copy as CopyIcon,
+  Check,
+  Square,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -73,6 +76,35 @@ function truncateSummary(text: string, maxLen = 120): string {
 // ---------------------------------------------------------------------------
 // Small components
 // ---------------------------------------------------------------------------
+
+function CopyButton({ text, alwaysVisible = false }: { text: string; alwaysVisible?: boolean }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch (err) {
+      console.error("Failed to copy message", err);
+    }
+  };
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      onClick={handleCopy}
+      className={`h-7 w-7 cursor-pointer rounded-md transition-opacity duration-150 hover:bg-muted/70 ${
+        alwaysVisible ? "opacity-60 hover:opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+      }`}
+      aria-label="Copy message"
+    >
+      {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <CopyIcon className="h-3.5 w-3.5 text-muted-foreground" />}
+    </Button>
+  );
+}
 
 function ToolIcon({ tool }: { tool: string }) {
   switch (tool) {
@@ -238,7 +270,7 @@ function PersistedEventsSection({ events }: { events: ChatStreamEvent[] }) {
     if (e.type === "tool_start" && e.tool_call_id && e.input) {
       toolInputMap.set(e.tool_call_id, e.input);
     }
-  }
+  };
 
   const toolEndEvents = events.filter((e) => e.type === "tool_end");
   const reasoningEvents = events.filter((e) => e.type === "reasoning");
@@ -294,9 +326,12 @@ function PersistedEventsSection({ events }: { events: ChatStreamEvent[] }) {
 
 function UserMessageBubble({ content }: { content: string }) {
   return (
-    <div className="flex justify-end w-full">
+    <div className="group relative flex w-full justify-end">
       <div className="max-w-[75%] rounded-3xl bg-muted px-4 py-3 text-[14px] leading-relaxed text-foreground shadow-sm">
         <div className="whitespace-pre-wrap">{content}</div>
+      </div>
+      <div className="absolute bottom-8 -right-1 sm:-bottom-3 sm:-right-2">
+        <CopyButton text={content} />
       </div>
     </div>
   );
@@ -312,7 +347,7 @@ const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMe
 
   return (
     <div className="w-full px-1 sm:px-2">
-      <div className="max-w-3xl space-y-3 text-[15px] leading-7 text-foreground/90">
+      <div className="group relative max-w-3xl space-y-3 pb-2 text-[15px] leading-7 text-foreground/90">
         {message.events && message.events.length > 0 && (
           <PersistedEventsSection events={message.events} />
         )}
@@ -320,6 +355,10 @@ const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMe
         <OptimizedMarkdown content={message.content} citations={citationsList} />
 
         {citationsList.length > 0 && <SourcesButton citations={citationsList} />}
+
+        <div className="absolute right-0 bottom-0 sm:-bottom-2 sm:-right-1">
+          <CopyButton text={message.content} />
+        </div>
       </div>
     </div>
   );
@@ -334,6 +373,7 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
   const [showThreads, setShowThreads] = useState(false);
   const [threadToDelete, setThreadToDelete] = useState<string | null>(null);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const syncingFromUrlRef = useRef(false);
   const lastSeenUrlThreadIdRef = useRef<string | null | undefined>(undefined);
   const router = useRouter();
@@ -356,6 +396,7 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
     selectThread,
     deleteThread,
     runStream,
+    stopStream,
   } = useStreamChat(caseId);
 
   const {
@@ -411,6 +452,10 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
 
     lastSeenUrlThreadIdRef.current = normalizedThreadId;
 
+    if (activeThreadId === normalizedThreadId) {
+      return;
+    }
+
     if (
       normalizedThreadId &&
       !threads.some((thread) => thread.id === normalizedThreadId)
@@ -419,9 +464,6 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
       return;
     }
 
-    if (activeThreadId === normalizedThreadId) {
-      return;
-    }
     syncingFromUrlRef.current = true;
     markInitialScroll(normalizedThreadId);
     selectThread(normalizedThreadId);
@@ -430,6 +472,7 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
     threadIdFromUrl,
     threads,
     activeThreadId,
+    markInitialScroll,
     selectThread,
     updateThreadUrl,
   ]);
@@ -459,12 +502,22 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
     await runStream(userMessage, "chat");
   };
 
+  useEffect(() => {
+    const textarea = composerTextareaRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "0px";
+    const nextHeight = Math.min(textarea.scrollHeight, 160);
+    textarea.style.height = `${Math.max(nextHeight, 44)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > 160 ? "auto" : "hidden";
+  }, [input]);
+
   const handleSuggestedQuery = useCallback(
     (message: string) => {
       markShouldAnchor();
       runStream(message, "chat");
     },
-    [runStream],
+    [markShouldAnchor, runStream],
   );
 
   const handleNewThread = useCallback(() => {
@@ -595,7 +648,6 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
                         >
                           <p className="font-medium truncate text-[13px]">{thread.title || "Untitled"}</p>
                           <div className="flex justify-between items-center mt-1 gap-2">
-                            <span className="text-[10px] font-mono text-muted-foreground uppercase">{thread.message_count} msgs</span>
                             <span className="text-[10px] text-muted-foreground">
                               {thread.created_at
                                 ? new Date(thread.created_at).toLocaleDateString()
@@ -758,16 +810,17 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
       </div>
 
       {/* Input Area */}
-      <div className="shrink-0 p-4 border-t border-border/40 bg-background">
-        <div className="max-w-4xl mx-auto">
+      <div className="shrink-0 border-t border-border/40 bg-background px-3 pb-3 pt-2 sm:p-4">
+        <div className="mx-auto max-w-4xl">
           <form
             onSubmit={(e) => {
               e.preventDefault();
               handleSend();
             }}
-            className="relative flex items-end gap-2 bg-card rounded-xl border border-border pb-1 pl-4 pr-2 pt-1 shadow-lg shadow-black/5 ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:border-transparent transition-all"
+            className="relative flex items-end gap-2 rounded-2xl border border-border bg-card px-3 py-2 shadow-lg shadow-black/5 transition-all ring-offset-background focus-within:border-transparent focus-within:ring-2 focus-within:ring-ring"
           >
             <textarea
+              ref={composerTextareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -779,26 +832,40 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
               placeholder="Message Sentinel (Press Enter to send)..."
               disabled={isStreaming}
               rows={1}
-              className="flex-1 max-h-32 min-h-[44px] py-3 text-sm resize-none bg-transparent focus:outline-none placeholder:text-muted-foreground/50 disabled:opacity-50"
-              style={{ overflowY: "auto" }}
+              className="flex-1 min-h-[44px] max-h-40 bg-transparent py-2.5 text-sm leading-6 resize-none focus:outline-none placeholder:text-muted-foreground/50 disabled:opacity-50"
+              style={{ overflowY: "hidden" }}
             />
-            <div className="flex shrink-0 items-center justify-center p-1">
-              <Button
-                type="submit"
-                size="icon"
-                disabled={!input.trim() || isStreaming}
-                className="h-9 w-9 rounded-lg"
-              >
-                {isStreaming ? (
-                  <Loader2 className="h-4 w-4 animate-spin text-primary-foreground" />
-                ) : (
+            <div className="flex shrink-0 items-center justify-center self-end pb-0.5">
+              {isStreaming ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="destructive"
+                  onClick={stopStream}
+                  className="h-10 w-10 cursor-pointer rounded-xl shadow-sm"
+                  title="Stop generation"
+                >
+                  <Square className="h-4 w-4 fill-current" />
+                </Button>
+              ) : (
+                <Button
+                  type="submit"
+                  size="icon"
+                  disabled={!input.trim()}
+                  className="h-10 w-10 cursor-pointer rounded-xl shadow-sm"
+                >
                   <Send className="h-4 w-4 text-primary-foreground" />
-                )}
-              </Button>
+                </Button>
+              )}
             </div>
           </form>
-          <div className="text-center mt-2 pb-1">
-            <span className="text-[10px] font-mono text-muted-foreground/60 uppercase tracking-widest">Responses may be synthesized from multiple sources.</span>
+          <div className="mt-2 flex items-center justify-between gap-3 px-1">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground/60">
+              Responses may be synthesized from multiple sources.
+            </span>
+            <span className="shrink-0 text-[10px] text-muted-foreground/60">
+              Enter to send • Shift+Enter for newline
+            </span>
           </div>
         </div>
       </div>

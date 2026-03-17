@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = None
     google_api_key: Optional[str] = None
 
+    # Langfuse tracing
+    langfuse_public_key: Optional[str] = None
+    langfuse_secret_key: Optional[str] = None
+    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_tracing_environment: str = "development"
+
     # Encryption key for sensitive settings (generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
     settings_encryption_key: str = "sentinel-encryption-key-change-in-production"
 

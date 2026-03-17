@@ -11,7 +11,7 @@ import {
   useLatestAnalysisSnapshot,
   useTenders,
 } from "@/hooks/useTenders";
-import { formatKES } from "@/lib/api";
+import { downloadTendersCsv, formatKES } from "@/lib/api";
 import type { RiskCategory } from "@/lib/types";
 import { TenderCard } from "@/components/TenderCard";
 import { StatCard } from "@/components/ui/StatCard";
@@ -22,6 +22,8 @@ import {
   FileText,
   Clock,
   CheckCircle,
+  Download,
+  Loader2,
 } from "lucide-react";
 
 type FilterTab = "ALL" | RiskCategory;
@@ -36,6 +38,7 @@ const FILTER_TABS: { key: FilterTab; label: string; dot?: string }[] = [
 function DashboardContent() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<FilterTab>("ALL");
+  const [exportingCsv, setExportingCsv] = useState(false);
 
   const { stats, loading: statsLoading } = useDashboardStats();
   const { snapshot, loading: snapshotLoading } = useLatestAnalysisSnapshot();
@@ -54,6 +57,18 @@ function DashboardContent() {
       ? "Lazy graph loaded"
       : "Graph loaded"
     : "Graph not preloaded";
+
+  const handleExportCsv = async () => {
+    setExportingCsv(true);
+    try {
+      await downloadTendersCsv({
+        riskLevel: activeTab === "ALL" ? undefined : activeTab,
+        sortBy: "risk",
+      });
+    } finally {
+      setExportingCsv(false);
+    }
+  };
 
   return (
     <div className="min-h-screen pb-12">
@@ -177,9 +192,19 @@ function DashboardContent() {
               Prioritized by anomaly signals, bid behavior, and entity relationships.
             </p>
           </div>
-          <span className="text-xs text-muted-foreground">
-            {tendersLoading ? "Loading" : `${tenders.length} results`}
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground">
+              {tendersLoading ? "Loading" : `${tenders.length} results`}
+            </span>
+            <button
+              onClick={handleExportCsv}
+              disabled={exportingCsv || tendersLoading}
+              className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.15em] text-muted-foreground transition-colors hover:bg-secondary/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {exportingCsv ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+              Export CSV
+            </button>
+          </div>
         </div>
         <div className="space-y-3">
           {tendersLoading ? (

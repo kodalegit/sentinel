@@ -325,6 +325,7 @@ def generate_synthetic_data() -> dict:
             brs_number=c.brs_number,
             directors=dir_list,
             ownership=None,
+            source_system="synthetic",
         )
 
     # Tenders

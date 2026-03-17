@@ -460,6 +460,9 @@ export function GraphExplorerContent() {
               <p className="text-xs text-muted-foreground max-w-xl">
                 Search entities, isolate suspicious ties, and inspect focused neighborhoods instead of deciphering the whole network at once.
               </p>
+              <p className="mt-2 max-w-2xl text-xs text-muted-foreground">
+                Suspicion scores combine co-bidding, suspicious links, and confirmed shared attributes so investigators can see why a cluster is ranked before opening a case.
+              </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
@@ -808,6 +811,9 @@ export function GraphExplorerContent() {
                   {path.length} {path.length === 1 ? "hop" : "hops"}
                   {path.edges.some((edge) => edge.suspicious) ? " · includes suspicious links" : " · no suspicious links on this path"}
                 </p>
+                <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                  Use this view to explain why two entities matter together before escalating: every hop is a concrete relationship, not a model guess.
+                </p>
               </div>
             </div>
           )}
@@ -969,6 +975,9 @@ export function GraphExplorerContent() {
                   </span>
                   <SuspicionBadge score={selectedCluster.suspicion_score} />
                 </div>
+                <p className="mb-3 text-[11px] leading-relaxed text-muted-foreground">
+                  Suspicion score reflects cluster size, repeated co-bidding, suspicious graph links, and shared phones, addresses, or directors that survive Sentinel&apos;s noise filters.
+                </p>
 
                 <div className="space-y-3 text-xs">
                   <div>
@@ -1150,6 +1159,9 @@ export function GraphExplorerContent() {
 
                   <div className="text-muted-foreground pt-1 border-t border-border/40">
                     Co-bid on <span className="text-foreground/70 font-medium">{selectedCluster.co_bid_count}</span> tenders
+                  </div>
+                  <div className="rounded-lg border border-border/40 bg-background/40 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                    Why this matters: clusters with repeated bidding overlap and verified relationship signals are stronger candidates for investigator review than one-off shared records.
                   </div>
                 </div>
               </div>

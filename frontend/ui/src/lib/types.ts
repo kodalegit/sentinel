@@ -74,7 +74,7 @@ export interface Bid {
   id: string;
   tender_id: string;
   company_id: string;
-  amount: number;
+  amount: number | null;
   submission_date: string;
   technical_score: number | null;
 }
@@ -106,6 +106,41 @@ export interface TenderDetail {
   risk: RiskScore;
   bids: Bid[];
   winning_company: Company | null;
+}
+
+export interface TenderEvidencePack {
+  tender_id: string;
+  tender_summary: Record<string, unknown>;
+  evidence_profile: {
+    source_system: string | null;
+    tender_has_estimated_value: boolean;
+    tender_has_awarded_amount: boolean;
+    tender_has_awarded_supplier: boolean;
+    bidder_participation_known: boolean;
+    bid_pricing_disclosed: boolean;
+    pricing_coverage_pct: number;
+    graph_path_available: boolean;
+    winner_company: Record<string, unknown>;
+    agent_guidance: Record<string, boolean>;
+  };
+  risk_factors: Array<{
+    type: string;
+    description: string;
+    weight: number;
+    evidence: string[];
+  }>;
+  key_metrics: Record<string, unknown>;
+  bidder_context: {
+    participant_count: number;
+    priced_bid_count: number;
+    participation_only_count: number;
+    pricing_disclosed: boolean;
+    pricing_coverage_pct: number;
+    analysis_note: string;
+    participants: Array<Record<string, unknown>>;
+  };
+  graph_paths: Array<Record<string, unknown>>;
+  recommendations: string[];
 }
 
 // Graph
@@ -204,6 +239,8 @@ export interface CommunityCluster {
   win_pattern: {
     total_bids: number;
     bids_per_company: Record<string, number>;
+    total_awards: number;
+    awards_per_company: Record<string, number>;
   };
 }
 
@@ -341,6 +378,12 @@ export interface IngestionResponse {
   counts: Record<string, number>;
 }
 
+export interface PPIPSyncResponse {
+  status: string;
+  fiscal_year: string;
+  stats: Record<string, number>;
+}
+
 export interface RecomputeResponse {
   status: string;
   stats: {
@@ -375,6 +418,13 @@ export interface KnowledgeDocument {
   chunk_count: number;
   uploaded_by: string | null;
   created_at: string;
+}
+
+export interface KnowledgeDocumentUpdate {
+  title?: string;
+  description?: string | null;
+  category?: KnowledgeDocumentCategory;
+  source_url?: string | null;
 }
 
 export interface KnowledgeChunk {
@@ -484,4 +534,26 @@ export interface AgentSettingsUpdate {
   llm_temperature?: number;
   embedding_provider?: string;
   embedding_model?: string;
+}
+
+export interface LLMModelCatalogEntry {
+  value: string;
+  label: string;
+  description: string | null;
+  recommended: boolean;
+  deprecated: boolean;
+}
+
+export interface LLMProviderCatalog {
+  value: string;
+  label: string;
+  description: string | null;
+  requires_api_key: boolean;
+  supports_base_url: boolean;
+  supports_custom_model: boolean;
+  models: LLMModelCatalogEntry[];
+}
+
+export interface LLMModelCatalogResponse {
+  providers: LLMProviderCatalog[];
 }

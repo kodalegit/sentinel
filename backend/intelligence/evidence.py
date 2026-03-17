@@ -25,8 +25,10 @@ class EvidencePack:
 
     tender_id: str
     tender_summary: dict
+    evidence_profile: dict
     risk_factors: list[dict]
     key_metrics: dict
+    bidder_context: dict
     graph_paths: list[dict]
     recommendations: list[str]
 
@@ -45,6 +47,13 @@ def build_evidence_pack(
 
     # Tender summary
     winning_company = companies.get(tender.awarded_to) if tender.awarded_to else None
+    bidder_count = len({b.company_id for b in bids})
+    priced_bid_amounts = [b.amount for b in bids if b.amount is not None]
+    participation_only_count = len([b for b in bids if b.amount is None])
+    winner_quality = (
+        (winning_company.data_quality_flags or {}) if winning_company else {}
+    )
+    winner_source_expectations = winner_quality.get("source_expectations", {})
     tender_summary = {
         "reference": tender.reference_number,
         "title": tender.title,
@@ -56,7 +65,119 @@ def build_evidence_pack(
         "deadline": str(tender.deadline),
         "status": tender.status.value,
         "winning_company": winning_company.name if winning_company else None,
-        "bidder_count": len(bids),
+        "bidder_count": bidder_count,
+        "priced_bid_count": len(priced_bid_amounts),
+        "participation_only_bid_count": participation_only_count,
+        "pricing_disclosed": len(priced_bid_amounts) > 0,
+        "source_system": tender.source_system,
+    }
+
+    bidder_context = {
+        "participant_count": bidder_count,
+        "priced_bid_count": len(priced_bid_amounts),
+        "participation_only_count": participation_only_count,
+        "pricing_disclosed": len(priced_bid_amounts) > 0,
+        "pricing_coverage_pct": (
+            round((len(priced_bid_amounts) / bidder_count) * 100)
+            if bidder_count > 0
+            else 0
+        ),
+        "analysis_note": (
+            "All known participant records include disclosed bid pricing."
+            if bidder_count > 0 and len(priced_bid_amounts) == bidder_count
+            else (
+                "Bidder participation is known, but some or all participant prices were not disclosed by the source."
+                if bidder_count > 0
+                else "No bidder participation records were available for this tender."
+            )
+        ),
+        "participants": [
+            {
+                "company_id": bid.company_id,
+                "company_name": (
+                    companies.get(bid.company_id).name
+                    if companies.get(bid.company_id)
+                    else None
+                ),
+                "amount": bid.amount,
+                "has_pricing": bid.amount is not None,
+                "technical_score": bid.technical_score,
+                "submission_date": str(bid.submission_date),
+                "is_winner": tender.awarded_to == bid.company_id,
+            }
+            for bid in bids
+        ],
+    }
+
+    evidence_profile = {
+        "source_system": tender.source_system,
+        "tender_has_estimated_value": tender.estimated_value is not None,
+        "tender_has_awarded_amount": tender.awarded_amount is not None,
+        "tender_has_awarded_supplier": tender.awarded_to is not None,
+        "bidder_participation_known": bidder_count > 0,
+        "bid_pricing_disclosed": len(priced_bid_amounts) > 0,
+        "pricing_coverage_pct": bidder_context["pricing_coverage_pct"],
+        "graph_path_available": False,
+        "winner_company": {
+            "name": winning_company.name if winning_company else None,
+            "source_system": winning_company.source_system if winning_company else None,
+            "quality_score": (
+                winner_quality.get("quality_score") if winning_company else None
+            ),
+            "completeness_score": (
+                winner_quality.get("completeness_score") if winning_company else None
+            ),
+            "verification_score": (
+                winner_quality.get("verification_score") if winning_company else None
+            ),
+            "address_quality": (
+                winner_quality.get("address_quality") if winning_company else None
+            ),
+            "postal_quality": (
+                winner_quality.get("postal_quality") if winning_company else None
+            ),
+            "has_brs": winner_quality.get("has_brs") if winning_company else None,
+            "has_directors": (
+                winner_quality.get("has_directors") if winning_company else None
+            ),
+            "director_count": (
+                winner_quality.get("director_count") if winning_company else None
+            ),
+            "has_ownership": (
+                winner_quality.get("has_ownership") if winning_company else None
+            ),
+            "owner_count": (
+                winner_quality.get("owner_count") if winning_company else None
+            ),
+            "has_email": winner_quality.get("has_email") if winning_company else None,
+            "email_is_public_webmail": (
+                winner_quality.get("email_is_public_webmail")
+                if winning_company
+                else None
+            ),
+            "email_is_generic_inbox": (
+                winner_quality.get("email_is_generic_inbox")
+                if winning_company
+                else None
+            ),
+            "source_expectations": (
+                winner_source_expectations if winning_company else {}
+            ),
+            "interpretation": (
+                "Winner profile is comparatively well supported by the source."
+                if winner_quality.get("quality_score", 0) >= 70
+                else (
+                    "Winner profile is only partially evidenced; treat missing fields as lower-confidence evidence rather than proof of wrongdoing."
+                    if winning_company
+                    else "No awarded supplier profile is available in the current evidence pack."
+                )
+            ),
+        },
+        "agent_guidance": {
+            "interpret_sparse_fields_cautiously": True,
+            "distinguish_participation_from_priced_bids": True,
+            "avoid_treating_missing_source_fields_as_proof": True,
+        },
     }
 
     # Risk factors
@@ -92,15 +213,16 @@ def build_evidence_pack(
     if isinstance(tender.published_date, date) and isinstance(tender.deadline, date):
         timeline_days = (tender.deadline - tender.published_date).days
 
-    bid_amounts = [b.amount for b in bids]
     key_metrics = {
         "price_deviation_pct": round(price_deviation, 1),
         "company_age_days": company_age_days,
         "timeline_days": timeline_days,
-        "bidder_count": len(bids),
+        "bidder_count": bidder_count,
+        "priced_bid_count": len(priced_bid_amounts),
+        "pricing_disclosed": len(priced_bid_amounts) > 0,
         "bid_range": {
-            "min": min(bid_amounts) if bid_amounts else None,
-            "max": max(bid_amounts) if bid_amounts else None,
+            "min": min(priced_bid_amounts) if priced_bid_amounts else None,
+            "max": max(priced_bid_amounts) if priced_bid_amounts else None,
         },
         "risk_score": risk.overall,
         "risk_category": risk.category.value,
@@ -136,6 +258,8 @@ def build_evidence_pack(
             except nx.NetworkXNoPath:
                 pass
 
+    evidence_profile["graph_path_available"] = len(graph_paths) > 0
+
     # Recommendations
     recommendations = []
     if risk.recommendation:
@@ -146,8 +270,10 @@ def build_evidence_pack(
     return EvidencePack(
         tender_id=tender.id,
         tender_summary=tender_summary,
+        evidence_profile=evidence_profile,
         risk_factors=risk_factors,
         key_metrics=key_metrics,
+        bidder_context=bidder_context,
         graph_paths=graph_paths,
         recommendations=recommendations,
     )
@@ -286,6 +412,16 @@ def _build_tender_block(
         return None, None
     tender = app_state.tenders[tender_id]
     risk = app_state.risk_scores.get(tender_id)
+    bids = app_state.bids_by_tender.get(tender_id, []) if app_state else []
+    bidder_count = len({bid.company_id for bid in bids})
+    priced_bid_count = len([bid for bid in bids if bid.amount is not None])
+    participation_only_count = len([bid for bid in bids if bid.amount is None])
+    winning_company = (
+        app_state.companies.get(tender.awarded_to)
+        if app_state and tender.awarded_to in getattr(app_state, "companies", {})
+        else None
+    )
+    winner_quality = winning_company.data_quality_flags or {} if winning_company else {}
     title = f"Tender: {tender.reference_number} - {tender.title}"
     excerpt = _truncate_text(tender.title)
     artifact = _register_context_source(
@@ -311,11 +447,45 @@ def _build_tender_block(
         f"Procuring Entity: {tender.procuring_entity}",
         f"Category: {tender.category}",
         f"Status: {tender.status.value}",
+        f"Source System: {tender.source_system or 'unknown'}",
         f"Estimated Value: {estimated_value}",
         f"Awarded Amount: {awarded_amount}",
+        f"Bidder Participation Known: {'Yes' if bidder_count > 0 else 'No'}",
+        f"Known Participants: {bidder_count}",
+        f"Disclosed Bid Prices: {priced_bid_count}",
+        f"Participation-Only Records: {participation_only_count}",
+        (
+            "Pricing Disclosure: Full"
+            if bidder_count > 0 and priced_bid_count == bidder_count
+            else (
+                "Pricing Disclosure: Partial or none"
+                if bidder_count > 0
+                else "Pricing Disclosure: No bidder roster available"
+            )
+        ),
     ]
     if risk:
         body_lines.append(f"Risk Score: {risk.overall}/100 ({risk.category.value})")
+    if winning_company:
+        body_lines.extend(
+            [
+                f"Awarded Supplier: {winning_company.name}",
+                f"Winner Evidence Quality Score: {winner_quality.get('quality_score', 'Unknown')}",
+                f"Winner Completeness Score: {winner_quality.get('completeness_score', 'Unknown')}",
+                f"Winner Verification Score: {winner_quality.get('verification_score', 'Unknown')}",
+                f"Winner Address Quality: {winner_quality.get('address_quality', 'Unknown')}",
+                (
+                    "Winner Email Type: Public webmail"
+                    if winner_quality.get("email_is_public_webmail") is True
+                    else (
+                        "Winner Email Type: Generic inbox"
+                        if winner_quality.get("email_is_generic_inbox") is True
+                        else "Winner Email Type: Corporate or not recorded"
+                    )
+                ),
+                "Interpretation Note: Missing supplier fields can reflect source sparsity rather than misconduct; distinguish low evidence coverage from affirmative risk signals.",
+            ]
+        )
     return (
         _format_context_block(
             artifact.marker,
@@ -400,8 +570,11 @@ def _build_link_block(
             ),
         ]
     elif evidence_type == "RISK_FACTOR":
+        tender_id, _, factor_key = reference_id.partition(":")
         factor_type = metadata.get("type") or reference_id.split(":")[-1] or "UNKNOWN"
-        chunk_id = f"risk_factor:{reference_id}"
+        if tender_id and factor_key:
+            reference_id = tender_id
+            chunk_id = f"risk_factor:{tender_id}:{factor_key}"
         body_lines = [
             f"Type: {factor_type}",
             f"Weight: {metadata.get('weight') if metadata.get('weight') is not None else 'Unknown'}",

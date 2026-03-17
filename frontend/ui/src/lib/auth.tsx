@@ -13,6 +13,8 @@ import React, {
   useCallback,
 } from "react";
 
+import { appQueryClient } from "@/components/QueryProvider";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export type UserRole = "auditor" | "supervisor" | "admin" | "system";
@@ -107,6 +109,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Clear invalid tokens
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(REFRESH_KEY);
+        appQueryClient.clear();
         setState({ user: null, accessToken: null, isLoading: false });
         return;
       }
@@ -130,6 +133,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const data = await res.json();
+    appQueryClient.clear();
     localStorage.setItem(TOKEN_KEY, data.access_token);
     localStorage.setItem(REFRESH_KEY, data.refresh_token);
 
@@ -142,6 +146,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(REFRESH_KEY);
+    appQueryClient.clear();
     setState({ user: null, accessToken: null, isLoading: false });
   }, []);
 

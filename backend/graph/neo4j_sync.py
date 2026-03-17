@@ -305,7 +305,8 @@ async def _create_bid_edges(
         {
             "company_id": b.company_id,
             "tender_id": b.tender_id,
-            "amount": float(b.amount) if b.amount else 0.0,
+            "amount": float(b.amount) if b.amount is not None else None,
+            "has_pricing": b.amount is not None,
             "is_winner": (
                 (tenders.get(b.tender_id).awarded_to == b.company_id)
                 if tenders.get(b.tender_id)
@@ -320,7 +321,12 @@ async def _create_bid_edges(
         UNWIND $bids AS b
         MATCH (c:Company {id: b.company_id})
         MATCH (t:Tender {id: b.tender_id})
-        CREATE (c)-[r:BID_ON {amount: b.amount, is_winner: b.is_winner}]->(t)
+        CREATE (c)-[r:BID_ON]->(t)
+        SET r.is_winner = b.is_winner,
+            r.has_pricing = b.has_pricing
+        FOREACH (_ IN CASE WHEN b.amount IS NULL THEN [] ELSE [1] END |
+            SET r.amount = b.amount
+        )
         RETURN count(r) as count
     """,
         bids=bid_data,
@@ -677,7 +683,8 @@ async def _upsert_bid_edges(
         {
             "company_id": b.company_id,
             "tender_id": b.tender_id,
-            "amount": float(b.amount) if b.amount else 0.0,
+            "amount": float(b.amount) if b.amount is not None else None,
+            "has_pricing": b.amount is not None,
             "is_winner": (
                 (tenders.get(b.tender_id).awarded_to == b.company_id)
                 if tenders.get(b.tender_id)
@@ -693,8 +700,14 @@ async def _upsert_bid_edges(
         MATCH (c:Company {id: b.company_id})
         MATCH (t:Tender {id: b.tender_id})
         MERGE (c)-[r:BID_ON]->(t)
-        SET r.amount = b.amount,
-            r.is_winner = b.is_winner
+        SET r.is_winner = b.is_winner,
+            r.has_pricing = b.has_pricing
+        FOREACH (_ IN CASE WHEN b.amount IS NULL THEN [] ELSE [1] END |
+            SET r.amount = b.amount
+        )
+        FOREACH (_ IN CASE WHEN b.amount IS NULL THEN [1] ELSE [] END |
+            REMOVE r.amount
+        )
         RETURN count(r) as count
     """,
         bids=bid_data,

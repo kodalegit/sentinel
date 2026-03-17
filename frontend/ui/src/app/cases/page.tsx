@@ -8,7 +8,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useCases, useCaseStats } from "@/hooks/useTenders";
-import { getWorkload } from "@/lib/api";
+import { downloadCasesCsv, getWorkload } from "@/lib/api";
 import { AuthGuard } from "@/components/AuthGuard";
 import { useAuth } from "@/lib/auth";
 import {
@@ -20,6 +20,7 @@ import {
   ArrowUpRight,
   XCircle,
   Users,
+  Download,
 } from "lucide-react";
 import type {
   CaseWithTender,
@@ -76,6 +77,7 @@ function CasesPageContent() {
   const { isSupervisorOrAdmin } = useAuth();
   const [statusFilter, setStatusFilter] = useState<CaseStatus | "ALL">("ALL");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
+  const [exportingCsv, setExportingCsv] = useState(false);
 
   const { cases, loading } = useCases(statusFilter);
   const { stats } = useCaseStats();
@@ -107,6 +109,18 @@ function CasesPageContent() {
     { key: "DISMISSED", label: "Dismissed", count: stats?.dismissed },
   ];
 
+  const handleExportCsv = async () => {
+    setExportingCsv(true);
+    try {
+      await downloadCasesCsv({
+        status: statusFilter === "ALL" ? undefined : statusFilter,
+        assignedToId: assigneeFilter === "all" ? undefined : assigneeFilter,
+      });
+    } finally {
+      setExportingCsv(false);
+    }
+  };
+
   return (
     <div className="min-h-screen pb-12">
       {/* Page header */}
@@ -122,9 +136,19 @@ function CasesPageContent() {
                 Manage escalations, track decisions, and collaborate on procurement investigations.
               </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Click any case to view full details
-            </p>
+            <div className="flex items-center gap-3">
+              <p className="text-xs text-muted-foreground">
+                Click any case to view full details
+              </p>
+              <button
+                onClick={handleExportCsv}
+                disabled={exportingCsv || loading}
+                className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.15em] text-muted-foreground transition-colors hover:bg-secondary/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {exportingCsv ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                Export CSV
+              </button>
+            </div>
           </div>
         </div>
       </header>

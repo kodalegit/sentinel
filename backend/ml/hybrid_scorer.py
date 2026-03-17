@@ -113,7 +113,7 @@ class HybridRiskScorer:
 
         # Use Louvain communities for cartel detection (unified algorithm)
         if communities is None:
-            communities = detect_communities(graph, bids, companies)
+            communities = detect_communities(graph, tenders, bids, companies)
         cartel_clusters = get_cartel_sets(communities)
 
         results = {}

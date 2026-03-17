@@ -5,22 +5,38 @@ Translates the existing in-memory synthetic data into PostgreSQL records.
 
 import asyncio
 import uuid
-from datetime import datetime
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from db.config import async_session, engine, Base
+from sqlalchemy import delete, select
+from config import settings
+from db.config import async_session
 from db.models import (
+    AgentSettingDB,
+    AnalysisRunDB,
+    AuditLogDB,
+    CaseDB,
+    CaseEvidenceLinkDB,
+    CaseEventDB,
+    CaseNoteDB,
+    CaseNotificationDB,
+    ChatMessageDB,
+    ChatThreadDB,
     CompanyDB,
+    CompanyGraphFeatureDB,
     DirectorDB,
     OfficialDB,
     OfficialRelationshipDB,
     TenderDB,
     BidDB,
     CompanyDirectorDB,
+    ContractDB,
+    KnowledgeChunkDB,
+    KnowledgeDocumentDB,
+    OwnershipDB,
+    RiskAssessmentDB,
     UserDB,
 )
 from data.synthetic import generate_synthetic_data
+from graph.neo4j_driver import close_neo4j_driver, get_neo4j_session
 
 
 # Stable UUID mapping: old string IDs -> UUIDs (deterministic for consistency)
@@ -228,12 +244,72 @@ async def seed_users():
     )
 
 
-async def reset_and_seed():
-    """Drop all tables, recreate, and seed."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
+async def clear_neo4j_graph():
+    if not settings.neo4j_enabled:
+        return
+    try:
+        async with get_neo4j_session() as session:
+            await session.run("MATCH (n) DETACH DELETE n")
+        await close_neo4j_driver()
+        print("Cleared Neo4j graph.")
+    except Exception as exc:
+        print(f"Neo4j reset skipped: {exc}")
+
+
+async def reset_application_data(
+    *,
+    clear_knowledge: bool = False,
+    clear_agent_settings: bool = False,
+    clear_users: bool = False,
+):
+    async with async_session() as db:
+        async with db.begin():
+            reset_models = [
+                ChatMessageDB,
+                ChatThreadDB,
+                CaseNotificationDB,
+                CaseEvidenceLinkDB,
+                CaseEventDB,
+                CaseNoteDB,
+                CaseDB,
+                CompanyGraphFeatureDB,
+                RiskAssessmentDB,
+                AnalysisRunDB,
+                AuditLogDB,
+                ContractDB,
+                OwnershipDB,
+                BidDB,
+                TenderDB,
+                OfficialRelationshipDB,
+                CompanyDirectorDB,
+                OfficialDB,
+                DirectorDB,
+                CompanyDB,
+            ]
+            if clear_knowledge:
+                reset_models = [KnowledgeChunkDB, KnowledgeDocumentDB, *reset_models]
+            if clear_agent_settings:
+                reset_models = [AgentSettingDB, *reset_models]
+            for model in reset_models:
+                await db.execute(delete(model))
+            if clear_users:
+                await db.execute(delete(UserDB))
+    await clear_neo4j_graph()
     await seed_users()
+    print("Application data reset successfully.")
+
+
+async def reset_and_seed(
+    *,
+    clear_knowledge: bool = False,
+    clear_agent_settings: bool = False,
+    clear_users: bool = False,
+):
+    await reset_application_data(
+        clear_knowledge=clear_knowledge,
+        clear_agent_settings=clear_agent_settings,
+        clear_users=clear_users,
+    )
     await seed_database()
     print("Database reset and seeded successfully.")
 

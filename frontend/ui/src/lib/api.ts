@@ -7,6 +7,7 @@ import type {
   DashboardStats,
   TenderWithRisk,
   TenderDetail,
+  TenderEvidencePack,
   GraphData,
   GraphPathResult,
   GraphSearchResult,
@@ -17,12 +18,14 @@ import type {
   RiskCategory,
   TenderStatus,
   IngestionResponse,
+  PPIPSyncResponse,
   RecomputeResponse,
   CaseEvent,
   CaseEvidenceLink,
   CaseNotification,
   WorkloadItem,
   KnowledgeDocument,
+  KnowledgeDocumentUpdate,
   KnowledgeChunk,
   KnowledgeStats,
   ChatThread,
@@ -30,6 +33,7 @@ import type {
   ChatStreamEvent,
   AgentSettings,
   AgentSettingsUpdate,
+  LLMModelCatalogResponse,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -59,6 +63,22 @@ async function refreshTokens(): Promise<string | null> {
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem(TOKEN_KEY);
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function getFilenameFromDisposition(
+  contentDisposition: string | null,
+  fallback: string,
+): string {
+  if (!contentDisposition) return fallback;
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+  const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+  if (filenameMatch?.[1]) {
+    return filenameMatch[1];
+  }
+  return fallback;
 }
 
 async function fetchApi<T>(endpoint: string): Promise<T> {
@@ -176,6 +196,63 @@ async function deleteApi(endpoint: string): Promise<void> {
   }
 }
 
+async function downloadApiFile(
+  endpoint: string,
+  fallbackFilename: string,
+): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    headers: getAuthHeaders(),
+  });
+
+  if (response.status === 401) {
+    const newToken = await refreshTokens();
+    if (newToken) {
+      const retried = await fetch(`${API_BASE}${endpoint}`, {
+        headers: { Authorization: `Bearer ${newToken}` },
+      });
+      if (retried.ok) {
+        return {
+          blob: await retried.blob(),
+          filename: getFilenameFromDisposition(
+            retried.headers.get("content-disposition"),
+            fallbackFilename,
+          ),
+        };
+      }
+    }
+    if (typeof window !== "undefined") window.location.href = "/login";
+    throw new Error("Session expired. Please log in again.");
+  }
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || `API error: ${response.status}`);
+  }
+
+  return {
+    blob: await response.blob(),
+    filename: getFilenameFromDisposition(
+      response.headers.get("content-disposition"),
+      fallbackFilename,
+    ),
+  };
+}
+
+export async function saveApiFile(
+  endpoint: string,
+  fallbackFilename: string,
+): Promise<void> {
+  const { blob, filename } = await downloadApiFile(endpoint, fallbackFilename);
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(url);
+}
+
 export async function getDashboardStats(): Promise<DashboardStats> {
   return fetchApi<DashboardStats>("/api/stats");
 }
@@ -203,6 +280,35 @@ export async function getTenders(options?: {
 
 export async function getTenderDetail(tenderId: string): Promise<TenderDetail> {
   return fetchApi<TenderDetail>(`/api/tenders/${tenderId}`);
+}
+
+export async function getTenderEvidencePack(
+  tenderId: string,
+): Promise<TenderEvidencePack> {
+  return fetchApi<TenderEvidencePack>(`/api/tenders/${tenderId}/evidence`);
+}
+
+export async function downloadTenderRiskReport(tenderId: string): Promise<void> {
+  return saveApiFile(
+    `/api/tenders/${tenderId}/report.pdf`,
+    `tender-risk-report-${tenderId}.pdf`,
+  );
+}
+
+export async function downloadTendersCsv(options?: {
+  riskLevel?: RiskCategory;
+  status?: TenderStatus;
+  sortBy?: "risk" | "value" | "date";
+}): Promise<void> {
+  const params = new URLSearchParams();
+  if (options?.riskLevel) params.set("risk_level", options.riskLevel);
+  if (options?.status) params.set("status", options.status);
+  if (options?.sortBy) params.set("sort_by", options.sortBy);
+  const queryString = params.toString();
+  return saveApiFile(
+    `/api/tenders/export.csv${queryString ? `?${queryString}` : ""}`,
+    "sentinel-tenders.csv",
+  );
 }
 
 export async function getTenderGraph(
@@ -275,12 +381,30 @@ export async function getGraphPath(
 export async function getCases(options?: {
   status?: string;
   priority?: string;
+  assignedToId?: string;
 }): Promise<CaseWithTender[]> {
   const params = new URLSearchParams();
   if (options?.status) params.set("status", options.status);
   if (options?.priority) params.set("priority", options.priority);
+  if (options?.assignedToId) params.set("assigned_to_id", options.assignedToId);
   const qs = params.toString();
   return fetchApi<CaseWithTender[]>(`/api/cases${qs ? `?${qs}` : ""}`);
+}
+
+export async function downloadCasesCsv(options?: {
+  status?: string;
+  priority?: string;
+  assignedToId?: string;
+}): Promise<void> {
+  const params = new URLSearchParams();
+  if (options?.status) params.set("status", options.status);
+  if (options?.priority) params.set("priority", options.priority);
+  if (options?.assignedToId) params.set("assigned_to_id", options.assignedToId);
+  const queryString = params.toString();
+  return saveApiFile(
+    `/api/cases/export.csv${queryString ? `?${queryString}` : ""}`,
+    "sentinel-cases.csv",
+  );
 }
 
 export async function getCaseStats(): Promise<CaseStats> {
@@ -399,8 +523,8 @@ export async function markNotificationRead(
 
 // --- Ingestion ---
 
-export async function syncPPIP(fiscalYear: string): Promise<IngestionResponse> {
-  return postApi<IngestionResponse>("/api/ingest/ppip/sync", {
+export async function syncPPIP(fiscalYear: string): Promise<PPIPSyncResponse> {
+  return postApi<PPIPSyncResponse>("/api/ingest/ppip/sync", {
     fiscal_year: fiscalYear,
   });
 }
@@ -562,6 +686,13 @@ export async function uploadKnowledgeDocument(
   return response.json();
 }
 
+export async function updateKnowledgeDocument(
+  id: string,
+  data: KnowledgeDocumentUpdate,
+): Promise<KnowledgeDocument> {
+  return patchApi<KnowledgeDocument>(`/api/knowledge/documents/${id}`, data);
+}
+
 export async function deleteKnowledgeDocument(id: string): Promise<void> {
   const response = await fetch(`${API_BASE}/api/knowledge/documents/${id}`, {
     method: "DELETE",
@@ -612,6 +743,7 @@ export async function* streamChat(
   options?: {
     threadId?: string;
     action?: StreamAction;
+    signal?: AbortSignal;
   }
 ): AsyncGenerator<ChatStreamEvent> {
   const response = await fetch(`${API_BASE}/api/cases/${caseId}/chat/stream`, {
@@ -625,6 +757,7 @@ export async function* streamChat(
       thread_id: options?.threadId,
       action: options?.action || "chat",
     }),
+    signal: options?.signal,
   });
 
   if (!response.ok) {
@@ -637,24 +770,28 @@ export async function* streamChat(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
 
-    for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        try {
-          const event = JSON.parse(line.slice(6)) as ChatStreamEvent;
-          yield event;
-        } catch {
-          // Ignore parse errors
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            const event = JSON.parse(line.slice(6)) as ChatStreamEvent;
+            yield event;
+          } catch {
+            // Ignore parse errors
+          }
         }
       }
     }
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -664,6 +801,10 @@ export async function* streamChat(
 
 export async function getAgentSettings(): Promise<AgentSettings> {
   return fetchApi<AgentSettings>("/api/settings/llm");
+}
+
+export async function getLLMModelCatalog(): Promise<LLMModelCatalogResponse> {
+  return fetchApi<LLMModelCatalogResponse>("/api/settings/llm/catalog");
 }
 
 export async function updateAgentSettings(settings: AgentSettingsUpdate): Promise<AgentSettings> {
@@ -684,12 +825,14 @@ export async function updateAgentSettings(settings: AgentSettingsUpdate): Promis
   return response.json();
 }
 
-export async function testLLMConnection(): Promise<{
+export async function testLLMConnection(
+  settings?: AgentSettingsUpdate,
+): Promise<{
   success: boolean;
   provider: string;
   model: string;
   response?: string;
   error?: string;
 }> {
-  return postApi("/api/settings/llm/test", {});
+  return postApi("/api/settings/llm/test", settings ?? {});
 }

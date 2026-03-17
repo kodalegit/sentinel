@@ -21,9 +21,16 @@ TODAY = date(2025, 6, 1)
 NOW = datetime(2025, 6, 1, tzinfo=timezone.utc)
 
 
-def _tender(tid="t1", estimated_value=1_000_000.0, awarded_amount=None,
-            awarded_to=None, category="Supplies",
-            published_date=date(2025, 4, 1), deadline=TODAY, **kwargs) -> Tender:
+def _tender(
+    tid="t1",
+    estimated_value=1_000_000.0,
+    awarded_amount=None,
+    awarded_to=None,
+    category="Supplies",
+    published_date=date(2025, 4, 1),
+    deadline=TODAY,
+    **kwargs,
+) -> Tender:
     return Tender(
         id=tid,
         reference_number=f"REF-{tid}",
@@ -69,6 +76,7 @@ def _empty_graph() -> nx.Graph:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestFeatureColumns:
     def test_all_expected_columns_present(self):
@@ -177,6 +185,18 @@ class TestBidFeatures:
         ]
         df = extract_tender_features(tenders, {"c1": _company()}, bids, _empty_graph())
         assert df.loc["t1", "bidder_count"] == 3
+
+    def test_participation_only_bids_do_not_create_price_spread(self):
+        tenders = {"t1": _tender(awarded_to="c1", awarded_amount=900_000.0)}
+        bids = [
+            _bid("b1", "t1", "c1", None),
+            _bid("b2", "t1", "c2", None),
+            _bid("b3", "t1", "c3", None),
+        ]
+        df = extract_tender_features(tenders, {"c1": _company()}, bids, _empty_graph())
+        assert df.loc["t1", "bidder_count"] == 3
+        assert df.loc["t1", "bid_spread_ratio"] == pytest.approx(0.0)
+        assert df.loc["t1", "winner_margin_ratio"] == pytest.approx(0.0)
 
     def test_win_rate(self):
         """Company c1 wins 1 out of 2 tenders → win_rate = 0.5."""

@@ -141,6 +141,7 @@ def build_procurement_graph(
                 bid.tender_id,
                 relationship=EdgeType.WON.value if is_winner else EdgeType.BID_ON.value,
                 amount=bid.amount,
+                has_pricing=bid.amount is not None,
                 suspicious=False,
             )
 

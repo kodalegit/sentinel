@@ -19,10 +19,12 @@ from db.models import (
     CompanyDB,
     DirectorDB,
     TenderDB,
+    BidDB,
     ContractDB,
     OwnershipDB,
     CompanyDirectorDB,
 )
+from connectors.normalize import normalize_datetime
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ingest", tags=["ingestion"])
@@ -76,6 +78,44 @@ async def _persist_company(db, company) -> Optional[CompanyDB]:
     )
     existing = result.scalar_one_or_none()
     if existing:
+        updated = False
+
+        def maybe_fill(attr_name, value):
+            nonlocal updated
+            if value in (None, ""):
+                return
+            current = getattr(existing, attr_name)
+            if current in (None, ""):
+                setattr(existing, attr_name, value)
+                updated = True
+
+        maybe_fill("name", company.name)
+        maybe_fill("registration_date", company.registration_date)
+        maybe_fill("address", company.address)
+        maybe_fill("phone", company.phone)
+        maybe_fill("physical_address", company.physical_address)
+        maybe_fill("postal_address", company.postal_address)
+        maybe_fill("postal_code", company.postal_code)
+        maybe_fill("contact_email", company.contact_email)
+        maybe_fill("supplier_type", company.supplier_type)
+        maybe_fill("brs_number", company.brs_number)
+        maybe_fill("egp_registration_number", company.egp_registration_number)
+        maybe_fill("source_system", company.source_system)
+        maybe_fill("source_record_id", company.source_record_id)
+
+        incoming_quality = company.data_quality_flags or {}
+        existing_quality = existing.data_quality_flags or {}
+        if incoming_quality and (
+            not existing_quality
+            or incoming_quality.get("quality_score", 0)
+            > existing_quality.get("quality_score", 0)
+        ):
+            existing.data_quality_flags = incoming_quality
+            updated = True
+
+        if updated:
+            existing.ingested_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await db.flush()
         return existing
 
     db_company = CompanyDB(
@@ -110,6 +150,27 @@ async def _persist_tender(db, tender) -> Optional[TenderDB]:
     )
     existing = result.scalar_one_or_none()
     if existing:
+        updated = False
+        if tender.awarded_to and existing.awarded_to is None:
+            existing.awarded_to = tender.awarded_to
+            updated = True
+        if tender.awarded_amount and existing.awarded_amount is None:
+            existing.awarded_amount = tender.awarded_amount
+            updated = True
+        incoming_status = (
+            tender.status.value if hasattr(tender.status, "value") else tender.status
+        )
+        if existing.status != incoming_status and incoming_status == "AWARDED":
+            existing.status = incoming_status
+            updated = True
+        if tender.ocds_id and not existing.ocds_id:
+            existing.ocds_id = tender.ocds_id
+            updated = True
+        if tender.source_record_id and not existing.source_record_id:
+            existing.source_record_id = tender.source_record_id
+            updated = True
+        if updated:
+            await db.flush()
         return existing
 
     db_tender = TenderDB(
@@ -140,6 +201,43 @@ async def _persist_tender(db, tender) -> Optional[TenderDB]:
     return db_tender
 
 
+async def _persist_bid(db, bid, tender_db_id, company_db_id) -> Optional[BidDB]:
+    """Persist a bid, skipping duplicates by tender/company."""
+    from sqlalchemy import select
+
+    normalized_submission_date = normalize_datetime(bid.submission_date)
+
+    result = await db.execute(
+        select(BidDB).where(
+            BidDB.tender_id == tender_db_id,
+            BidDB.company_id == company_db_id,
+        )
+    )
+    existing = result.scalar_one_or_none()
+    if existing:
+        updated = False
+        if existing.amount is None and bid.amount is not None:
+            existing.amount = bid.amount
+            updated = True
+        if existing.technical_score is None and bid.technical_score is not None:
+            existing.technical_score = bid.technical_score
+            updated = True
+        if updated:
+            await db.flush()
+        return existing
+
+    db_bid = BidDB(
+        tender_id=tender_db_id,
+        company_id=company_db_id,
+        amount=bid.amount,
+        submission_date=normalized_submission_date,
+        technical_score=bid.technical_score,
+    )
+    db.add(db_bid)
+    await db.flush()
+    return db_bid
+
+
 async def _persist_contract(
     db, contract, tender_db_id=None, company_db_id=None
 ) -> Optional[ContractDB]:
@@ -153,9 +251,12 @@ async def _persist_contract(
     if existing:
         return existing
 
+    resolved_tender_id = tender_db_id or contract.tender_id
+    resolved_company_id = company_db_id or contract.company_id
+
     db_contract = ContractDB(
-        tender_id=tender_db_id,
-        company_id=company_db_id,
+        tender_id=resolved_tender_id,
+        company_id=resolved_company_id,
         contract_number=contract.contract_number,
         title=contract.title,
         description=contract.description,
@@ -201,28 +302,61 @@ async def sync_ppip(request: PPIPSyncRequest, current_user: SupervisorOrAdmin):
 
     tenders_saved = 0
     companies_saved = 0
+    bids_saved = 0
     contracts_saved = 0
 
     async with async_session() as db:
         async with db.begin():
-            for tender in result["tenders"]:
-                saved = await _persist_tender(db, tender)
-                if saved:
+            for release_bundle in result["releases"]:
+                company_id_map: dict[str, str] = {}
+
+                for company in release_bundle["companies"]:
+                    saved_company = await _persist_company(db, company)
+                    if saved_company:
+                        company_id_map[company.id] = saved_company.id
+                        companies_saved += 1
+
+                tender = release_bundle["tender"]
+                if tender.awarded_to:
+                    tender.awarded_to = company_id_map.get(tender.awarded_to)
+                saved_tender = await _persist_tender(db, tender)
+                tender_db_id = saved_tender.id if saved_tender else None
+                if saved_tender:
                     tenders_saved += 1
 
-            for company in result["companies"]:
-                saved = await _persist_company(db, company)
-                if saved:
-                    companies_saved += 1
+                if tender_db_id:
+                    for bid in release_bundle["bids"]:
+                        company_db_id = company_id_map.get(bid.company_id)
+                        if not company_db_id:
+                            continue
+                        saved_bid = await _persist_bid(
+                            db,
+                            bid,
+                            tender_db_id=tender_db_id,
+                            company_db_id=company_db_id,
+                        )
+                        if saved_bid:
+                            bids_saved += 1
 
-            for contract in result["contracts"]:
-                saved = await _persist_contract(db, contract)
-                if saved:
-                    contracts_saved += 1
+                    for contract in release_bundle["contracts"]:
+                        company_db_id = (
+                            company_id_map.get(contract.company_id)
+                            if contract.company_id
+                            else None
+                        )
+                        saved_contract = await _persist_contract(
+                            db,
+                            contract,
+                            tender_db_id=tender_db_id,
+                            company_db_id=company_db_id,
+                        )
+                        if saved_contract:
+                            contracts_saved += 1
 
     stats = result["stats"]
     stats["tenders_persisted"] = tenders_saved
     stats["companies_persisted"] = companies_saved
+    stats["bids_persisted"] = bids_saved
     stats["contracts_persisted"] = contracts_saved
 
     return PPIPSyncResponse(

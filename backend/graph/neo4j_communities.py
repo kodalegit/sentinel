@@ -7,7 +7,7 @@ import logging
 from collections import defaultdict
 
 from graph.neo4j_driver import get_neo4j_session, check_gds_available
-from graph.communities import Cluster
+from graph.communities import Cluster, calculate_suspicion_score
 
 logger = logging.getLogger(__name__)
 GDS_PROJECTION_NAME = "procurement-graph"
@@ -95,7 +95,10 @@ async def _detect_communities_gds(min_cluster_size: int = 2) -> list[Cluster]:
             if co_bids <= 0:
                 continue
 
-            score = _calculate_suspicion_score(shared, co_bids, len(company_ids))
+            suspicious_edge_count = await _count_suspicious_edges(session, company_ids)
+            score = calculate_suspicion_score(
+                shared, co_bids, len(company_ids), suspicious_edge_count
+            )
 
             clusters.append(
                 Cluster(
@@ -106,7 +109,12 @@ async def _detect_communities_gds(min_cluster_size: int = 2) -> list[Cluster]:
                     suspicion_score=score,
                     shared_attributes=shared,
                     co_bid_count=co_bids,
-                    win_pattern={"total_bids": 0, "bids_per_company": {}},
+                    win_pattern={
+                        "total_bids": 0,
+                        "bids_per_company": {},
+                        "total_awards": 0,
+                        "awards_per_company": {},
+                    },
                 )
             )
 
@@ -168,18 +176,26 @@ async def _detect_communities_basic() -> list[Cluster]:
             if co_bids <= 0:
                 continue
 
-            score = _calculate_suspicion_score(shared, co_bids, len(company_ids))
+            suspicious_edge_count = await _count_suspicious_edges(session, company_ids)
+            score = calculate_suspicion_score(
+                shared, co_bids, len(company_ids), suspicious_edge_count
+            )
 
             clusters.append(
                 Cluster(
                     id=f"cluster-{idx}",
                     company_ids=company_ids,
                     company_names=cluster_company_names,
-                    size=len(company_ids),
+                    size=len(component),
                     suspicion_score=score,
                     shared_attributes=shared,
                     co_bid_count=co_bids,
-                    win_pattern={"total_bids": 0, "bids_per_company": {}},
+                    win_pattern={
+                        "total_bids": 0,
+                        "bids_per_company": {},
+                        "total_awards": 0,
+                        "awards_per_company": {},
+                    },
                 )
             )
             idx += 1
@@ -296,26 +312,19 @@ async def _count_co_bids(session, company_ids: list[str]) -> int:
     return record["co_bid_count"] if record else 0
 
 
-def _calculate_suspicion_score(
-    shared: dict,
-    co_bid_count: int,
-    cluster_size: int,
-) -> float:
-    """Calculate suspicion score for a cluster."""
-    score = 0.0
-
-    # Shared attributes (up to 30 points)
-    score += min(15, len(shared.get("addresses", [])) * 10)
-    score += min(10, len(shared.get("phones", [])) * 10)
-    score += min(5, len(shared.get("directors", [])) * 5)
-
-    # Co-bidding frequency (up to 30 points)
-    score += min(30, co_bid_count * 5)
-
-    # Cluster size bonus (up to 20 points)
-    score += min(20, (cluster_size - 1) * 5)
-
-    return min(100, score)
+async def _count_suspicious_edges(session, company_ids: list[str]) -> int:
+    """Count suspicious relationships within a cluster."""
+    result = await session.run(
+        """
+        MATCH (c1:Company)-[r]-(c2:Company)
+        WHERE c1.id IN $ids AND c2.id IN $ids AND c1.id < c2.id
+          AND coalesce(r.suspicious, false) = true
+        RETURN count(r) AS suspicious_edge_count
+        """,
+        ids=company_ids,
+    )
+    record = await result.single()
+    return record["suspicious_edge_count"] if record else 0
 
 
 async def find_shortest_path_neo4j(source_id: str, target_id: str) -> dict | None:
