@@ -18,7 +18,7 @@ from models import (
     TenderStatus,
     AddressQuality,
 )
-from connectors.normalize import classify_address
+from connectors.normalize import classify_address, is_postal_style_address
 from graph.builder import find_conflict_path
 
 
@@ -235,7 +235,6 @@ _SHELL_SIGNAL_WEIGHTS = {
     "address_missing": 10,  # No address at all
     "no_directors": 12,  # Zero directors listed
     "no_ownership": 8,  # No ownership info
-    "generic_email": 5,  # Gmail/Yahoo contact
     "large_value_new_company": 20,  # High contract value + new company
     "missing_registration": 10,  # No registration date
 }
@@ -281,9 +280,17 @@ def check_shell_company(tender: Tender, winner: Company | None) -> RiskFactor | 
         evidence.append("No registration date on record")
 
     # --- Signal 2: Address quality ---
-    addr = winner.physical_address or winner.address
+    physical_addr = (winner.physical_address or "").strip()
+    fallback_addr = (winner.address or "").strip()
+    addr = physical_addr or fallback_addr
     addr_quality = classify_address(addr)
-    if addr_quality == AddressQuality.PLACEHOLDER:
+    if not addr:
+        composite_score += _SHELL_SIGNAL_WEIGHTS["address_missing"]
+        signals.append("address_missing")
+        evidence.append("No address on record")
+    elif not physical_addr and is_postal_style_address(fallback_addr):
+        addr_quality = AddressQuality.UNKNOWN
+    elif addr_quality == AddressQuality.PLACEHOLDER:
         composite_score += _SHELL_SIGNAL_WEIGHTS["address_placeholder"]
         signals.append("address_placeholder")
         evidence.append(f"Placeholder address: '{addr}'")
@@ -291,10 +298,6 @@ def check_shell_company(tender: Tender, winner: Company | None) -> RiskFactor | 
         composite_score += _SHELL_SIGNAL_WEIGHTS["address_vague"]
         signals.append("address_vague")
         evidence.append(f"Vague address: '{addr}'")
-    elif addr_quality == AddressQuality.UNKNOWN:
-        composite_score += _SHELL_SIGNAL_WEIGHTS["address_missing"]
-        signals.append("address_missing")
-        evidence.append("No address on record")
 
     # --- Signal 3: Director count ---
     director_count = quality.get("director_count", len(winner.director_ids))
@@ -311,16 +314,7 @@ def check_shell_company(tender: Tender, winner: Company | None) -> RiskFactor | 
         signals.append("no_ownership")
         evidence.append("No ownership records")
 
-    # --- Signal 5: Generic email domain ---
-    if (
-        quality.get("email_is_public_webmail") is True
-        or quality.get("email_is_generic") is True
-    ):
-        composite_score += _SHELL_SIGNAL_WEIGHTS["generic_email"]
-        signals.append("generic_email")
-        evidence.append(f"Generic email: {winner.contact_email}")
-
-    # --- Signal 6: Large contract + new company ---
+    # --- Signal 5: Large contract + new company ---
     if tender.awarded_amount and tender.awarded_amount > 1_000_000:
         is_new = (
             "company_age_very_new" in signals

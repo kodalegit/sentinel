@@ -15,7 +15,9 @@ from models import (
     Bid,
     TenderStatus,
     RiskFactorType,
+    AddressQuality,
 )
+from connectors.normalize import classify_address, is_postal_style_address
 from risk.engine import (
     check_conflict_of_interest,
     check_cartel_pattern,
@@ -269,10 +271,66 @@ class TestShellCompany:
         factor = check_shell_company(tender, company)
         assert factor is None
 
+    def test_public_webmail_does_not_imply_shell_company(self):
+        tender = _tender(awarded_to="company-1", awarded_amount=800_000.0)
+        company = _company(
+            registration_date=date(2015, 1, 1),
+            address="P.O BOX 1028, NAKURU",
+            contact_email="supplier@gmail.com",
+            data_quality_flags={
+                "director_count": 1,
+                "has_ownership": True,
+                "email_is_public_webmail": True,
+                "email_is_generic": False,
+                "source_expectations": {
+                    "expects_directors": True,
+                    "expects_ownership": True,
+                },
+            },
+        )
+        factor = check_shell_company(tender, company)
+        assert factor is None
+
+    def test_postal_style_address_does_not_create_shell_signal_by_itself(self):
+        tender = _tender(awarded_to="company-1", awarded_amount=800_000.0)
+        company = _company(
+            registration_date=date(2017, 1, 1),
+            address="1233-00400 NAIROBI",
+            contact_email="supplier@yahoo.com",
+            data_quality_flags={
+                "director_count": 1,
+                "has_ownership": True,
+                "email_is_public_webmail": True,
+                "email_is_generic": False,
+                "source_expectations": {
+                    "expects_directors": True,
+                    "expects_ownership": True,
+                },
+            },
+        )
+        factor = check_shell_company(tender, company)
+        assert factor is None
+
     def test_no_flag_when_no_winner(self):
         tender = _tender(awarded_to=None)
         factor = check_shell_company(tender, None)
         assert factor is None
+
+
+class TestAddressClassification:
+    def test_classifies_specific_kenyan_plot_and_unit_address(self):
+        address = "PLOT NO TWO FIFTY SIX, MOMBASA ROAD, Fl: 1, Room/Door: 1, PLOT NO TWO FIFTY SIX, MOMBASA ROAD"
+        assert classify_address(address) == AddressQuality.SPECIFIC
+
+    def test_recognizes_postal_code_town_format_as_postal_style(self):
+        address = "1233-00400 NAIROBI"
+        assert is_postal_style_address(address) is True
+        assert classify_address(address) == AddressQuality.VAGUE
+
+    def test_recognizes_po_box_town_format_as_postal_style(self):
+        address = "P.O BOX 1028, NAKURU"
+        assert is_postal_style_address(address) is True
+        assert classify_address(address) == AddressQuality.VAGUE
 
 
 # ---------------------------------------------------------------------------

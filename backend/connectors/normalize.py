@@ -112,16 +112,40 @@ _PLACEHOLDER_PATTERNS = [
 
 # Patterns indicating a specific, verifiable address
 _SPECIFIC_PATTERNS = [
-    re.compile(r"plot\s+\d+", re.IGNORECASE),
-    re.compile(r"L\.?R\.?\s*No\.?\s*\d+", re.IGNORECASE),
+    re.compile(
+        r"\bplot\s*(?:no\.?|number)?\s+[a-z0-9-]+(?:\s+[a-z0-9-]+){0,4}\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:l\.?\s*r\.?|lr)\s*(?:no\.?|number)?\s*[a-z0-9/-]+\b", re.IGNORECASE
+    ),
     re.compile(r"building\b", re.IGNORECASE),
     re.compile(r"house\b", re.IGNORECASE),
+    re.compile(r"plaza\b", re.IGNORECASE),
+    re.compile(r"tower(?:s)?\b", re.IGNORECASE),
+    re.compile(r"centre\b", re.IGNORECASE),
+    re.compile(r"center\b", re.IGNORECASE),
     re.compile(r"floor\b", re.IGNORECASE),
+    re.compile(r"\bfl\s*[:.]?\s*[a-z0-9-]+\b", re.IGNORECASE),
     re.compile(r"suite\b", re.IGNORECASE),
     re.compile(r"block\b", re.IGNORECASE),
     re.compile(r"\d+\s+(st|nd|rd|th)\s+floor", re.IGNORECASE),
-    re.compile(r"room\s+\d+", re.IGNORECASE),
+    re.compile(r"\broom\s*[:.]?\s*[a-z0-9-]+\b", re.IGNORECASE),
+    re.compile(r"\broom/door\s*[:.]?\s*[a-z0-9-]+\b", re.IGNORECASE),
+    re.compile(r"\bdoor\s*[:.]?\s*[a-z0-9-]+\b", re.IGNORECASE),
 ]
+
+_POSTAL_STYLE_PATTERNS = [
+    re.compile(r"^P\.?\s*O\.?\s*BOX\s+\d+(?:\s*[,-]\s*[A-Z][A-Z\s]+)?$", re.IGNORECASE),
+    re.compile(r"^\d{1,6}-\d{5}\s+[A-Z][A-Z\s]+$", re.IGNORECASE),
+]
+
+
+def is_postal_style_address(address: Optional[str]) -> bool:
+    if not address or not address.strip():
+        return False
+    cleaned = re.sub(r"\s+", " ", address.strip())
+    return any(pattern.match(cleaned) for pattern in _POSTAL_STYLE_PATTERNS)
 
 
 def classify_address(address: Optional[str]) -> AddressQuality:
@@ -136,7 +160,7 @@ def classify_address(address: Optional[str]) -> AddressQuality:
     if not address or not address.strip():
         return AddressQuality.UNKNOWN
 
-    cleaned = address.strip()
+    cleaned = re.sub(r"\s+", " ", address.strip())
 
     # Check placeholder patterns first
     for pattern in _PLACEHOLDER_PATTERNS:
@@ -151,6 +175,9 @@ def classify_address(address: Optional[str]) -> AddressQuality:
     for pattern in _SPECIFIC_PATTERNS:
         if pattern.search(cleaned):
             return AddressQuality.SPECIFIC
+
+    if is_postal_style_address(cleaned):
+        return AddressQuality.VAGUE
 
     # Default: vague (road names, area names, etc.)
     return AddressQuality.VAGUE
@@ -243,7 +270,7 @@ def compute_company_quality_flags(
         flags["has_email"] = True
         flags["email_is_public_webmail"] = domain in _PUBLIC_WEBMAIL_DOMAINS
         flags["email_is_generic_inbox"] = local_part in _GENERIC_INBOX_PREFIXES
-        flags["email_is_generic"] = flags["email_is_public_webmail"]
+        flags["email_is_generic"] = flags["email_is_generic_inbox"]
     else:
         flags["has_email"] = False
         flags["email_is_public_webmail"] = None
