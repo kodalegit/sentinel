@@ -3,7 +3,8 @@ Risk scoring engine for Sentinel.
 Computes explainable risk scores based on 5 core rules.
 """
 
-from datetime import date, timedelta
+import networkx as nx
+
 from models import (
     Tender,
     Company,
@@ -19,7 +20,6 @@ from models import (
 )
 from connectors.normalize import classify_address
 from graph.builder import find_conflict_path
-import networkx as nx
 
 
 # Risk weights for each factor type
@@ -38,8 +38,9 @@ def compute_risk_score(
     directors: dict[str, Director],
     officials: dict[str, PublicOfficial],
     bids: list[Bid],
-    graph: nx.Graph,
+    graph: nx.Graph | None,
     cartel_clusters: list[set[str]],
+    conflict_paths: dict[tuple[str, str], dict[str, list[str]]] | None = None,
     all_tenders: dict[str, Tender] = None,
 ) -> RiskScore:
     """
@@ -54,7 +55,14 @@ def compute_risk_score(
     tender_bids = [b for b in bids if b.tender_id == tender.id]
 
     # Rule 1: Conflict of Interest
-    coi_factor = check_conflict_of_interest(tender, winner, directors, officials, graph)
+    coi_factor = check_conflict_of_interest(
+        tender,
+        winner,
+        directors,
+        officials,
+        graph,
+        conflict_paths=conflict_paths,
+    )
     if coi_factor:
         factors.append(coi_factor)
 
@@ -108,7 +116,8 @@ def check_conflict_of_interest(
     winner: Company | None,
     directors: dict[str, Director],
     officials: dict[str, PublicOfficial],
-    graph: nx.Graph,
+    graph: nx.Graph | None,
+    conflict_paths: dict[tuple[str, str], dict[str, list[str]]] | None = None,
 ) -> RiskFactor | None:
     """
     Check if there's a relationship path between winner and procurement officer.
@@ -141,7 +150,27 @@ def check_conflict_of_interest(
                 related_entity_ids=[director_id, official.id, winner.id],
             )
 
+    lookup_key = (winner.id, tender.procurement_officer_id)
+    path_info = conflict_paths.get(lookup_key) if conflict_paths else None
+    if path_info:
+        node_ids = path_info.get("node_ids", [])
+        node_labels = path_info.get("node_labels", [])
+        return RiskFactor(
+            type=RiskFactorType.CONFLICT_OF_INTEREST,
+            description=f"Connection path found between winner and procurement officer",
+            weight=RISK_WEIGHTS[RiskFactorType.CONFLICT_OF_INTEREST]
+            - 10,  # Reduced weight for indirect
+            evidence=[
+                f"Path: {' → '.join(node_labels or node_ids)}",
+                f"Path length: {len(node_ids) - 1} connections",
+            ],
+            related_entity_ids=node_ids,
+        )
+
     # Check graph for indirect paths
+    if graph is None:
+        return None
+
     path = find_conflict_path(graph, winner.id, tender.procurement_officer_id)
     if path and len(path) <= 4:  # Within 3 hops
         path_description = " → ".join(

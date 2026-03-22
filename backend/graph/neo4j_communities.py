@@ -36,16 +36,14 @@ async def _detect_communities_gds(min_cluster_size: int = 2) -> list[Cluster]:
     async with get_neo4j_session() as session:
         await _drop_projection_if_exists(session)
 
-        # Create graph projection for bidding communities.
-        # Company-Tender bidding links better match co-bid behavior than
-        # broad attribute/director similarity links.
+        # Create graph projection for strict company-company co-bid communities.
         await session.run(
             """
             CALL gds.graph.project(
                 $graph_name,
-                ['Company', 'Tender'],
+                ['Company'],
                 {
-                    BID_ON: {orientation: 'UNDIRECTED'}
+                    CO_BID: {orientation: 'UNDIRECTED'}
                 }
             )
         """,
@@ -124,10 +122,10 @@ async def _detect_communities_gds(min_cluster_size: int = 2) -> list[Cluster]:
 async def _detect_communities_basic() -> list[Cluster]:
     """Basic community detection without GDS using co-bid connected components."""
     async with get_neo4j_session() as session:
-        # Build company-pair adjacency from actual co-bids.
+        # Build company-pair adjacency from strict analytic co-bid edges.
         result = await session.run(
             """
-            MATCH (c1:Company)-[:BID_ON]->(t:Tender)<-[:BID_ON]-(c2:Company)
+            MATCH (c1:Company)-[:CO_BID]-(c2:Company)
             WHERE c1.id < c2.id
             RETURN c1.id AS c1_id, c1.name AS c1_name,
                    c2.id AS c2_id, c2.name AS c2_name

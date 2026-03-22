@@ -15,6 +15,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+import networkx as nx
+
 from config import settings
 from models import Bid, RiskScore
 from state import AppState
@@ -31,10 +33,16 @@ from db.mappers import (
 )
 from graph.builder import build_procurement_graph
 from graph.communities import detect_communities, Cluster
+from graph.neo4j_analytics import (
+    materialize_company_graph_features_neo4j,
+    precompute_conflict_paths_neo4j,
+    update_tender_risk_levels_neo4j,
+)
+from graph.neo4j_communities import detect_communities_neo4j
 from ml.hybrid_scorer import HybridRiskScorer
 from ml.features import materialize_company_graph_features
 from graph.neo4j_driver import close_neo4j_driver, check_neo4j_health
-from graph.neo4j_sync import sync_graph_to_neo4j
+from graph.neo4j_sync import sync_graph_to_neo4j, get_graph_stats_from_neo4j
 from routes.stats import router as stats_router
 from routes.tenders import router as tenders_router
 from routes.tenders_graph import router as tenders_graph_router
@@ -148,7 +156,7 @@ async def load_persisted_analysis(app: FastAPI) -> dict | None:
         analysis_model_version=analysis_run.model_version,
         analysis_created_at=analysis_run.created_at,
         graph_loaded=False,
-        graph_source="persisted",
+        graph_source=analysis_run.graph_source,
         snapshot_source="persisted",
         analysis_summary={
             "tenders": analysis_run.tender_count,
@@ -180,13 +188,14 @@ async def persist_analysis_snapshot(
     company_graph_features: dict[str, dict[str, int]],
     scorer: HybridRiskScorer,
     summary: dict[str, int],
+    graph_source: str,
 ) -> str:
     async with async_session() as db:
         async with db.begin():
             analysis_run = await repo.create_analysis_run(
                 db=db,
                 status="COMPLETED",
-                graph_source="networkx",
+                graph_source=graph_source,
                 model_version=ANALYSIS_MODEL_VERSION,
                 tender_count=summary["tenders"],
                 company_count=summary["companies"],
@@ -236,6 +245,94 @@ async def recompute_app_state(app: FastAPI) -> dict:
     """
     data = await load_data_from_db()
 
+    if settings.neo4j_enabled:
+        try:
+            neo4j_health = await check_neo4j_health()
+            if neo4j_health["status"] == "healthy":
+                await sync_graph_to_neo4j(
+                    companies=data["companies"],
+                    directors=data["directors"],
+                    officials=data["officials"],
+                    tenders=data["tenders"],
+                    bids=data["bids"],
+                )
+
+                communities = await detect_communities_neo4j()
+                company_graph_features = (
+                    await materialize_company_graph_features_neo4j()
+                )
+                conflict_paths = await precompute_conflict_paths_neo4j(data["tenders"])
+
+                scorer = HybridRiskScorer()
+                risk_scores = scorer.score_all(
+                    tenders=data["tenders"],
+                    companies=data["companies"],
+                    directors=data["directors"],
+                    officials=data["officials"],
+                    bids=data["bids"],
+                    graph=None,
+                    communities=communities,
+                    bids_by_tender=data["bids_by_tender"],
+                    company_graph_features=company_graph_features,
+                    conflict_paths=conflict_paths,
+                )
+
+                await update_tender_risk_levels_neo4j(
+                    {
+                        tender_id: risk.category.value
+                        for tender_id, risk in risk_scores.items()
+                    }
+                )
+
+                neo4j_stats = await get_graph_stats_from_neo4j()
+                summary = {
+                    "tenders": len(data["tenders"]),
+                    "companies": len(data["companies"]),
+                    "nodes": neo4j_stats.get("total_nodes", 0),
+                    "edges": neo4j_stats.get("total_edges", 0),
+                    "communities": len(communities),
+                    "risk_scores": len(risk_scores),
+                }
+                analysis_run_id = await persist_analysis_snapshot(
+                    risk_scores=risk_scores,
+                    communities=communities,
+                    company_graph_features=company_graph_features,
+                    scorer=scorer,
+                    summary=summary,
+                    graph_source="neo4j",
+                )
+
+                app.state.app_state = AppState(
+                    tenders=data["tenders"],
+                    companies=data["companies"],
+                    directors=data["directors"],
+                    officials=data["officials"],
+                    bids=data["bids"],
+                    bids_by_tender=data["bids_by_tender"],
+                    graph=nx.Graph(),
+                    graph_loaded=False,
+                    graph_source="neo4j",
+                    risk_scores=risk_scores,
+                    communities=communities,
+                    analysis_run_id=analysis_run_id,
+                    analysis_status="COMPLETED",
+                    analysis_model_version=ANALYSIS_MODEL_VERSION,
+                    analysis_created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                    snapshot_source="fresh",
+                    analysis_summary=summary,
+                    company_graph_features=company_graph_features,
+                )
+
+                return {
+                    **summary,
+                    "analysis_run_id": analysis_run_id,
+                    "snapshot_source": "fresh",
+                }
+        except Exception as exc:
+            logger.warning(
+                f"Neo4j primary analysis failed, falling back to NetworkX: {exc}"
+            )
+
     # Build NetworkX graph (always needed for ML features)
     graph = build_procurement_graph(
         tenders=data["tenders"],
@@ -283,6 +380,7 @@ async def recompute_app_state(app: FastAPI) -> dict:
         company_graph_features=company_graph_features,
         scorer=scorer,
         summary=summary,
+        graph_source="networkx",
     )
 
     app.state.app_state = AppState(
@@ -330,6 +428,12 @@ async def sync_neo4j_background(app: FastAPI):
             officials=state.officials,
             tenders=state.tenders,
             bids=state.bids,
+        )
+        await update_tender_risk_levels_neo4j(
+            {
+                tender_id: risk.category.value
+                for tender_id, risk in state.risk_scores.items()
+            }
         )
         logger.info(f"Neo4j sync complete: {neo4j_stats}")
 
@@ -407,7 +511,7 @@ async def lifespan(app: FastAPI):
         print(f"Detected {stats['communities']} bidding communities")
         print(f"Computed and persisted {stats['risk_scores']} risk scores")
 
-        if settings.neo4j_enabled:
+        if settings.neo4j_enabled and app.state.app_state.graph_source != "neo4j":
             asyncio.ensure_future(sync_neo4j_background(app))
             print("Neo4j sync scheduled (background)")
     else:

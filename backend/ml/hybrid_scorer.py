@@ -42,7 +42,7 @@ class HybridRiskScorer:
         tenders: dict[str, Tender],
         companies: dict[str, Company],
         bids: list[Bid],
-        graph: nx.Graph,
+        graph: nx.Graph | None,
         bids_by_tender: dict[str, list[Bid]] | None = None,
         company_graph_features: dict[str, dict[str, int]] | None = None,
     ):
@@ -67,10 +67,11 @@ class HybridRiskScorer:
         directors: dict[str, Director],
         officials: dict[str, PublicOfficial],
         bids: list[Bid],
-        graph: nx.Graph,
+        graph: nx.Graph | None,
         communities: list[Cluster] | None = None,
         bids_by_tender: dict[str, list[Bid]] | None = None,
         company_graph_features: dict[str, dict[str, int]] | None = None,
+        conflict_paths: dict[tuple[str, str], dict[str, list[str]]] | None = None,
     ) -> dict[str, RiskScore]:
         """
         Compute hybrid risk scores for all tenders.
@@ -113,6 +114,8 @@ class HybridRiskScorer:
 
         # Use Louvain communities for cartel detection (unified algorithm)
         if communities is None:
+            if graph is None:
+                raise ValueError("graph is required when communities are not provided")
             communities = detect_communities(graph, tenders, bids, companies)
         cartel_clusters = get_cartel_sets(communities)
 
@@ -128,6 +131,7 @@ class HybridRiskScorer:
                 officials=officials,
                 bids=tender_bids,
                 graph=graph,
+                conflict_paths=conflict_paths,
                 cartel_clusters=cartel_clusters,
                 all_tenders=tenders,
             )

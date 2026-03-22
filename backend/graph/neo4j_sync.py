@@ -74,6 +74,7 @@ async def sync_graph_to_neo4j(
             edge_count += await _create_bid_edges(session, bids, tenders)
             edge_count += await _create_official_relationship_edges(session, officials)
             edge_count += await _create_shared_attribute_edges(session, companies)
+            edge_count += await _create_co_bid_edges(session)
             stats["edges"] = edge_count
         else:
             # Incremental: upsert nodes and edges
@@ -506,6 +507,25 @@ async def _create_shared_attribute_edges(session, companies: dict[str, Company])
     return total
 
 
+async def _create_co_bid_edges(session) -> int:
+    """Create analytic company-company co-bid edges for community detection."""
+    result = await session.run(
+        """
+        MATCH (c1:Company)-[:BID_ON]->(t:Tender)<-[:BID_ON]-(c2:Company)
+        WHERE c1.id < c2.id
+        WITH c1, c2, count(DISTINCT t) AS tender_count
+        WHERE tender_count >= 2
+        CREATE (c1)-[r:CO_BID {
+            tender_count: tender_count,
+            weight: toFloat(tender_count)
+        }]->(c2)
+        RETURN count(r) AS count
+    """
+    )
+    record = await result.single()
+    return record["count"] if record else 0
+
+
 async def _upsert_company_nodes(session, companies: dict[str, Company]) -> int:
     """Upsert Company nodes using MERGE (incremental sync)."""
     if not companies:
@@ -720,29 +740,28 @@ async def _upsert_bid_edges(
 async def get_graph_stats_from_neo4j() -> dict[str, Any]:
     """Get graph statistics from Neo4j."""
     async with get_neo4j_session() as session:
-        # Node counts by label
-        result = await session.run(
-            """
-            CALL db.labels() YIELD label
-            CALL apoc.cypher.run('MATCH (n:`' + label + '`) RETURN count(n) as count', {}) YIELD value
-            RETURN label, value.count as count
-        """
-        )
-        node_types = {}
-        async for record in result:
-            node_types[record["label"]] = record["count"]
+        node_types: dict[str, int] = {}
+        for label in ("Company", "Director", "Official", "Tender"):
+            result = await session.run(f"MATCH (n:{label}) RETURN count(n) AS count")
+            record = await result.single()
+            node_types[label] = record["count"] if record else 0
 
-        # Edge counts by type
-        result = await session.run(
-            """
-            CALL db.relationshipTypes() YIELD relationshipType
-            CALL apoc.cypher.run('MATCH ()-[r:`' + relationshipType + '`]->() RETURN count(r) as count', {}) YIELD value
-            RETURN relationshipType, value.count as count
-        """
-        )
-        edge_types = {}
-        async for record in result:
-            edge_types[record["relationshipType"]] = record["count"]
+        edge_types: dict[str, int] = {}
+        for relationship_type in (
+            "DIRECTED_BY",
+            "BID_ON",
+            "RELATED_TO",
+            "SHARES_ADDRESS",
+            "SHARES_PHONE",
+            "SHARES_EMAIL",
+            "SHARES_DIRECTOR",
+            "CO_BID",
+        ):
+            result = await session.run(
+                f"MATCH ()-[r:{relationship_type}]->() RETURN count(r) AS count"
+            )
+            record = await result.single()
+            edge_types[relationship_type] = record["count"] if record else 0
 
         # Totals
         result = await session.run("MATCH (n) RETURN count(n) as nodes")

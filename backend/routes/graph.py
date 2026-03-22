@@ -72,6 +72,26 @@ def _build_search_subtitle(graph: nx.Graph, node_id: str, attrs: dict) -> str | 
 @router.get("/stats")
 async def get_graph_stats(state: State):
     """Get graph statistics. Uses Neo4j counts when available, falls back to NetworkX."""
+    if settings.neo4j_enabled:
+        try:
+            health = await check_neo4j_health()
+            if health["status"] == "healthy" and not state.graph_loaded:
+                neo4j_stats = await get_graph_stats_from_neo4j()
+                return {
+                    "total_nodes": neo4j_stats.get("total_nodes", 0),
+                    "total_edges": neo4j_stats.get("total_edges", 0),
+                    "node_types": neo4j_stats.get("node_types", {}),
+                    "edge_types": neo4j_stats.get("edge_types", {}),
+                    "communities": len(state.communities),
+                    "is_large": (
+                        neo4j_stats.get("total_nodes", 0) > MAX_GRAPH_NODES
+                        or neo4j_stats.get("total_edges", 0) > MAX_GRAPH_EDGES
+                    ),
+                    "source": "neo4j",
+                }
+        except Exception:
+            pass
+
     G = ensure_runtime_graph(state)
 
     # Count edges by relationship from NetworkX (always available, used for type breakdowns)
@@ -88,19 +108,6 @@ async def get_graph_stats(state: State):
     total_nodes = G.number_of_nodes()
     total_edges = G.number_of_edges()
 
-    # Neo4j-first for total counts — GDS graph may include indexes/projections not in NetworkX
-    neo4j_available = False
-    if settings.neo4j_enabled:
-        try:
-            health = await check_neo4j_health()
-            if health["status"] == "healthy":
-                neo4j_stats = await get_graph_stats_from_neo4j()
-                total_nodes = neo4j_stats.get("total_nodes", total_nodes)
-                total_edges = neo4j_stats.get("total_relationships", total_edges)
-                neo4j_available = True
-        except Exception:
-            pass
-
     return {
         "total_nodes": total_nodes,
         "total_edges": total_edges,
@@ -108,7 +115,7 @@ async def get_graph_stats(state: State):
         "edge_types": edge_types,
         "communities": len(state.communities),
         "is_large": total_nodes > MAX_GRAPH_NODES or total_edges > MAX_GRAPH_EDGES,
-        "source": "neo4j" if neo4j_available else "networkx",
+        "source": "networkx",
     }
 
 
