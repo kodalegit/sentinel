@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   useFullGraph,
   useCommunities,
@@ -41,6 +41,17 @@ type ClusterInsightFocus = {
   companyIds: string[];
   directorId?: string;
 };
+
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setDebouncedValue(value), delayMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [delayMs, value]);
+
+  return debouncedValue;
+}
 
 function filterGraphToSuspicious(graph: GraphData | null): GraphData | null {
   if (!graph) {
@@ -255,6 +266,8 @@ export function GraphExplorerContent() {
   const [suspiciousOnly, setSuspiciousOnly] = useState(false);
   const [selectedNeighborhoodOnly, setSelectedNeighborhoodOnly] = useState(false);
   const [forceLoadFull, setForceLoadFull] = useState(false);
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, 250);
+  const debouncedPathQuery = useDebouncedValue(pathQuery, 250);
   const shouldLoadFullGraph = !isLargeGraph || forceLoadFull;
 
   const { graph: fullGraph, loading: graphLoading, error } = useFullGraph(
@@ -271,8 +284,8 @@ export function GraphExplorerContent() {
   } = useEntityNeighborhood(
     viewMode === "entity" && selectedEntity ? selectedEntity.id : null,
   );
-  const { results: searchResults, loading: searchLoading } = useGraphSearch(searchQuery);
-  const { results: pathResults, loading: pathSearchLoading } = useGraphSearch(pathQuery);
+  const { results: searchResults, loading: searchLoading } = useGraphSearch(debouncedSearchQuery);
+  const { results: pathResults, loading: pathSearchLoading } = useGraphSearch(debouncedPathQuery);
   const { path, loading: pathLoading, error: pathError } = useGraphPath(
     selectedEntity?.id ?? null,
     pathTargetEntity?.id ?? null,

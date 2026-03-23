@@ -18,8 +18,8 @@ from graph.neo4j_communities import (
     find_shortest_path_neo4j,
     get_entity_neighborhood_neo4j,
     get_cluster_subgraph_neo4j,
+    search_graph_entities_neo4j,
 )
-from graph.neo4j_driver import check_neo4j_health
 from graph.neo4j_sync import get_graph_stats_from_neo4j
 from runtime_graph import ensure_runtime_graph
 
@@ -29,20 +29,6 @@ router = APIRouter(prefix="/api/graph", tags=["graph"])
 MAX_GRAPH_NODES = 500
 MAX_GRAPH_EDGES = 2000
 MAX_GRAPH_SEARCH_RESULTS = 12
-
-
-async def _neo4j_or_networkx(neo4j_coro, networkx_fn, *args, **kwargs):
-    """Try Neo4j first; fall back to the NetworkX function on failure."""
-    if settings.neo4j_enabled:
-        try:
-            health = await check_neo4j_health()
-            if health["status"] == "healthy":
-                result = await neo4j_coro
-                if result is not None:
-                    return result
-        except Exception:
-            pass
-    return networkx_fn(*args, **kwargs)
 
 
 def _build_search_subtitle(graph: nx.Graph, node_id: str, attrs: dict) -> str | None:
@@ -74,8 +60,7 @@ async def get_graph_stats(state: State):
     """Get graph statistics. Uses Neo4j counts when available, falls back to NetworkX."""
     if settings.neo4j_enabled:
         try:
-            health = await check_neo4j_health()
-            if health["status"] == "healthy" and not state.graph_loaded:
+            if not state.graph_loaded:
                 neo4j_stats = await get_graph_stats_from_neo4j()
                 return {
                     "total_nodes": neo4j_stats.get("total_nodes", 0),
@@ -236,16 +221,14 @@ async def get_community_graph(
     # Neo4j-first: richer multi-hop sub-graph from the graph DB
     if settings.neo4j_enabled:
         try:
-            health = await check_neo4j_health()
-            if health["status"] == "healthy":
-                neo4j_result = await get_cluster_subgraph_neo4j(
-                    cluster.company_ids, include_tenders, include_officials
+            neo4j_result = await get_cluster_subgraph_neo4j(
+                cluster.company_ids, include_tenders, include_officials
+            )
+            if neo4j_result and neo4j_result.get("nodes"):
+                return GraphData(
+                    nodes=[GraphNode(**n) for n in neo4j_result["nodes"]],
+                    edges=[GraphEdge(**e) for e in neo4j_result["edges"]],
                 )
-                if neo4j_result and neo4j_result.get("nodes"):
-                    return GraphData(
-                        nodes=[GraphNode(**n) for n in neo4j_result["nodes"]],
-                        edges=[GraphEdge(**e) for e in neo4j_result["edges"]],
-                    )
         except Exception:
             pass  # Fall through to NetworkX
 
@@ -258,7 +241,7 @@ async def get_community_graph(
 
 
 @router.get("/search", response_model=list[GraphSearchResult])
-def search_graph_entities(
+async def search_graph_entities(
     state: State,
     q: str = Query(..., min_length=2, description="Search query"),
     limit: int = Query(
@@ -268,6 +251,13 @@ def search_graph_entities(
         description="Maximum results to return",
     ),
 ):
+    if settings.neo4j_enabled:
+        try:
+            neo4j_matches = await search_graph_entities_neo4j(q, limit)
+            return [GraphSearchResult(**match) for match in neo4j_matches]
+        except Exception:
+            pass
+
     graph = ensure_runtime_graph(state)
     query = q.strip().lower()
     matches: list[tuple[tuple[int, int, str], GraphSearchResult]] = []
@@ -308,11 +298,9 @@ async def get_path(
     # Neo4j-first
     if settings.neo4j_enabled:
         try:
-            health = await check_neo4j_health()
-            if health["status"] == "healthy":
-                result = await find_shortest_path_neo4j(source, target)
-                if result:
-                    return result
+            result = await find_shortest_path_neo4j(source, target)
+            if result:
+                return result
         except Exception:
             pass
 
@@ -334,14 +322,12 @@ async def get_entity_neighborhood(
     # Neo4j-first
     if settings.neo4j_enabled:
         try:
-            health = await check_neo4j_health()
-            if health["status"] == "healthy":
-                result = await get_entity_neighborhood_neo4j(entity_id, depth)
-                if result and result.get("nodes"):
-                    return GraphData(
-                        nodes=[GraphNode(**n) for n in result["nodes"]],
-                        edges=[GraphEdge(**e) for e in result["edges"]],
-                    )
+            result = await get_entity_neighborhood_neo4j(entity_id, depth)
+            if result and result.get("nodes"):
+                return GraphData(
+                    nodes=[GraphNode(**n) for n in result["nodes"]],
+                    edges=[GraphEdge(**e) for e in result["edges"]],
+                )
         except Exception:
             pass
 

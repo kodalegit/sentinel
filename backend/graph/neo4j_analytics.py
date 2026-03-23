@@ -7,26 +7,21 @@ async def materialize_company_graph_features_neo4j() -> dict[str, dict[str, int]
         result = await session.run(
             """
             MATCH (c:Company)
-            CALL {
-                WITH c
+            CALL (c) {
                 OPTIONAL MATCH (c)-[r]-()
                 WHERE type(r) <> 'CO_BID'
                 RETURN count(r) AS graph_degree,
                        sum(CASE WHEN coalesce(r.suspicious, false) THEN 1 ELSE 0 END) AS suspicious_edges
             }
-            CALL {
-                WITH c
+            CALL (c) {
                 OPTIONAL MATCH path = (c)-[*1..2]-(neighbor:Company)
                 WHERE neighbor.id <> c.id
                   AND all(rel IN relationships(path) WHERE type(rel) <> 'CO_BID')
                 RETURN count(DISTINCT neighbor) AS community_size
             }
-            CALL {
-                WITH c
-                OPTIONAL MATCH (o:Official)
-                WITH c, o
-                OPTIONAL MATCH path = shortestPath((c)-[*..10]-(o))
-                WHERE path IS NULL OR all(rel IN relationships(path) WHERE type(rel) <> 'CO_BID')
+            CALL (c) {
+                OPTIONAL MATCH path = (c)-[*1..4]-(o:Official)
+                WHERE all(rel IN relationships(path) WHERE type(rel) <> 'CO_BID')
                 RETURN coalesce(min(length(path)), 99) AS official_distance
             }
             RETURN c.id AS company_id,
@@ -106,7 +101,10 @@ async def update_tender_risk_levels_neo4j(tender_risks: dict[str, str]) -> None:
     if not tender_risks:
         return
 
-    rows = [{"id": tender_id, "risk_level": risk_level} for tender_id, risk_level in tender_risks.items()]
+    rows = [
+        {"id": tender_id, "risk_level": risk_level}
+        for tender_id, risk_level in tender_risks.items()
+    ]
 
     async with get_neo4j_session() as session:
         await session.run(

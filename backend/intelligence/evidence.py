@@ -41,7 +41,7 @@ def build_evidence_pack(
     risk: RiskScore,
     bids: list[Bid],
     companies: dict[str, Company],
-    graph: nx.Graph,
+    graph: nx.Graph | None,
 ) -> EvidencePack:
     """Build a structured evidence pack for a tender."""
 
@@ -233,7 +233,7 @@ def build_evidence_pack(
     # The /api/graph/path endpoint serves real-time Neo4j paths;
     # here we pre-compute the path once for LLM context.
     graph_paths = []
-    if tender.awarded_to and tender.procurement_officer_id:
+    if tender.awarded_to and tender.procurement_officer_id and graph is not None:
         if tender.awarded_to in graph and tender.procurement_officer_id in graph:
             try:
                 path = nx.shortest_path(
@@ -284,7 +284,7 @@ async def build_evidence_pack_async(
     risk: RiskScore,
     bids: list[Bid],
     companies: dict[str, Company],
-    graph: nx.Graph,
+    graph: nx.Graph | None,
 ) -> EvidencePack:
     """
     Build an evidence pack with Neo4j-first path resolution.
@@ -294,7 +294,6 @@ async def build_evidence_pack_async(
     path uses Neo4j's index-free adjacency instead of an in-memory BFS.
     """
     from config import settings
-    from graph.neo4j_driver import check_neo4j_health
     from graph.neo4j_communities import find_shortest_path_neo4j
 
     # Start with the synchronous base pack (no graph paths yet)
@@ -308,21 +307,19 @@ async def build_evidence_pack_async(
         and not pack.graph_paths  # Only hit Neo4j if NetworkX found nothing
     ):
         try:
-            health = await check_neo4j_health()
-            if health["status"] == "healthy":
-                path_result = await find_shortest_path_neo4j(
-                    tender.awarded_to, tender.procurement_officer_id
-                )
-                if path_result and path_result.get("nodes"):
-                    nodes = path_result["nodes"]
-                    pack.graph_paths = [
-                        {
-                            "from": nodes[0]["label"],
-                            "to": nodes[-1]["label"],
-                            "via": [n["label"] for n in nodes[1:-1]],
-                            "length": path_result["length"],
-                        }
-                    ]
+            path_result = await find_shortest_path_neo4j(
+                tender.awarded_to, tender.procurement_officer_id
+            )
+            if path_result and path_result.get("nodes"):
+                nodes = path_result["nodes"]
+                pack.graph_paths = [
+                    {
+                        "from": nodes[0]["label"],
+                        "to": nodes[-1]["label"],
+                        "via": [n["label"] for n in nodes[1:-1]],
+                        "length": path_result["length"],
+                    }
+                ]
         except Exception:
             pass  # Keep the NetworkX result (which may be empty)
 

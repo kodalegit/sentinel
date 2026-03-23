@@ -42,6 +42,7 @@ def compute_risk_score(
     cartel_clusters: list[set[str]],
     conflict_paths: dict[tuple[str, str], dict[str, list[str]]] | None = None,
     all_tenders: dict[str, Tender] = None,
+    category_price_stats: dict[str, dict[str, float | int]] | None = None,
 ) -> RiskScore:
     """
     Compute a comprehensive risk score for a tender.
@@ -79,7 +80,11 @@ def compute_risk_score(
         factors.append(shell_factor)
 
     # Rule 4: Price Anomaly
-    price_factor = check_price_anomaly(tender, all_tenders)
+    price_factor = check_price_anomaly(
+        tender,
+        all_tenders,
+        category_price_stats=category_price_stats,
+    )
     if price_factor:
         factors.append(price_factor)
 
@@ -349,7 +354,9 @@ def check_shell_company(tender: Tender, winner: Company | None) -> RiskFactor | 
 
 
 def check_price_anomaly(
-    tender: Tender, all_tenders: dict[str, Tender]
+    tender: Tender,
+    all_tenders: dict[str, Tender],
+    category_price_stats: dict[str, dict[str, float | int]] | None = None,
 ) -> RiskFactor | None:
     """
     Check if awarded amount is significantly above estimate or comparable tenders.
@@ -366,14 +373,30 @@ def check_price_anomaly(
         percentage = int((price_ratio - 1) * 100)
 
         # Find comparable tenders in same category
-        comparable = [
-            t
-            for t in all_tenders.values()
-            if t.id != tender.id
-            and t.category == tender.category
-            and t.awarded_amount
-            and t.status == TenderStatus.AWARDED
-        ]
+        comparable = None
+        avg_comparable = None
+        if category_price_stats and tender.category in category_price_stats:
+            stats = category_price_stats[tender.category]
+            total_amount = float(stats.get("sum_awarded_amount", 0.0))
+            total_count = int(stats.get("awarded_count", 0))
+            if tender.status == TenderStatus.AWARDED and tender.awarded_amount:
+                total_amount -= tender.awarded_amount
+                total_count -= 1
+            if total_count > 0:
+                avg_comparable = total_amount / total_count
+        else:
+            comparable = [
+                t
+                for t in all_tenders.values()
+                if t.id != tender.id
+                and t.category == tender.category
+                and t.awarded_amount
+                and t.status == TenderStatus.AWARDED
+            ]
+            if comparable:
+                avg_comparable = sum(t.awarded_amount for t in comparable) / len(
+                    comparable
+                )
 
         evidence = [
             f"Awarded amount: KES {tender.awarded_amount:,.0f}",
@@ -381,8 +404,7 @@ def check_price_anomaly(
             f"Deviation: {percentage}% above estimate",
         ]
 
-        if comparable:
-            avg_comparable = sum(t.awarded_amount for t in comparable) / len(comparable)
+        if avg_comparable is not None:
             if tender.awarded_amount > avg_comparable * 1.5:
                 evidence.append(f"Category average: KES {avg_comparable:,.0f}")
 

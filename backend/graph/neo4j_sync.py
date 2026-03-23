@@ -37,8 +37,9 @@ async def sync_graph_to_neo4j(
     Sync all entities from PostgreSQL to Neo4j.
 
     Args:
-        incremental: If True, use MERGE to upsert nodes/edges without clearing.
-                    If False (default), clear and rebuild entire graph.
+        incremental: If True, upsert nodes, prune stale nodes, and refresh managed
+                    relationships without clearing the whole graph. If False,
+                    clear and rebuild the entire graph.
 
     Returns counts of created/updated nodes and edges.
     """
@@ -72,23 +73,29 @@ async def sync_graph_to_neo4j(
             edge_count = 0
             edge_count += await _create_director_edges(session, companies)
             edge_count += await _create_bid_edges(session, bids, tenders)
+            edge_count += await _create_awarded_by_edges(session, tenders)
             edge_count += await _create_official_relationship_edges(session, officials)
             edge_count += await _create_shared_attribute_edges(session, companies)
             edge_count += await _create_co_bid_edges(session)
             stats["edges"] = edge_count
         else:
-            # Incremental: upsert nodes and edges
+            # Incremental refresh: upsert nodes, prune stale nodes, then rebuild managed relationships
             stats["companies"] = await _upsert_company_nodes(session, companies)
             stats["directors"] = await _upsert_director_nodes(session, directors)
             stats["officials"] = await _upsert_official_nodes(session, officials)
             stats["tenders"] = await _upsert_tender_nodes(
                 session, tenders, tender_risks
             )
+            await _delete_stale_nodes(session, companies, directors, officials, tenders)
+            await _delete_managed_relationships(session)
 
-            # For edges, we need to be more careful - only add missing ones
             edge_count = 0
-            edge_count += await _upsert_director_edges(session, companies)
-            edge_count += await _upsert_bid_edges(session, bids, tenders)
+            edge_count += await _create_director_edges(session, companies)
+            edge_count += await _create_bid_edges(session, bids, tenders)
+            edge_count += await _create_awarded_by_edges(session, tenders)
+            edge_count += await _create_official_relationship_edges(session, officials)
+            edge_count += await _create_shared_attribute_edges(session, companies)
+            edge_count += await _create_co_bid_edges(session)
             stats["edges"] = edge_count
 
         logger.info(f"Neo4j sync complete: {stats}")
@@ -112,6 +119,49 @@ async def _create_constraints(session) -> None:
             logger.debug(f"Constraint creation: {e}")
 
 
+async def _delete_stale_nodes(
+    session,
+    companies: dict[str, Company],
+    directors: dict[str, Director],
+    officials: dict[str, PublicOfficial],
+    tenders: dict[str, Tender],
+) -> None:
+    """Delete nodes that are no longer present in PostgreSQL source data."""
+    cleanup_targets = [
+        ("Company", list(companies.keys())),
+        ("Director", list(directors.keys())),
+        ("Official", list(officials.keys())),
+        ("Tender", list(tenders.keys())),
+    ]
+    for label, ids in cleanup_targets:
+        await session.run(
+            f"MATCH (n:{label}) WHERE NOT n.id IN $ids DETACH DELETE n",
+            ids=ids,
+        )
+
+
+async def _delete_managed_relationships(session) -> None:
+    """Delete relationships that are fully managed by the sync layer."""
+    await session.run(
+        """
+        MATCH ()-[r]-()
+        WHERE type(r) IN $relationship_types
+        DELETE r
+        """,
+        relationship_types=[
+            "DIRECTED_BY",
+            "BID_ON",
+            "AWARDED_BY",
+            "RELATED_TO",
+            "SHARES_ADDRESS",
+            "SHARES_PHONE",
+            "SHARES_EMAIL",
+            "SHARES_DIRECTOR",
+            "CO_BID",
+        ],
+    )
+
+
 async def _create_company_nodes(session, companies: dict[str, Company]) -> int:
     """Create Company nodes in Neo4j."""
     if not companies:
@@ -129,6 +179,7 @@ async def _create_company_nodes(session, companies: dict[str, Company]) -> int:
             ),
             "supplier_type": c.supplier_type or "",
             "physical_address": c.physical_address or "",
+            "source_system": c.source_system or "",
         }
         for c in companies.values()
     ]
@@ -144,7 +195,8 @@ async def _create_company_nodes(session, companies: dict[str, Company]) -> int:
             email: c.email,
             registration_date: c.registration_date,
             supplier_type: c.supplier_type,
-            physical_address: c.physical_address
+            physical_address: c.physical_address,
+            source_system: c.source_system
         })
         RETURN count(comp) as count
     """,
@@ -233,6 +285,8 @@ async def _create_tender_nodes(
         {
             "id": t.id,
             "title": t.title,
+            "reference": t.reference_number or "",
+            "procuring_entity": t.procuring_entity or "",
             "value": (
                 float(t.estimated_value) if getattr(t, "estimated_value", None) else 0.0
             ),
@@ -249,6 +303,8 @@ async def _create_tender_nodes(
         CREATE (ten:Tender {
             id: t.id,
             title: t.title,
+            reference: t.reference,
+            procuring_entity: t.procuring_entity,
             value: t.value,
             status: t.status,
             procurement_method: t.procurement_method,
@@ -331,6 +387,35 @@ async def _create_bid_edges(
         RETURN count(r) as count
     """,
         bids=bid_data,
+    )
+
+    record = await result.single()
+    return record["count"] if record else 0
+
+
+async def _create_awarded_by_edges(session, tenders: dict[str, Tender]) -> int:
+    """Create AWARDED_BY edges from tenders to procurement officials."""
+    edges = [
+        {
+            "tender_id": tender.id,
+            "official_id": tender.procurement_officer_id,
+        }
+        for tender in tenders.values()
+        if tender.procurement_officer_id
+    ]
+
+    if not edges:
+        return 0
+
+    result = await session.run(
+        """
+        UNWIND $edges AS e
+        MATCH (t:Tender {id: e.tender_id})
+        MATCH (o:Official {id: e.official_id})
+        CREATE (t)-[r:AWARDED_BY {suspicious: false}]->(o)
+        RETURN count(r) as count
+        """,
+        edges=edges,
     )
 
     record = await result.single()
@@ -543,6 +628,7 @@ async def _upsert_company_nodes(session, companies: dict[str, Company]) -> int:
             ),
             "supplier_type": c.supplier_type or "",
             "physical_address": c.physical_address or "",
+            "source_system": c.source_system or "",
         }
         for c in companies.values()
     ]
@@ -557,7 +643,8 @@ async def _upsert_company_nodes(session, companies: dict[str, Company]) -> int:
             comp.email = c.email,
             comp.registration_date = c.registration_date,
             comp.supplier_type = c.supplier_type,
-            comp.physical_address = c.physical_address
+            comp.physical_address = c.physical_address,
+            comp.source_system = c.source_system
         RETURN count(comp) as count
     """,
         companies=company_data,
@@ -640,8 +727,10 @@ async def _upsert_tender_nodes(
             "id": t.id,
             "title": t.title,
             "reference": t.reference_number or "",
+            "procuring_entity": t.procuring_entity or "",
             "value": float(t.estimated_value) if t.estimated_value else 0.0,
             "status": t.status or "",
+            "procurement_method": t.procurement_method or "",
             "risk_level": tender_risks.get(t.id, "LOW"),
         }
         for t in tenders.values()
@@ -653,8 +742,10 @@ async def _upsert_tender_nodes(
         MERGE (ten:Tender {id: t.id})
         SET ten.title = t.title,
             ten.reference = t.reference,
+            ten.procuring_entity = t.procuring_entity,
             ten.value = t.value,
             ten.status = t.status,
+            ten.procurement_method = t.procurement_method,
             ten.risk_level = t.risk_level
         RETURN count(ten) as count
     """,
@@ -750,6 +841,7 @@ async def get_graph_stats_from_neo4j() -> dict[str, Any]:
         for relationship_type in (
             "DIRECTED_BY",
             "BID_ON",
+            "AWARDED_BY",
             "RELATED_TO",
             "SHARES_ADDRESS",
             "SHARES_PHONE",

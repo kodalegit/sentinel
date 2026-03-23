@@ -411,6 +411,67 @@ async def get_entity_neighborhood_neo4j(
         }
 
 
+async def search_graph_entities_neo4j(query: str, limit: int = 12) -> list[dict]:
+    """Search graph entities directly in Neo4j without materializing NetworkX."""
+    normalized_search = query.strip().lower()
+    if not normalized_search:
+        return []
+
+    async with get_neo4j_session() as session:
+        result = await session.run(
+            """
+            MATCH (n)
+            WHERE (n:Company OR n:Director OR n:Official OR n:Tender)
+              AND toLower(coalesce(n.name, n.title, n.id)) CONTAINS $search
+            WITH n,
+                 CASE
+                    WHEN n:Company THEN 'COMPANY'
+                    WHEN n:Director THEN 'DIRECTOR'
+                    WHEN n:Official THEN 'OFFICIAL'
+                    ELSE 'TENDER'
+                 END AS node_type,
+                 coalesce(n.name, n.title, n.id) AS label
+            OPTIONAL MATCH (n)<-[:DIRECTED_BY]-(c:Company)
+            WITH n, node_type, label, count(DISTINCT c) AS company_count
+            RETURN n.id AS id,
+                   node_type AS type,
+                   label,
+                   n.risk_level AS risk_level,
+                   CASE
+                       WHEN node_type = 'TENDER' THEN coalesce(n.reference, n.procuring_entity, n.procurement_method)
+                       WHEN node_type = 'OFFICIAL' THEN CASE
+                           WHEN coalesce(n.department, '') <> '' AND coalesce(n.position, '') <> ''
+                               THEN n.department + ' · ' + n.position
+                           ELSE coalesce(n.department, n.position)
+                       END
+                       WHEN node_type = 'COMPANY' THEN coalesce(n.address, n.source_system)
+                       WHEN node_type = 'DIRECTOR' AND company_count > 0 THEN
+                           'Linked to ' + toString(company_count) + ' ' + CASE WHEN company_count = 1 THEN 'company' ELSE 'companies' END
+                       ELSE null
+                   END AS subtitle,
+                   CASE WHEN toLower(label) STARTS WITH $search THEN 0 ELSE 1 END AS rank_prefix,
+                   size(label) AS rank_length,
+                   toLower(label) AS rank_label
+            ORDER BY rank_prefix, rank_length, rank_label
+            LIMIT $limit
+            """,
+            search=normalized_search,
+            limit=limit,
+        )
+        records = [record async for record in result]
+
+    return [
+        {
+            "id": record["id"],
+            "type": record["type"],
+            "label": record["label"],
+            "risk_level": record["risk_level"],
+            "subtitle": record["subtitle"],
+        }
+        for record in records
+    ]
+
+
 async def get_cluster_subgraph_neo4j(
     company_ids: list[str],
     include_tenders: bool = True,
