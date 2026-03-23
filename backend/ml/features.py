@@ -211,6 +211,11 @@ def extract_tender_features(
             }
         )
 
+    if not rows:
+        return pd.DataFrame(
+            columns=FEATURE_COLUMNS, index=pd.Index([], name="tender_id")
+        )
+
     df = pd.DataFrame(rows).set_index("tender_id")
     return df
 

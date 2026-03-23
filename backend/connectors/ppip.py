@@ -30,6 +30,15 @@ from models import (
 logger = logging.getLogger(__name__)
 
 
+def _limit_text(value: Optional[str], max_length: int) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text[:max_length]
+
+
 def _canonical_company_name(name: Optional[str]) -> Optional[str]:
     normalized = normalize_name(name)
     if not normalized:
@@ -210,20 +219,22 @@ def normalize_ocds_tender(
         reference_number=ref_number,
         title=tender_data.get("title", "Untitled"),
         description=tender_data.get("description"),
-        procuring_entity=buyer.get("name", "Unknown"),
-        category=tender_data.get("mainProcurementCategory"),
+        procuring_entity=_limit_text(buyer.get("name", "Unknown"), 255) or "Unknown",
+        category=_limit_text(tender_data.get("mainProcurementCategory"), 100),
         estimated_value=estimated_value,
         published_date=published_date,
         deadline=deadline,
         status=tender_status,
         awarded_to=awarded_to,
         awarded_amount=awarded_amount,
-        procurement_method=method_details or method,
-        procurement_category=tender_data.get("mainProcurementCategory"),
-        currency=currency,
+        procurement_method=_limit_text(method_details or method, 100),
+        procurement_category=_limit_text(
+            tender_data.get("mainProcurementCategory"), 100
+        ),
+        currency=_limit_text(currency, 10) or "KES",
         ocds_id=ocid,
-        buyer_id=buyer.get("id"),
-        source_system="ppip",
+        buyer_id=_limit_text(buyer.get("id"), 50),
+        source_system=_limit_text("ppip", 20),
         source_record_id=ocid,
     )
 
@@ -351,13 +362,18 @@ def extract_ocds_contracts(
                 title=rc.get("title"),
                 description=rc.get("description"),
                 contract_amount=clean_amount(value.get("amount")),
-                currency=value.get("currency", "KES"),
+                currency=_limit_text(value.get("currency", "KES"), 10) or "KES",
                 start_date=parse_date(period.get("startDate")),
                 end_date=parse_date(period.get("endDate")),
                 effective_date=parse_date(rc.get("dateSigned")),
-                status=rc.get("status"),
-                pe_name=buyer.get("name"),
-                source_system="ppip",
+                status=_limit_text(rc.get("status"), 50),
+                procurement_method=_limit_text(rc.get("procurementMethod"), 100),
+                procurement_category=_limit_text(
+                    rc.get("mainProcurementCategory"), 100
+                ),
+                pe_name=_limit_text(buyer.get("name"), 255),
+                pe_type=_limit_text(buyer.get("identifier", {}).get("scheme"), 100),
+                source_system=_limit_text("ppip", 20),
                 source_record_id=contract_id,
             )
         )

@@ -206,7 +206,7 @@ class TenderDB(Base):
     title: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     procuring_entity: Mapped[str] = mapped_column(String(255), nullable=False)
-    category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     estimated_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     awarded_amount: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     published_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
@@ -229,12 +229,12 @@ class TenderDB(Base):
 
     # Kenya-specific fields
     procurement_method: Mapped[Optional[str]] = mapped_column(
-        String(100), nullable=True
+        String(255), nullable=True
     )
     procurement_category: Mapped[Optional[str]] = mapped_column(
-        String(100), nullable=True
+        String(255), nullable=True
     )
-    pe_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    pe_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     currency: Mapped[str] = mapped_column(String(10), nullable=False, default="KES")
     ocds_id: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     buyer_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -640,10 +640,10 @@ class ContractDB(Base):
     date_signed: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     procurement_method: Mapped[Optional[str]] = mapped_column(
-        String(100), nullable=True
+        String(255), nullable=True
     )
     procurement_category: Mapped[Optional[str]] = mapped_column(
-        String(100), nullable=True
+        String(255), nullable=True
     )
 
     # AGPO fields
@@ -653,7 +653,7 @@ class ContractDB(Base):
 
     # Procuring entity details
     pe_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    pe_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    pe_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     # Provenance
     source_system: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)

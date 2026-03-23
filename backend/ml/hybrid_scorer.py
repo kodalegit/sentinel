@@ -59,6 +59,9 @@ class HybridRiskScorer:
         )
         self.last_features_df = features_df.copy()
         self.last_company_graph_features = company_graph_features or {}
+        if features_df.empty:
+            self.last_ml_scores = None
+            return
         self.detector.fit(features_df)
         self.detector.save("default")
 
@@ -96,6 +99,9 @@ class HybridRiskScorer:
         )
         self.last_features_df = features_df.copy()
         self.last_company_graph_features = company_graph_features or {}
+        if features_df.empty:
+            self.last_ml_scores = None
+            return {}
         ml_scores = None
 
         if not self.detector.is_fitted:
