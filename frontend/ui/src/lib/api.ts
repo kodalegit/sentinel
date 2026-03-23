@@ -18,7 +18,8 @@ import type {
   RiskCategory,
   TenderStatus,
   IngestionResponse,
-  PPIPSyncResponse,
+  PPIPSyncAcceptedResponse,
+  PPIPSyncStatusResponse,
   RecomputeResponse,
   CaseEvent,
   CaseEvidenceLink,
@@ -523,10 +524,16 @@ export async function markNotificationRead(
 
 // --- Ingestion ---
 
-export async function syncPPIP(fiscalYear: string): Promise<PPIPSyncResponse> {
-  return postApi<PPIPSyncResponse>("/api/ingest/ppip/sync", {
+export async function syncPPIP(fiscalYear: string): Promise<PPIPSyncAcceptedResponse> {
+  return postApi<PPIPSyncAcceptedResponse>("/api/ingest/ppip/sync", {
     fiscal_year: fiscalYear,
   });
+}
+
+export async function getPPIPSyncStatus(
+  jobId: string,
+): Promise<PPIPSyncStatusResponse> {
+  return fetchApi<PPIPSyncStatusResponse>(`/api/ingest/ppip/sync/status/${jobId}`);
 }
 
 export async function ingestEGPTenders(

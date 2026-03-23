@@ -3,6 +3,7 @@ Sentinel API - FastAPI backend for public procurement oversight.
 """
 
 import asyncio
+import time
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -75,6 +76,33 @@ class JobStatus(str, Enum):
 _recompute_jobs: dict[str, dict[str, Any]] = {}
 
 ANALYSIS_MODEL_VERSION = "hybrid-v1"
+
+
+def _log_performance_metric(
+    event: str,
+    stage: str,
+    started_at: float,
+    **metrics: Any,
+) -> None:
+    duration_ms = (time.perf_counter() - started_at) * 1000
+    metric_suffix = " ".join(f"{key}={value}" for key, value in metrics.items())
+    if metric_suffix:
+        metric_suffix = f" {metric_suffix}"
+    logger.info(
+        "performance_metric event=%s stage=%s duration_ms=%.1f%s",
+        event,
+        stage,
+        duration_ms,
+        metric_suffix,
+    )
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, float) and value != value:
+        return None
+    return float(value)
 
 
 def _communities_to_json(communities: list[Cluster]) -> list[dict]:
@@ -190,8 +218,10 @@ async def persist_analysis_snapshot(
     summary: dict[str, int],
     graph_source: str,
 ) -> str:
+    snapshot_started = time.perf_counter()
     async with async_session() as db:
         async with db.begin():
+            analysis_run_started = time.perf_counter()
             analysis_run = await repo.create_analysis_run(
                 db=db,
                 status="COMPLETED",
@@ -205,34 +235,84 @@ async def persist_analysis_snapshot(
                 run_metadata=summary,
                 communities=_communities_to_json(communities),
             )
+            _log_performance_metric(
+                "analysis_snapshot",
+                "create_analysis_run",
+                analysis_run_started,
+                graph_source=graph_source,
+            )
+
+            graph_features_started = time.perf_counter()
             await repo.create_company_graph_features(
                 db=db,
                 analysis_run_id=analysis_run.id,
                 company_features=company_graph_features,
             )
+            _log_performance_metric(
+                "analysis_snapshot",
+                "create_company_graph_features",
+                graph_features_started,
+                rows=len(company_graph_features),
+            )
 
             ml_scores = scorer.last_ml_scores
+            ml_scores_by_tender = (
+                ml_scores.to_dict(orient="index") if ml_scores is not None else {}
+            )
             model_version = f"{ANALYSIS_MODEL_VERSION}:{analysis_run.id}"
+            risk_payload_build_started = time.perf_counter()
+            risk_assessment_rows = []
             for tender_id, risk in risk_scores.items():
-                ml_row = None
-                if ml_scores is not None and tender_id in ml_scores.index:
-                    ml_row = ml_scores.loc[tender_id]
-                await repo.upsert_risk_assessment(
-                    db=db,
-                    analysis_run_id=analysis_run.id,
-                    tender_id=uuid.UUID(tender_id),
-                    overall_score=risk.overall,
-                    category=risk.category.value,
-                    rule_factors=risk_factors_to_json(risk.factors),
-                    recommendation=risk.recommendation,
-                    ml_anomaly_score=(
-                        float(ml_row["anomaly_score"]) if ml_row is not None else None
-                    ),
-                    ml_feature_importance=(
-                        ml_row["feature_importance"] if ml_row is not None else None
-                    ),
-                    model_version=model_version,
+                ml_row = ml_scores_by_tender.get(tender_id)
+                risk_assessment_rows.append(
+                    {
+                        "tender_id": uuid.UUID(tender_id),
+                        "overall_score": risk.overall,
+                        "category": risk.category.value,
+                        "rule_factors": risk_factors_to_json(risk.factors),
+                        "recommendation": risk.recommendation,
+                        "ml_anomaly_score": (
+                            _optional_float(ml_row.get("anomaly_score"))
+                            if ml_row is not None
+                            else None
+                        ),
+                        "ml_feature_importance": (
+                            ml_row.get("feature_importance")
+                            if ml_row is not None
+                            else None
+                        ),
+                        "model_version": model_version,
+                    }
                 )
+            _log_performance_metric(
+                "analysis_snapshot",
+                "prepare_risk_assessments",
+                risk_payload_build_started,
+                rows=len(risk_assessment_rows),
+            )
+
+            risk_insert_started = time.perf_counter()
+            await repo.create_risk_assessments(
+                db=db,
+                analysis_run_id=analysis_run.id,
+                risk_assessments=risk_assessment_rows,
+            )
+            _log_performance_metric(
+                "analysis_snapshot",
+                "create_risk_assessments",
+                risk_insert_started,
+                rows=len(risk_assessment_rows),
+            )
+
+    _log_performance_metric(
+        "analysis_snapshot",
+        "total",
+        snapshot_started,
+        graph_source=graph_source,
+        risk_scores=len(risk_scores),
+        companies=len(company_graph_features),
+        communities=len(communities),
+    )
 
     return str(analysis_run.id)
 
@@ -248,10 +328,21 @@ async def recompute_app_state(
     and update the in-memory app state. Called at startup and after ingestion.
     Returns summary stats.
     """
+    recompute_started = time.perf_counter()
+    data_load_started = time.perf_counter()
     data = await load_data_from_db()
+    _log_performance_metric(
+        "recompute",
+        "load_data",
+        data_load_started,
+        tenders=len(data["tenders"]),
+        companies=len(data["companies"]),
+        bids=len(data["bids"]),
+    )
 
     if settings.neo4j_enabled and prefer_neo4j_primary:
         try:
+            neo4j_prepare_started = time.perf_counter()
             async with asyncio.timeout(neo4j_timeout_seconds):
                 neo4j_health = await check_neo4j_health()
                 if neo4j_health["status"] != "healthy":
@@ -271,7 +362,16 @@ async def recompute_app_state(
                     await materialize_company_graph_features_neo4j()
                 )
                 conflict_paths = await precompute_conflict_paths_neo4j(data["tenders"])
+            _log_performance_metric(
+                "recompute",
+                "neo4j_graph_prepare",
+                neo4j_prepare_started,
+                communities=len(communities),
+                company_graph_features=len(company_graph_features),
+                conflict_paths=len(conflict_paths),
+            )
 
+            scoring_started = time.perf_counter()
             scorer = HybridRiskScorer()
             risk_scores = scorer.score_all(
                 tenders=data["tenders"],
@@ -285,15 +385,37 @@ async def recompute_app_state(
                 company_graph_features=company_graph_features,
                 conflict_paths=conflict_paths,
             )
+            _log_performance_metric(
+                "recompute",
+                "score_all",
+                scoring_started,
+                graph_source="neo4j",
+                risk_scores=len(risk_scores),
+            )
 
+            neo4j_update_started = time.perf_counter()
             await update_tender_risk_levels_neo4j(
                 {
                     tender_id: risk.category.value
                     for tender_id, risk in risk_scores.items()
                 }
             )
+            _log_performance_metric(
+                "recompute",
+                "update_tender_risk_levels_neo4j",
+                neo4j_update_started,
+                risk_scores=len(risk_scores),
+            )
 
+            graph_stats_started = time.perf_counter()
             neo4j_stats = await get_graph_stats_from_neo4j()
+            _log_performance_metric(
+                "recompute",
+                "get_graph_stats_from_neo4j",
+                graph_stats_started,
+                nodes=neo4j_stats.get("total_nodes", 0),
+                edges=neo4j_stats.get("total_edges", 0),
+            )
             summary = {
                 "tenders": len(data["tenders"]),
                 "companies": len(data["companies"]),
@@ -302,6 +424,7 @@ async def recompute_app_state(
                 "communities": len(communities),
                 "risk_scores": len(risk_scores),
             }
+            snapshot_started = time.perf_counter()
             analysis_run_id = await persist_analysis_snapshot(
                 risk_scores=risk_scores,
                 communities=communities,
@@ -309,6 +432,13 @@ async def recompute_app_state(
                 scorer=scorer,
                 summary=summary,
                 graph_source="neo4j",
+            )
+            _log_performance_metric(
+                "recompute",
+                "persist_analysis_snapshot",
+                snapshot_started,
+                graph_source="neo4j",
+                analysis_run_id=analysis_run_id,
             )
 
             app.state.app_state = AppState(
@@ -332,6 +462,15 @@ async def recompute_app_state(
                 company_graph_features=company_graph_features,
             )
 
+            _log_performance_metric(
+                "recompute",
+                "total",
+                recompute_started,
+                graph_source="neo4j",
+                snapshot_source="fresh",
+                analysis_run_id=analysis_run_id,
+            )
+
             return {
                 **summary,
                 "analysis_run_id": analysis_run_id,
@@ -346,6 +485,7 @@ async def recompute_app_state(
             logger.exception("Neo4j primary analysis failed, falling back to NetworkX")
 
     # Build NetworkX graph (always needed for ML features)
+    graph_build_started = time.perf_counter()
     graph = build_procurement_graph(
         tenders=data["tenders"],
         companies=data["companies"],
@@ -353,14 +493,34 @@ async def recompute_app_state(
         officials=data["officials"],
         bids=data["bids"],
     )
+    _log_performance_metric(
+        "recompute",
+        "build_procurement_graph",
+        graph_build_started,
+        nodes=graph.number_of_nodes(),
+        edges=graph.number_of_edges(),
+    )
 
-    # Detect communities using NetworkX (always available)
-    # Neo4j sync happens in background after initial load
+    communities_started = time.perf_counter()
     communities = detect_communities(
         graph, data["tenders"], data["bids"], data["companies"]
     )
+    _log_performance_metric(
+        "recompute",
+        "detect_communities_networkx",
+        communities_started,
+        communities=len(communities),
+    )
+    features_started = time.perf_counter()
     company_graph_features = materialize_company_graph_features(graph)
+    _log_performance_metric(
+        "recompute",
+        "materialize_company_graph_features_networkx",
+        features_started,
+        company_graph_features=len(company_graph_features),
+    )
 
+    scoring_started = time.perf_counter()
     scorer = HybridRiskScorer()
     risk_scores = scorer.score_all(
         tenders=data["tenders"],
@@ -372,6 +532,13 @@ async def recompute_app_state(
         communities=communities,
         bids_by_tender=data["bids_by_tender"],
         company_graph_features=company_graph_features,
+    )
+    _log_performance_metric(
+        "recompute",
+        "score_all",
+        scoring_started,
+        graph_source="networkx",
+        risk_scores=len(risk_scores),
     )
 
     for tender_id, risk in risk_scores.items():
@@ -386,6 +553,7 @@ async def recompute_app_state(
         "communities": len(communities),
         "risk_scores": len(risk_scores),
     }
+    snapshot_started = time.perf_counter()
     analysis_run_id = await persist_analysis_snapshot(
         risk_scores=risk_scores,
         communities=communities,
@@ -393,6 +561,13 @@ async def recompute_app_state(
         scorer=scorer,
         summary=summary,
         graph_source="networkx",
+    )
+    _log_performance_metric(
+        "recompute",
+        "persist_analysis_snapshot",
+        snapshot_started,
+        graph_source="networkx",
+        analysis_run_id=analysis_run_id,
     )
 
     app.state.app_state = AppState(
@@ -416,7 +591,19 @@ async def recompute_app_state(
         company_graph_features=company_graph_features,
     )
 
-    return {**summary, "analysis_run_id": analysis_run_id, "snapshot_source": "fresh"}
+    _log_performance_metric(
+        "recompute",
+        "total",
+        recompute_started,
+        graph_source="networkx",
+        snapshot_source="fresh",
+        analysis_run_id=analysis_run_id,
+    )
+    return {
+        **summary,
+        "analysis_run_id": analysis_run_id,
+        "snapshot_source": "fresh",
+    }
 
 
 async def sync_neo4j_background(app: FastAPI):

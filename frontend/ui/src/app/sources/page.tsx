@@ -10,6 +10,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useLatestAnalysisSnapshot } from "@/hooks/useTenders";
 import {
   syncPPIP,
+  getPPIPSyncStatus,
   ingestEGPTenders,
   ingestEGPContracts,
   triggerRecompute,
@@ -31,13 +32,11 @@ import {
 } from "lucide-react";
 
 interface LogEntry {
-  id: number;
+  id: string;
   timestamp: string;
   level: "info" | "success" | "error";
   message: string;
 }
-
-let logCounter = 0;
 
 export default function DataSourcesPage() {
   const queryClient = useQueryClient();
@@ -54,7 +53,10 @@ export default function DataSourcesPage() {
 
   const addLog = useCallback((level: LogEntry["level"], message: string) => {
     const entry: LogEntry = {
-      id: ++logCounter,
+      id:
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       timestamp: new Date().toLocaleTimeString(),
       level,
       message,
@@ -70,13 +72,42 @@ export default function DataSourcesPage() {
     setSyncing(true);
     addLog("info", `Starting PPIP OCDS sync for FY ${fiscalYear}...`);
     try {
-      const result = await syncPPIP(fiscalYear);
-      addLog("success", `PPIP sync completed for FY ${result.fiscal_year}.`);
-      if (result.stats) {
-        const parts = Object.entries(result.stats)
-          .map(([k, v]) => `${k}: ${v}`)
-          .join(", ");
-        addLog("info", `PPIP sync stats — ${parts}`);
+      const { job_id } = await syncPPIP(fiscalYear);
+      addLog("info", `PPIP sync job ${job_id.slice(0, 8)}... queued.`);
+
+      const pollDelay = 2000;
+      let lastProgress = "";
+
+      while (true) {
+        await new Promise((resolve) => setTimeout(resolve, pollDelay));
+        const status = await getPPIPSyncStatus(job_id);
+        const normalizedStatus = status.status.toLowerCase().split(".").pop();
+
+        if (normalizedStatus === "done") {
+          addLog("success", `PPIP sync completed for FY ${status.fiscal_year}.`);
+          if (status.stats) {
+            const parts = Object.entries(status.stats)
+              .map(([k, v]) => `${k}: ${v}`)
+              .join(", ");
+            addLog("info", `PPIP sync stats — ${parts}`);
+          }
+          invalidateAll();
+          return;
+        }
+
+        if (normalizedStatus === "failed") {
+          throw new Error(status.error || "PPIP sync failed");
+        }
+
+        const progressMessage =
+          typeof status.total_releases === "number" && status.total_releases > 0
+            ? `PPIP sync still running... ${status.processed_releases ?? 0}/${status.total_releases} release bundles persisted`
+            : "PPIP sync still running... awaiting progress update";
+
+        if (progressMessage !== lastProgress) {
+          addLog("info", progressMessage);
+          lastProgress = progressMessage;
+        }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -408,8 +439,8 @@ export default function DataSourcesPage() {
           </div>
 
           {/* Right column — Activity log */}
-          <div className="space-y-5">
-            <div className="rounded-2xl border border-border/70 bg-card/90 p-5">
+          <div className="space-y-5 lg:min-w-0">
+            <div className="rounded-2xl border border-border/70 bg-card/90 p-5 overflow-hidden">
               <h3 className="text-[11px] uppercase tracking-[0.15em] text-muted-foreground font-semibold mb-4">
                 Activity Log
               </h3>
@@ -418,7 +449,7 @@ export default function DataSourcesPage() {
                   No activity yet. Trigger a sync or ingestion to begin.
                 </p>
               ) : (
-                <ScrollArea className="max-h-[500px]">
+                <ScrollArea className="h-[350px] pr-3">
                   <div className="space-y-2">
                     {logs.map((log) => (
                       <div

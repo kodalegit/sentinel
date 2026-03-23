@@ -4,10 +4,10 @@ Provides async CRUD operations for all entities.
 """
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -37,6 +37,7 @@ from db.models import (
 )
 
 _UNSET = object()
+_BULK_INSERT_BATCH_SIZE = 1000
 
 
 # --- Company ---
@@ -264,16 +265,80 @@ async def create_company_graph_features(
     analysis_run_id: uuid.UUID,
     company_features: dict[str, dict[str, int]],
 ) -> None:
-    for company_id, feature_values in company_features.items():
-        db.add(
-            CompanyGraphFeatureDB(
-                analysis_run_id=analysis_run_id,
-                company_id=uuid.UUID(company_id),
-                graph_degree=feature_values.get("graph_degree", 0),
-                suspicious_edges=feature_values.get("suspicious_edges", 0),
-                official_distance=feature_values.get("official_distance", 99),
-                community_size=feature_values.get("community_size", 0),
-            )
+    if not company_features:
+        return
+
+    created_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    rows = [
+        {
+            "id": uuid.uuid4(),
+            "analysis_run_id": analysis_run_id,
+            "company_id": uuid.UUID(company_id),
+            "graph_degree": feature_values.get("graph_degree", 0),
+            "suspicious_edges": feature_values.get("suspicious_edges", 0),
+            "official_distance": feature_values.get("official_distance", 99),
+            "community_size": feature_values.get("community_size", 0),
+            "created_at": created_at,
+        }
+        for company_id, feature_values in company_features.items()
+    ]
+    for start in range(0, len(rows), _BULK_INSERT_BATCH_SIZE):
+        await db.execute(
+            insert(CompanyGraphFeatureDB),
+            rows[start : start + _BULK_INSERT_BATCH_SIZE],
+        )
+    await db.flush()
+
+
+async def create_risk_assessments(
+    db: AsyncSession,
+    *,
+    analysis_run_id: uuid.UUID,
+    risk_assessments: list[dict],
+) -> None:
+    if not risk_assessments:
+        return
+
+    tender_ids = [payload["tender_id"] for payload in risk_assessments]
+    version_result = await db.execute(
+        select(
+            RiskAssessmentDB.tender_id,
+            func.max(RiskAssessmentDB.version).label("max_version"),
+        )
+        .where(RiskAssessmentDB.tender_id.in_(tender_ids))
+        .group_by(RiskAssessmentDB.tender_id)
+    )
+    versions_by_tender = {
+        tender_id: int(max_version or 0)
+        for tender_id, max_version in version_result.all()
+    }
+    assessed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    rows: list[dict] = []
+    for payload in risk_assessments:
+        tender_id = payload["tender_id"]
+        next_version = versions_by_tender.get(tender_id, 0) + 1
+        versions_by_tender[tender_id] = next_version
+        rows.append(
+            {
+                "id": uuid.uuid4(),
+                "analysis_run_id": analysis_run_id,
+                "tender_id": tender_id,
+                "version": next_version,
+                "overall_score": payload["overall_score"],
+                "category": payload["category"],
+                "rule_factors": payload["rule_factors"],
+                "recommendation": payload["recommendation"],
+                "ml_anomaly_score": payload["ml_anomaly_score"],
+                "ml_feature_importance": payload["ml_feature_importance"],
+                "model_version": payload["model_version"],
+                "assessed_at": assessed_at,
+            }
+        )
+
+    for start in range(0, len(rows), _BULK_INSERT_BATCH_SIZE):
+        await db.execute(
+            insert(RiskAssessmentDB),
+            rows[start : start + _BULK_INSERT_BATCH_SIZE],
         )
     await db.flush()
 

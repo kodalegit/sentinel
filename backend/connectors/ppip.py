@@ -191,14 +191,10 @@ def normalize_ocds_tender(
 
     # Award amount (take the first award if present)
     awarded_amount = None
-    awarded_company_name = None
     if awards:
         first_award = awards[0]
         award_value = first_award.get("value", {})
         awarded_amount = clean_amount(award_value.get("amount"))
-        suppliers = first_award.get("suppliers", [])
-        if suppliers:
-            awarded_company_name = suppliers[0].get("name")
 
     # Tender period
     tender_period = tender_data.get("tenderPeriod", {})
@@ -377,14 +373,15 @@ async def sync_ppip_fiscal_year(fiscal_year: str) -> dict:
     releases = await fetch_ocds_releases(fiscal_year)
 
     normalized_releases = []
-    all_tenders = []
-    all_companies = []
-    all_bids = []
-    all_contracts = []
+    tender_count = 0
+    company_count = 0
+    bid_count = 0
+    contract_count = 0
     skipped = 0
 
     for release in releases:
         companies = extract_ocds_companies(release)
+        company_count += len(companies)
         by_registration, by_name = _build_company_lookup(companies)
 
         awarded_to = None
@@ -397,15 +394,14 @@ async def sync_ppip_fiscal_year(fiscal_year: str) -> dict:
 
         tender = normalize_ocds_tender(release, awarded_to=awarded_to)
         if tender:
-            all_tenders.append(tender)
+            tender_count += 1
         else:
             skipped += 1
 
-        all_companies.extend(companies)
         bids = extract_ocds_bids(release, tender, companies) if tender else []
-        all_bids.extend(bids)
+        bid_count += len(bids)
         contracts = extract_ocds_contracts(release, tender, companies) if tender else []
-        all_contracts.extend(contracts)
+        contract_count += len(contracts)
         if tender:
             normalized_releases.append(
                 {
@@ -417,24 +413,20 @@ async def sync_ppip_fiscal_year(fiscal_year: str) -> dict:
             )
 
     logger.info(
-        f"PPIP sync complete: {len(all_tenders)} tenders, "
-        f"{len(all_companies)} companies, {len(all_bids)} bids, "
-        f"{len(all_contracts)} contracts, "
+        f"PPIP sync complete: {tender_count} tenders, "
+        f"{company_count} companies, {bid_count} bids, "
+        f"{contract_count} contracts, "
         f"{skipped} skipped"
     )
 
     return {
         "releases": normalized_releases,
-        "tenders": all_tenders,
-        "companies": all_companies,
-        "bids": all_bids,
-        "contracts": all_contracts,
         "stats": {
             "releases_fetched": len(releases),
-            "tenders_normalized": len(all_tenders),
-            "companies_extracted": len(all_companies),
-            "bids_extracted": len(all_bids),
-            "contracts_extracted": len(all_contracts),
+            "tenders_normalized": tender_count,
+            "companies_extracted": company_count,
+            "bids_extracted": bid_count,
+            "contracts_extracted": contract_count,
             "skipped": skipped,
         },
     }

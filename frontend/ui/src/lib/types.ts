@@ -194,7 +194,6 @@ export interface GraphData {
   edges: GraphEdge[];
 }
 
-
 // Dashboard
 export interface DashboardStats {
   total_tenders: number;
@@ -378,10 +377,19 @@ export interface IngestionResponse {
   counts: Record<string, number>;
 }
 
-export interface PPIPSyncResponse {
+export interface PPIPSyncAcceptedResponse {
   status: string;
   fiscal_year: string;
-  stats: Record<string, number>;
+  job_id: string;
+}
+
+export interface PPIPSyncStatusResponse {
+  status: string;
+  fiscal_year: string;
+  stats?: Record<string, number>;
+  error?: string;
+  processed_releases?: number;
+  total_releases?: number;
 }
 
 export interface RecomputeResponse {
