@@ -520,7 +520,7 @@ export default function TenderDetailPage({
                         {winning_company.supplier_type}
                       </span>
                     )}
-                    {dataQualityFlags && (
+                    {(dataQualityFlags || typeof winnerEvidence.quality_score === "number") && (
                       <div className="mt-2 pt-2 border-t border-border/30">
                         <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
                           Evidence Quality
