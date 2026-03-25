@@ -22,11 +22,14 @@ import {
   FileText,
   Clock,
   CheckCircle,
+  ChevronLeft,
+  ChevronRight,
   Download,
   Loader2,
 } from "lucide-react";
 
 type FilterTab = "ALL" | RiskCategory;
+const TENDERS_PAGE_SIZE = 12;
 
 const FILTER_TABS: { key: FilterTab; label: string; dot?: string }[] = [
   { key: "ALL", label: "All Tenders" },
@@ -38,13 +41,20 @@ const FILTER_TABS: { key: FilterTab; label: string; dot?: string }[] = [
 function DashboardContent() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<FilterTab>("ALL");
+  const [page, setPage] = useState(1);
   const [exportingCsv, setExportingCsv] = useState(false);
 
   const { stats, loading: statsLoading } = useDashboardStats();
   const { snapshot, loading: snapshotLoading } = useLatestAnalysisSnapshot();
-  const { tenders, loading: tendersLoading } = useTenders(
-    activeTab === "ALL" ? undefined : activeTab
+  const { tendersPage, tenders, loading: tendersLoading, isFetching: tendersFetching } = useTenders(
+    activeTab === "ALL" ? undefined : activeTab,
+    page,
+    TENDERS_PAGE_SIZE,
   );
+  const totalTenders = tendersPage.total;
+  const totalPages = Math.max(1, Math.ceil(totalTenders / TENDERS_PAGE_SIZE));
+  const showingFrom = totalTenders === 0 ? 0 : tendersPage.skip + 1;
+  const showingTo = totalTenders === 0 ? 0 : tendersPage.skip + tenders.length;
 
   const snapshotLabel = snapshot?.snapshot_source === "fresh"
     ? "Fresh Snapshot"
@@ -159,7 +169,10 @@ function DashboardContent() {
             return (
               <button
                 key={tab.key}
-                onClick={() => setActiveTab(tab.key)}
+                onClick={() => {
+                  setActiveTab(tab.key);
+                  setPage(1);
+                }}
                 className={`
                   flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium
                   whitespace-nowrap transition-all duration-200 border
@@ -194,8 +207,13 @@ function DashboardContent() {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs text-muted-foreground">
-              {tendersLoading ? "Loading" : `${tenders.length} results`}
+              {tendersLoading
+                ? "Loading"
+                : `Showing ${showingFrom}-${showingTo} of ${totalTenders}`}
             </span>
+            {tendersFetching && !tendersLoading ? (
+              <Loader2 size={12} className="animate-spin text-muted-foreground" />
+            ) : null}
             <button
               onClick={handleExportCsv}
               disabled={exportingCsv || tendersLoading}
@@ -231,6 +249,31 @@ function DashboardContent() {
             ))
           )}
         </div>
+        {totalTenders > 0 ? (
+          <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-border/40 bg-card/80 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs text-muted-foreground">
+              Page {page} of {totalPages}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+                disabled={page <= 1 || tendersFetching}
+                className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ChevronLeft size={14} />
+                Previous
+              </button>
+              <button
+                onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                disabled={!tendersPage.has_more || tendersFetching}
+                className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
     </div>

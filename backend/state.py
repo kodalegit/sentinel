@@ -16,6 +16,7 @@ from models import (
     PublicOfficial,
     Bid,
     RiskScore,
+    TenderBidStats,
 )
 from graph.communities import Cluster
 
@@ -30,8 +31,10 @@ class AppState:
     officials: dict[str, PublicOfficial] = field(default_factory=dict)
     bids: list[Bid] = field(default_factory=list)
     bids_by_tender: dict[str, list[Bid]] = field(default_factory=dict)
+    bid_stats_by_tender: dict[str, TenderBidStats] = field(default_factory=dict)
     graph: nx.Graph = field(default_factory=nx.Graph)
     graph_loaded: bool = False
+    graph_inputs_loaded: bool = False
     graph_source: str | None = None
     risk_scores: dict[str, RiskScore] = field(default_factory=dict)
     communities: list[Cluster] = field(default_factory=list)

@@ -410,9 +410,22 @@ def _build_tender_block(
     tender = app_state.tenders[tender_id]
     risk = app_state.risk_scores.get(tender_id)
     bids = app_state.bids_by_tender.get(tender_id, []) if app_state else []
-    bidder_count = len({bid.company_id for bid in bids})
-    priced_bid_count = len([bid for bid in bids if bid.amount is not None])
-    participation_only_count = len([bid for bid in bids if bid.amount is None])
+    bid_stats = getattr(app_state, "bid_stats_by_tender", {}).get(tender_id)
+    bidder_count = (
+        int(getattr(bid_stats, "bidder_count", 0))
+        if bid_stats is not None
+        else len({bid.company_id for bid in bids})
+    )
+    priced_bid_count = (
+        int(getattr(bid_stats, "priced_bid_count", 0))
+        if bid_stats is not None
+        else len([bid for bid in bids if bid.amount is not None])
+    )
+    participation_only_count = (
+        int(getattr(bid_stats, "participation_only_count", 0))
+        if bid_stats is not None
+        else len([bid for bid in bids if bid.amount is None])
+    )
     winning_company = (
         app_state.companies.get(tender.awarded_to)
         if app_state and tender.awarded_to in getattr(app_state, "companies", {})

@@ -101,6 +101,14 @@ export interface TenderWithRisk {
   bidder_count: number;
 }
 
+export interface PaginatedTenderResults {
+  items: TenderWithRisk[];
+  total: number;
+  skip: number;
+  limit: number;
+  has_more: boolean;
+}
+
 export interface TenderDetail {
   tender: Tender;
   risk: RiskScore;

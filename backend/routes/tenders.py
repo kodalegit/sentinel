@@ -1,20 +1,32 @@
 """Tender routes."""
 
 import csv
+import uuid
 from io import BytesIO, StringIO
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from db.config import get_db
+from db import repository as repo
+from db.mappers import (
+    bid_to_pydantic,
+    company_to_pydantic,
+    risk_assessment_to_pydantic,
+    tender_to_pydantic,
+)
 from models import (
     RiskScore,
     RiskCategory,
+    PaginatedTenderResults,
     TenderStatus,
+    TenderBidStats,
     TenderWithRisk,
     TenderDetail,
 )
@@ -43,9 +55,7 @@ def _collect_tender_results(
         if status and tender.status != status:
             continue
 
-        bidder_count = len(
-            {b.company_id for b in state.bids_by_tender.get(tender_id, [])}
-        )
+        bidder_count = _get_bid_stats(state, tender_id).bidder_count
         results.append(
             TenderWithRisk(tender=tender, risk=risk, bidder_count=bidder_count)
         )
@@ -68,6 +78,57 @@ def _collect_tender_results(
         )
 
     return results
+
+
+def _get_bid_stats(state: State, tender_id: str) -> TenderBidStats:
+    stats = state.bid_stats_by_tender.get(tender_id)
+    if stats is not None:
+        return stats
+
+    bids = state.bids_by_tender.get(tender_id, [])
+    participants = {bid.company_id for bid in bids}
+    priced = {bid.company_id for bid in bids if bid.amount is not None}
+    participation_only = {bid.company_id for bid in bids if bid.amount is None}
+    return TenderBidStats(
+        bidder_count=len(participants),
+        priced_bid_count=len(priced),
+        participation_only_count=len(participation_only),
+    )
+
+
+async def _load_tender_detail(
+    tender_id: str,
+    state: State,
+    db: AsyncSession,
+) -> TenderDetail:
+    if tender_id not in state.tenders:
+        raise HTTPException(status_code=404, detail="Tender not found")
+
+    try:
+        tender_uuid = uuid.UUID(tender_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Tender not found") from exc
+
+    tender_db = await repo.get_tender_with_bids(db, tender_uuid)
+    if tender_db is None:
+        raise HTTPException(status_code=404, detail="Tender not found")
+
+    tender = tender_to_pydantic(tender_db)
+    risk = state.risk_scores.get(
+        tender_id, RiskScore(overall=0, category=RiskCategory.LOW)
+    )
+    tender_bids = [bid_to_pydantic(bid) for bid in tender_db.bids]
+    winning_company = (
+        company_to_pydantic(tender_db.winning_company)
+        if tender_db.winning_company is not None
+        else None
+    )
+    return TenderDetail(
+        tender=tender,
+        risk=risk,
+        bids=tender_bids,
+        winning_company=winning_company,
+    )
 
 
 def _build_tender_report_pdf(detail: TenderDetail) -> bytes:
@@ -272,25 +333,61 @@ def _build_tender_report_pdf(detail: TenderDetail) -> bytes:
     return buffer.getvalue()
 
 
-@router.get("/tenders", response_model=list[TenderWithRisk])
-def get_tenders(
+@router.get("/tenders", response_model=PaginatedTenderResults)
+async def get_tenders(
     state: State,
+    db: AsyncSession = Depends(get_db),
     risk_level: Optional[RiskCategory] = Query(
         None, description="Filter by risk level"
     ),
     status: Optional[TenderStatus] = Query(None, description="Filter by tender status"),
     sort_by: str = Query("risk", description="Sort by: risk, value, date"),
     limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
 ):
     """Get list of tenders with risk scores."""
-    results = _collect_tender_results(
-        state, risk_level=risk_level, status=status, sort_by=sort_by
+    analysis_run_id = None
+    if state.analysis_run_id:
+        try:
+            analysis_run_id = uuid.UUID(state.analysis_run_id)
+        except ValueError:
+            analysis_run_id = None
+
+    rows, total = await repo.get_tender_page(
+        db,
+        analysis_run_id=analysis_run_id,
+        risk_level=risk_level.value if risk_level else None,
+        status=status.value if status else None,
+        sort_by=sort_by,
+        skip=offset,
+        limit=limit,
     )
-    return results[:limit]
+
+    items = []
+    for tender_db, risk_db, bidder_count in rows:
+        tender = tender_to_pydantic(tender_db)
+        risk = (
+            risk_assessment_to_pydantic(risk_db)
+            if risk_db is not None
+            else state.risk_scores.get(
+                tender.id, RiskScore(overall=0, category=RiskCategory.LOW)
+            )
+        )
+        items.append(
+            TenderWithRisk(tender=tender, risk=risk, bidder_count=bidder_count)
+        )
+
+    return PaginatedTenderResults(
+        items=items,
+        total=total,
+        skip=offset,
+        limit=limit,
+        has_more=offset + len(items) < total,
+    )
 
 
 @router.get("/tenders/export.csv")
-def export_tenders_csv(
+async def export_tenders_csv(
     state: State,
     risk_level: Optional[RiskCategory] = Query(None),
     status: Optional[TenderStatus] = Query(None),
@@ -350,33 +447,24 @@ def export_tenders_csv(
 
 
 @router.get("/tenders/{tender_id}", response_model=TenderDetail)
-def get_tender_detail(tender_id: str, state: State):
+async def get_tender_detail(
+    tender_id: str,
+    state: State,
+    db: AsyncSession = Depends(get_db),
+):
     """Get detailed tender information with full risk breakdown."""
-    if tender_id not in state.tenders:
-        raise HTTPException(status_code=404, detail="Tender not found")
-
-    tender = state.tenders[tender_id]
-    risk = state.risk_scores.get(
-        tender_id, RiskScore(overall=0, category=RiskCategory.LOW)
-    )
-    tender_bids = state.bids_by_tender.get(tender_id, [])
-
-    winning_company = None
-    if tender.awarded_to and tender.awarded_to in state.companies:
-        winning_company = state.companies[tender.awarded_to]
-
-    return TenderDetail(
-        tender=tender, risk=risk, bids=tender_bids, winning_company=winning_company
-    )
+    detail = await _load_tender_detail(tender_id, state, db)
+    return detail
 
 
 @router.get("/tenders/{tender_id}/report.pdf")
-def export_tender_risk_report(tender_id: str, state: State):
+async def export_tender_risk_report(
+    tender_id: str,
+    state: State,
+    db: AsyncSession = Depends(get_db),
+):
     """Export a tender risk report as PDF."""
-    if tender_id not in state.tenders:
-        raise HTTPException(status_code=404, detail="Tender not found")
-
-    detail = get_tender_detail(tender_id, state)
+    detail = await _load_tender_detail(tender_id, state, db)
     pdf_bytes = _build_tender_report_pdf(detail)
     filename = f"tender-risk-report-{tender_id}.pdf"
     return StreamingResponse(
@@ -387,40 +475,34 @@ def export_tender_risk_report(tender_id: str, state: State):
 
 
 @router.get("/tenders/{tender_id}/evidence")
-async def get_evidence_pack(tender_id: str, state: State):
+async def get_evidence_pack(
+    tender_id: str,
+    state: State,
+    db: AsyncSession = Depends(get_db),
+):
     """Get structured evidence pack for a tender."""
-    if tender_id not in state.tenders:
-        raise HTTPException(status_code=404, detail="Tender not found")
-
-    tender = state.tenders[tender_id]
-    risk = state.risk_scores.get(
-        tender_id, RiskScore(overall=0, category=RiskCategory.LOW)
-    )
-    tender_bids = state.bids_by_tender.get(tender_id, [])
+    detail = await _load_tender_detail(tender_id, state, db)
 
     graph = state.graph if state.graph_loaded else None
     pack = await build_evidence_pack_async(
-        tender, risk, tender_bids, state.companies, graph
+        detail.tender, detail.risk, detail.bids, state.companies, graph
     )
     return pack.to_dict()
 
 
 @router.get("/tenders/{tender_id}/explain")
-async def explain_tender_risk(tender_id: str, state: State):
+async def explain_tender_risk(
+    tender_id: str,
+    state: State,
+    db: AsyncSession = Depends(get_db),
+):
     """Get AI-generated explanation for a tender's risk score."""
-    if tender_id not in state.tenders:
-        raise HTTPException(status_code=404, detail="Tender not found")
-
-    tender = state.tenders[tender_id]
-    risk = state.risk_scores.get(
-        tender_id, RiskScore(overall=0, category=RiskCategory.LOW)
-    )
-    tender_bids = state.bids_by_tender.get(tender_id, [])
+    detail = await _load_tender_detail(tender_id, state, db)
 
     # Use async variant so Neo4j paths are resolved before LLM prompt is built
     graph = state.graph if state.graph_loaded else None
     pack = await build_evidence_pack_async(
-        tender, risk, tender_bids, state.companies, graph
+        detail.tender, detail.risk, detail.bids, state.companies, graph
     )
     agent = get_agent()
     result = await agent.explain(pack)

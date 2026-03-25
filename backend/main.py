@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 import networkx as nx
 
 from config import settings
-from models import Bid, RiskScore
+from models import Bid, Company, Director, RiskScore, TenderBidStats
 from state import AppState
 from db.config import async_session
 from db import repository as repo
@@ -139,20 +139,51 @@ def _communities_from_json(items: list[dict] | None) -> list[Cluster]:
     ]
 
 
-def _company_graph_features_from_rows(rows) -> dict[str, dict[str, int]]:
-    return {
-        str(row.company_id): {
-            "graph_degree": row.graph_degree,
+def _company_graph_features_from_rows(rows: list[Any]) -> dict[str, dict[str, int]]:
+    features: dict[str, dict[str, int]] = {}
+    for row in rows:
+        features[str(row.company_id)] = {
+            "graph_degree": int(row.graph_degree or 0),
             "suspicious_edges": row.suspicious_edges,
             "official_distance": row.official_distance,
             "community_size": row.community_size,
         }
-        for row in rows
+    return features
+
+
+def _build_bid_stats_from_bids(bids: list[Bid]) -> dict[str, TenderBidStats]:
+    participants_by_tender: dict[str, set[str]] = {}
+    priced_by_tender: dict[str, set[str]] = {}
+    participation_only_by_tender: dict[str, set[str]] = {}
+
+    for bid in bids:
+        participants_by_tender.setdefault(bid.tender_id, set()).add(bid.company_id)
+        if bid.amount is None:
+            participation_only_by_tender.setdefault(bid.tender_id, set()).add(
+                bid.company_id
+            )
+        else:
+            priced_by_tender.setdefault(bid.tender_id, set()).add(bid.company_id)
+
+    tender_ids = (
+        set(participants_by_tender)
+        | set(priced_by_tender)
+        | set(participation_only_by_tender)
+    )
+    return {
+        tender_id: TenderBidStats(
+            bidder_count=len(participants_by_tender.get(tender_id, set())),
+            priced_bid_count=len(priced_by_tender.get(tender_id, set())),
+            participation_only_count=len(
+                participation_only_by_tender.get(tender_id, set())
+            ),
+        )
+        for tender_id in tender_ids
     }
 
 
 async def load_persisted_analysis(app: FastAPI) -> dict | None:
-    data = await load_data_from_db()
+    data = await load_data_from_db(include_bids=False)
 
     async with async_session() as db:
         analysis_run = await repo.get_latest_analysis_run(db)
@@ -177,6 +208,7 @@ async def load_persisted_analysis(app: FastAPI) -> dict | None:
         officials=data["officials"],
         bids=data["bids"],
         bids_by_tender=data["bids_by_tender"],
+        bid_stats_by_tender=data["bid_stats_by_tender"],
         risk_scores=risk_scores,
         communities=communities,
         analysis_run_id=str(analysis_run.id),
@@ -184,6 +216,7 @@ async def load_persisted_analysis(app: FastAPI) -> dict | None:
         analysis_model_version=analysis_run.model_version,
         analysis_created_at=analysis_run.created_at,
         graph_loaded=False,
+        graph_inputs_loaded=data["graph_inputs_loaded"],
         graph_source=analysis_run.graph_source,
         snapshot_source="persisted",
         analysis_summary={
@@ -448,8 +481,10 @@ async def recompute_app_state(
                 officials=data["officials"],
                 bids=data["bids"],
                 bids_by_tender=data["bids_by_tender"],
+                bid_stats_by_tender=data["bid_stats_by_tender"],
                 graph=nx.Graph(),
                 graph_loaded=False,
+                graph_inputs_loaded=data["graph_inputs_loaded"],
                 graph_source="neo4j",
                 risk_scores=risk_scores,
                 communities=communities,
@@ -577,8 +612,10 @@ async def recompute_app_state(
         officials=data["officials"],
         bids=data["bids"],
         bids_by_tender=data["bids_by_tender"],
+        bid_stats_by_tender=data["bid_stats_by_tender"],
         graph=graph,
         graph_loaded=True,
+        graph_inputs_loaded=data["graph_inputs_loaded"],
         graph_source="networkx",
         risk_scores=risk_scores,
         communities=communities,
@@ -641,17 +678,56 @@ async def sync_neo4j_background(app: FastAPI):
         logger.error(f"Neo4j background sync failed: {e}")
 
 
-async def load_data_from_db():
-    """Load all entities from PostgreSQL and convert to Pydantic models."""
+async def load_data_from_db(*, include_bids: bool = True):
+    """Load entities from PostgreSQL and convert to Pydantic models."""
     async with async_session() as db:
-        companies_db = await repo.get_companies(db)
-        directors_db = await repo.get_directors(db)
+        companies_db = await repo.get_companies(db, include_directors=False)
+        directors_db = await repo.get_directors(db, include_companies=False)
+        company_director_links = await repo.get_company_director_links(db)
         officials_db = await repo.get_officials(db)
-        tenders_db = await repo.get_tenders(db)
-        bids_db = await repo.get_all_bids(db)
+        tenders_db = await repo.get_tenders(db, include_related=False)
+        bid_stats_rows = await repo.get_bid_stats_by_tender(db)
+        bids_db = await repo.get_all_bids(db) if include_bids else []
 
-    companies = {str(c.id): company_to_pydantic(c) for c in companies_db}
-    directors = {str(d.id): director_to_pydantic(d) for d in directors_db}
+    company_director_ids: dict[str, list[str]] = {}
+    director_company_ids: dict[str, list[str]] = {}
+    for link in company_director_links:
+        company_id = str(link.company_id)
+        director_id = str(link.director_id)
+        company_director_ids.setdefault(company_id, []).append(director_id)
+        director_company_ids.setdefault(director_id, []).append(company_id)
+
+    companies = {
+        str(c.id): Company(
+            id=str(c.id),
+            name=c.name,
+            registration_number=c.registration_number,
+            registration_date=c.registration_date,
+            address=c.address,
+            phone=c.phone,
+            director_ids=company_director_ids.get(str(c.id), []),
+            supplier_type=c.supplier_type,
+            brs_number=c.brs_number,
+            egp_registration_number=c.egp_registration_number,
+            contact_email=c.contact_email,
+            physical_address=c.physical_address,
+            postal_address=c.postal_address,
+            postal_code=c.postal_code,
+            source_system=c.source_system,
+            source_record_id=c.source_record_id,
+            data_quality_flags=c.data_quality_flags,
+        )
+        for c in companies_db
+    }
+    directors = {
+        str(d.id): Director(
+            id=str(d.id),
+            name=d.name,
+            national_id=d.national_id,
+            company_ids=director_company_ids.get(str(d.id), []),
+        )
+        for d in directors_db
+    }
     officials = {str(o.id): official_to_pydantic(o) for o in officials_db}
     tenders = {str(t.id): tender_to_pydantic(t) for t in tenders_db}
     bids = [bid_to_pydantic(b) for b in bids_db]
@@ -660,6 +736,17 @@ async def load_data_from_db():
     for b in bids:
         bids_by_tender.setdefault(b.tender_id, []).append(b)
 
+    bid_stats_by_tender = {
+        str(tender_id): TenderBidStats(
+            bidder_count=bidder_count,
+            priced_bid_count=priced_bid_count,
+            participation_only_count=participation_only_count,
+        )
+        for tender_id, bidder_count, priced_bid_count, participation_only_count in bid_stats_rows
+    }
+    if include_bids:
+        bid_stats_by_tender = _build_bid_stats_from_bids(bids)
+
     return {
         "companies": companies,
         "directors": directors,
@@ -667,6 +754,8 @@ async def load_data_from_db():
         "tenders": tenders,
         "bids": bids,
         "bids_by_tender": bids_by_tender,
+        "bid_stats_by_tender": bid_stats_by_tender,
+        "graph_inputs_loaded": include_bids,
     }
 
 

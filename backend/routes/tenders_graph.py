@@ -33,6 +33,9 @@ async def get_tender_graph(
             pass  # Fall through to NetworkX
 
     # NetworkX fallback
-    graph = ensure_runtime_graph(state)
+    try:
+        graph = ensure_runtime_graph(state)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     subgraph = get_tender_subgraph(graph, tender_id, depth=depth)
     return graph_to_frontend_format(subgraph)

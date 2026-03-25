@@ -143,6 +143,13 @@ def _build_search_subtitle(graph: nx.Graph, node_id: str, attrs: dict) -> str | 
     return None
 
 
+def _ensure_runtime_graph_or_503(state: State) -> nx.Graph:
+    try:
+        return ensure_runtime_graph(state)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.get("/stats")
 async def get_graph_stats(state: State):
     """Get graph statistics. Uses Neo4j counts when available, falls back to NetworkX."""
@@ -165,7 +172,7 @@ async def get_graph_stats(state: State):
         except Exception:
             pass
 
-    G = ensure_runtime_graph(state)
+    G = _ensure_runtime_graph_or_503(state)
 
     # Count edges by relationship from NetworkX (always available, used for type breakdowns)
     node_types: dict[str, int] = {}
@@ -207,7 +214,7 @@ def get_full_graph(
 ):
     """Get the shadow graph for exploration with pagination/limits.
     For large graphs, use /communities or /entity/{id} endpoints instead."""
-    G = ensure_runtime_graph(state)
+    G = _ensure_runtime_graph_or_503(state)
 
     # If graph is small enough, return full graph
     if G.number_of_nodes() <= limit_nodes and G.number_of_edges() <= limit_edges:
@@ -323,7 +330,7 @@ async def get_community_graph(
             pass  # Fall through to NetworkX
 
     # NetworkX fallback
-    graph = ensure_runtime_graph(state)
+    graph = _ensure_runtime_graph_or_503(state)
     subgraph = get_cluster_subgraph(
         graph, cluster.company_ids, include_tenders, include_officials
     )
@@ -348,7 +355,7 @@ async def search_graph_entities(
         except Exception:
             pass
 
-    graph = ensure_runtime_graph(state)
+    graph = _ensure_runtime_graph_or_503(state)
     query = q.strip().lower()
     matches: list[tuple[tuple[int, int, str], GraphSearchResult]] = []
 
@@ -395,7 +402,7 @@ async def get_path(
             pass
 
     # NetworkX fallback
-    graph = ensure_runtime_graph(state)
+    graph = _ensure_runtime_graph_or_503(state)
     result = find_shortest_path(graph, source, target)
     if result is None:
         raise HTTPException(status_code=404, detail="No path found between entities")
@@ -422,7 +429,7 @@ async def get_entity_neighborhood(
             pass
 
     # NetworkX fallback
-    graph = ensure_runtime_graph(state)
+    graph = _ensure_runtime_graph_or_503(state)
     if entity_id not in graph:
         raise HTTPException(status_code=404, detail="Entity not found in graph")
 
