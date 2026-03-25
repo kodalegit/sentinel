@@ -329,7 +329,7 @@ export function GraphExplorerContent() {
 
   const handleClusterInsightSelect = (insight: ClusterInsightFocus) => {
     setSelectedClusterInsight(insight);
-    setSelectedNodeId(null);
+    setSelectedNodeId(insight.kind === "director" ? insight.directorId ?? null : null);
     setIsSelectedNodeCardDismissed(false);
     setSuspiciousOnly(false);
     setSelectedNeighborhoodOnly(false);

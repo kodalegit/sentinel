@@ -234,8 +234,12 @@ async def _get_shared_attributes(session, company_ids: list[str]) -> dict:
         """
         MATCH (c1:Company)-[r:SHARES_ADDRESS]-(c2:Company)
         WHERE c1.id IN $ids AND c2.id IN $ids AND c1.id < c2.id
-        RETURN c1.physical_address AS address, 
-               collect(DISTINCT c1.name) + collect(DISTINCT c2.name) AS companies
+        WITH coalesce(c1.physical_address, c1.address) AS address,
+             collect(DISTINCT c1.id) + collect(DISTINCT c2.id) AS company_ids
+        WHERE address IS NOT NULL AND trim(address) <> ''
+        RETURN address,
+               company_ids AS companies
+        ORDER BY address
     """,
         ids=company_ids,
     )
@@ -255,8 +259,12 @@ async def _get_shared_attributes(session, company_ids: list[str]) -> dict:
         """
         MATCH (c1:Company)-[r:SHARES_PHONE]-(c2:Company)
         WHERE c1.id IN $ids AND c2.id IN $ids AND c1.id < c2.id
-        RETURN c1.phone AS phone,
-               collect(DISTINCT c1.name) + collect(DISTINCT c2.name) AS companies
+        WITH c1.phone AS phone,
+             collect(DISTINCT c1.id) + collect(DISTINCT c2.id) AS company_ids
+        WHERE phone IS NOT NULL AND trim(phone) <> ''
+        RETURN phone,
+               company_ids AS companies
+        ORDER BY phone
     """,
         ids=company_ids,
     )
@@ -276,8 +284,9 @@ async def _get_shared_attributes(session, company_ids: list[str]) -> dict:
         """
         MATCH (c1:Company)-[:DIRECTED_BY]->(d:Director)<-[:DIRECTED_BY]-(c2:Company)
         WHERE c1.id IN $ids AND c2.id IN $ids AND c1.id < c2.id
-        RETURN d.name AS director,
-               collect(DISTINCT c1.name) + collect(DISTINCT c2.name) AS companies
+        RETURN d.id AS director_id,
+               collect(DISTINCT c1.id) + collect(DISTINCT c2.id) AS companies
+        ORDER BY director_id
     """,
         ids=company_ids,
     )
@@ -286,7 +295,7 @@ async def _get_shared_attributes(session, company_ids: list[str]) -> dict:
     for record in director_records:
         shared["directors"].append(
             {
-                "director_id": record["director"],
+                "director_id": record["director_id"],
                 "companies": list(set(record["companies"])),
             }
         )

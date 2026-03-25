@@ -31,6 +31,94 @@ MAX_GRAPH_EDGES = 2000
 MAX_GRAPH_SEARCH_RESULTS = 12
 
 
+def _normalize_shared_node_id(
+    value: str | None,
+    ids: set[str],
+    name_to_id: dict[str, str],
+) -> str | None:
+    if not value:
+        return None
+    if value in ids:
+        return value
+    return name_to_id.get(value)
+
+
+def _normalize_shared_attributes(shared_attributes: dict, state: State) -> dict:
+    company_ids = set(state.companies.keys())
+    director_ids = set(state.directors.keys())
+    company_name_to_id = {
+        company.name: company.id for company in state.companies.values()
+    }
+    director_name_to_id = {
+        director.name: director.id for director in state.directors.values()
+    }
+
+    normalized = {
+        "addresses": [],
+        "phones": [],
+        "directors": [],
+    }
+
+    for item in shared_attributes.get("addresses", []):
+        normalized_companies = list(
+            dict.fromkeys(
+                company_id
+                for company_id in (
+                    _normalize_shared_node_id(company, company_ids, company_name_to_id)
+                    for company in item.get("companies", [])
+                )
+                if company_id
+            )
+        )
+        normalized["addresses"].append(
+            {
+                "address": item.get("address"),
+                "companies": normalized_companies,
+            }
+        )
+
+    for item in shared_attributes.get("phones", []):
+        normalized_companies = list(
+            dict.fromkeys(
+                company_id
+                for company_id in (
+                    _normalize_shared_node_id(company, company_ids, company_name_to_id)
+                    for company in item.get("companies", [])
+                )
+                if company_id
+            )
+        )
+        normalized["phones"].append(
+            {
+                "phone": item.get("phone"),
+                "companies": normalized_companies,
+            }
+        )
+
+    for item in shared_attributes.get("directors", []):
+        normalized_companies = list(
+            dict.fromkeys(
+                company_id
+                for company_id in (
+                    _normalize_shared_node_id(company, company_ids, company_name_to_id)
+                    for company in item.get("companies", [])
+                )
+                if company_id
+            )
+        )
+        normalized_director_id = _normalize_shared_node_id(
+            item.get("director_id"), director_ids, director_name_to_id
+        )
+        normalized["directors"].append(
+            {
+                "director_id": normalized_director_id or item.get("director_id"),
+                "companies": normalized_companies,
+            }
+        )
+
+    return normalized
+
+
 def _build_search_subtitle(graph: nx.Graph, node_id: str, attrs: dict) -> str | None:
     node_type = attrs.get("type")
     if node_type == "TENDER":
@@ -194,7 +282,9 @@ def get_communities(
                 "company_names": c.company_names,
                 "size": c.size,
                 "suspicion_score": round(c.suspicion_score, 1),
-                "shared_attributes": c.shared_attributes,
+                "shared_attributes": _normalize_shared_attributes(
+                    c.shared_attributes, state
+                ),
                 "co_bid_count": c.co_bid_count,
                 "win_pattern": c.win_pattern,
             }
