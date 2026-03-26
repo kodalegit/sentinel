@@ -2,7 +2,7 @@
  * Custom hooks for data fetching — powered by TanStack Query.
  */
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { RiskCategory, CaseStatus } from "@/lib/types";
 import {
   getLatestAnalysisSnapshot,
@@ -27,7 +27,8 @@ import {
 export const queryKeys = {
   dashboard: ["dashboard-stats"] as const,
   analysisLatest: ["analysis-latest"] as const,
-  tenders: (filter?: RiskCategory) => ["tenders", filter ?? "ALL"] as const,
+  tenders: (filter?: RiskCategory, page: number = 1, pageSize: number = 12) =>
+    ["tenders", filter ?? "ALL", page, pageSize] as const,
   tenderDetail: (id: string) => ["tender-detail", id] as const,
   tenderGraph: (id: string) => ["tender-graph", id] as const,
   fullGraph: ["full-graph"] as const,
@@ -60,12 +61,36 @@ export function useLatestAnalysisSnapshot() {
   return { snapshot, loading, error };
 }
 
-export function useTenders(filter?: RiskCategory) {
-  const { data: tenders = [], isLoading: loading, error } = useQuery({
-    queryKey: queryKeys.tenders(filter),
-    queryFn: () => getTenders({ riskLevel: filter, sortBy: "risk" }),
+export function useTenders(
+  filter?: RiskCategory,
+  page: number = 1,
+  pageSize: number = 12,
+) {
+  const fallbackPage = {
+    items: [],
+    total: 0,
+    skip: Math.max(0, (page - 1) * pageSize),
+    limit: pageSize,
+    has_more: false,
+  };
+  const {
+    data: tendersPage = fallbackPage,
+    isLoading: loading,
+    isFetching,
+    error,
+  } = useQuery({
+    queryKey: queryKeys.tenders(filter, page, pageSize),
+    queryFn: () =>
+      getTenders({
+        riskLevel: filter,
+        sortBy: "risk",
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
+      }),
+    placeholderData: keepPreviousData,
+    staleTime: 30 * 1000,
   });
-  return { tenders, loading, error };
+  return { tendersPage, tenders: tendersPage.items, loading, isFetching, error };
 }
 
 export function useTenderDetail(tenderId: string | null) {

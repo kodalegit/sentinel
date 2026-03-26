@@ -5,11 +5,15 @@ Requires supervisor or admin role.
 """
 
 import logging
+import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from enum import Enum
+from typing import Any, Optional
+import asyncio
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from connectors.ppip import sync_ppip_fiscal_year
 from connectors.egp import normalize_egp_tenders, normalize_egp_contract
@@ -39,10 +43,19 @@ class PPIPSyncRequest(BaseModel):
     fiscal_year: str = Field(..., description="Fiscal year e.g. '2025-2026'")
 
 
-class PPIPSyncResponse(BaseModel):
+class PPIPSyncAcceptedResponse(BaseModel):
     status: str
     fiscal_year: str
-    stats: dict
+    job_id: str
+
+
+class PPIPSyncStatusResponse(BaseModel):
+    status: str
+    fiscal_year: str
+    stats: dict | None = None
+    error: str | None = None
+    processed_releases: int | None = None
+    total_releases: int | None = None
 
 
 class EGPTenderRequest(BaseModel):
@@ -62,21 +75,98 @@ class IngestResponse(BaseModel):
     counts: dict = Field(default_factory=dict)
 
 
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+
+
+_ppip_sync_jobs: dict[str, dict[str, Any]] = {}
+PPIP_PERSIST_BATCH_SIZE = 100
+
+
 # ---------------------------------------------------------------------------
 # Helper: persist entities to DB
 # ---------------------------------------------------------------------------
 
 
-async def _persist_company(db, company) -> Optional[CompanyDB]:
-    """Persist a company, skipping duplicates by registration_number."""
-    from sqlalchemy import select
+def _chunked(values: list[Any], size: int = 1000):
+    for i in range(0, len(values), size):
+        yield values[i : i + size]
 
-    result = await db.execute(
-        select(CompanyDB).where(
-            CompanyDB.registration_number == company.registration_number
+
+async def _load_companies_by_registration(
+    db, registration_numbers: list[str]
+) -> dict[str, CompanyDB]:
+    companies: dict[str, CompanyDB] = {}
+    unique_numbers = [value for value in dict.fromkeys(registration_numbers) if value]
+    for chunk in _chunked(unique_numbers):
+        result = await db.execute(
+            select(CompanyDB).where(CompanyDB.registration_number.in_(chunk))
         )
-    )
-    existing = result.scalar_one_or_none()
+        for company in result.scalars():
+            companies[company.registration_number] = company
+    return companies
+
+
+async def _load_tenders_by_reference(
+    db, reference_numbers: list[str]
+) -> dict[str, TenderDB]:
+    tenders: dict[str, TenderDB] = {}
+    unique_numbers = [value for value in dict.fromkeys(reference_numbers) if value]
+    for chunk in _chunked(unique_numbers):
+        result = await db.execute(
+            select(TenderDB).where(TenderDB.reference_number.in_(chunk))
+        )
+        for tender in result.scalars():
+            tenders[tender.reference_number] = tender
+    return tenders
+
+
+async def _load_contracts_by_number(
+    db, contract_numbers: list[str]
+) -> dict[str, ContractDB]:
+    contracts: dict[str, ContractDB] = {}
+    unique_numbers = [value for value in dict.fromkeys(contract_numbers) if value]
+    for chunk in _chunked(unique_numbers):
+        result = await db.execute(
+            select(ContractDB).where(ContractDB.contract_number.in_(chunk))
+        )
+        for contract in result.scalars():
+            contracts[contract.contract_number] = contract
+    return contracts
+
+
+async def _load_bids_by_tender_ids(
+    db, tender_ids: list[uuid.UUID]
+) -> dict[tuple[str, str], BidDB]:
+    bids: dict[tuple[str, str], BidDB] = {}
+    unique_ids = list(dict.fromkeys(tender_ids))
+    for chunk in _chunked(unique_ids):
+        result = await db.execute(select(BidDB).where(BidDB.tender_id.in_(chunk)))
+        for bid in result.scalars():
+            bids[(str(bid.tender_id), str(bid.company_id))] = bid
+    return bids
+
+
+async def _persist_company(
+    db,
+    company,
+    existing_companies: Optional[dict[str, CompanyDB]] = None,
+) -> Optional[CompanyDB]:
+    """Persist a company, skipping duplicates by registration_number."""
+    existing = None
+    if existing_companies is not None:
+        existing = existing_companies.get(company.registration_number)
+    else:
+        result = await db.execute(
+            select(CompanyDB).where(
+                CompanyDB.registration_number == company.registration_number
+            )
+        )
+        existing = result.scalar_one_or_none()
+
     if existing:
         updated = False
 
@@ -115,10 +205,10 @@ async def _persist_company(db, company) -> Optional[CompanyDB]:
 
         if updated:
             existing.ingested_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            await db.flush()
         return existing
 
     db_company = CompanyDB(
+        id=uuid.uuid4(),
         name=company.name,
         registration_number=company.registration_number,
         registration_date=company.registration_date,
@@ -137,43 +227,44 @@ async def _persist_company(db, company) -> Optional[CompanyDB]:
         data_quality_flags=company.data_quality_flags,
     )
     db.add(db_company)
-    await db.flush()
+    if existing_companies is not None:
+        existing_companies[company.registration_number] = db_company
     return db_company
 
 
-async def _persist_tender(db, tender) -> Optional[TenderDB]:
+async def _persist_tender(
+    db,
+    tender,
+    existing_tenders: Optional[dict[str, TenderDB]] = None,
+) -> Optional[TenderDB]:
     """Persist a tender, skipping duplicates by reference_number."""
-    from sqlalchemy import select
+    existing = None
+    if existing_tenders is not None:
+        existing = existing_tenders.get(tender.reference_number)
+    else:
+        result = await db.execute(
+            select(TenderDB).where(TenderDB.reference_number == tender.reference_number)
+        )
+        existing = result.scalar_one_or_none()
 
-    result = await db.execute(
-        select(TenderDB).where(TenderDB.reference_number == tender.reference_number)
-    )
-    existing = result.scalar_one_or_none()
     if existing:
-        updated = False
         if tender.awarded_to and existing.awarded_to is None:
             existing.awarded_to = tender.awarded_to
-            updated = True
         if tender.awarded_amount and existing.awarded_amount is None:
             existing.awarded_amount = tender.awarded_amount
-            updated = True
         incoming_status = (
             tender.status.value if hasattr(tender.status, "value") else tender.status
         )
         if existing.status != incoming_status and incoming_status == "AWARDED":
             existing.status = incoming_status
-            updated = True
         if tender.ocds_id and not existing.ocds_id:
             existing.ocds_id = tender.ocds_id
-            updated = True
         if tender.source_record_id and not existing.source_record_id:
             existing.source_record_id = tender.source_record_id
-            updated = True
-        if updated:
-            await db.flush()
         return existing
 
     db_tender = TenderDB(
+        id=uuid.uuid4(),
         reference_number=tender.reference_number,
         title=tender.title,
         description=tender.description,
@@ -197,36 +288,42 @@ async def _persist_tender(db, tender) -> Optional[TenderDB]:
         ingested_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
     db.add(db_tender)
-    await db.flush()
+    if existing_tenders is not None:
+        existing_tenders[tender.reference_number] = db_tender
     return db_tender
 
 
-async def _persist_bid(db, bid, tender_db_id, company_db_id) -> Optional[BidDB]:
+async def _persist_bid(
+    db,
+    bid,
+    tender_db_id,
+    company_db_id,
+    existing_bids: Optional[dict[tuple[str, str], BidDB]] = None,
+) -> Optional[BidDB]:
     """Persist a bid, skipping duplicates by tender/company."""
-    from sqlalchemy import select
-
     normalized_submission_date = normalize_datetime(bid.submission_date)
-
-    result = await db.execute(
-        select(BidDB).where(
-            BidDB.tender_id == tender_db_id,
-            BidDB.company_id == company_db_id,
+    bid_key = (str(tender_db_id), str(company_db_id))
+    existing = None
+    if existing_bids is not None:
+        existing = existing_bids.get(bid_key)
+    else:
+        result = await db.execute(
+            select(BidDB).where(
+                BidDB.tender_id == tender_db_id,
+                BidDB.company_id == company_db_id,
+            )
         )
-    )
-    existing = result.scalar_one_or_none()
+        existing = result.scalar_one_or_none()
+
     if existing:
-        updated = False
         if existing.amount is None and bid.amount is not None:
             existing.amount = bid.amount
-            updated = True
         if existing.technical_score is None and bid.technical_score is not None:
             existing.technical_score = bid.technical_score
-            updated = True
-        if updated:
-            await db.flush()
         return existing
 
     db_bid = BidDB(
+        id=uuid.uuid4(),
         tender_id=tender_db_id,
         company_id=company_db_id,
         amount=bid.amount,
@@ -234,20 +331,30 @@ async def _persist_bid(db, bid, tender_db_id, company_db_id) -> Optional[BidDB]:
         technical_score=bid.technical_score,
     )
     db.add(db_bid)
-    await db.flush()
+    if existing_bids is not None:
+        existing_bids[bid_key] = db_bid
     return db_bid
 
 
 async def _persist_contract(
-    db, contract, tender_db_id=None, company_db_id=None
+    db,
+    contract,
+    tender_db_id=None,
+    company_db_id=None,
+    existing_contracts: Optional[dict[str, ContractDB]] = None,
 ) -> Optional[ContractDB]:
     """Persist a contract, skipping duplicates by contract_number."""
-    from sqlalchemy import select
+    existing = None
+    if existing_contracts is not None:
+        existing = existing_contracts.get(contract.contract_number)
+    else:
+        result = await db.execute(
+            select(ContractDB).where(
+                ContractDB.contract_number == contract.contract_number
+            )
+        )
+        existing = result.scalar_one_or_none()
 
-    result = await db.execute(
-        select(ContractDB).where(ContractDB.contract_number == contract.contract_number)
-    )
-    existing = result.scalar_one_or_none()
     if existing:
         return existing
 
@@ -255,6 +362,7 @@ async def _persist_contract(
     resolved_company_id = company_db_id or contract.company_id
 
     db_contract = ContractDB(
+        id=uuid.uuid4(),
         tender_id=resolved_tender_id,
         company_id=resolved_company_id,
         contract_number=contract.contract_number,
@@ -278,24 +386,14 @@ async def _persist_contract(
         ingested_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
     db.add(db_contract)
-    await db.flush()
+    if existing_contracts is not None:
+        existing_contracts[contract.contract_number] = db_contract
     return db_contract
 
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
-
-@router.post("/ppip/sync", response_model=PPIPSyncResponse)
-async def sync_ppip(request: PPIPSyncRequest, current_user: SupervisorOrAdmin):
-    """
-    Sync PPIP OCDS tenders for a given fiscal year.
-    Fetches from tenders.go.ke, normalizes, and persists.
-    Requires supervisor or admin role.
-    """
+async def _run_ppip_sync(fiscal_year: str, job: dict[str, Any] | None = None) -> dict:
     try:
-        result = await sync_ppip_fiscal_year(request.fiscal_year)
+        result = await sync_ppip_fiscal_year(fiscal_year)
     except Exception as e:
         logger.error(f"PPIP fetch failed: {e}")
         raise HTTPException(status_code=502, detail=f"PPIP API error: {str(e)}")
@@ -304,14 +402,54 @@ async def sync_ppip(request: PPIPSyncRequest, current_user: SupervisorOrAdmin):
     companies_saved = 0
     bids_saved = 0
     contracts_saved = 0
+    total_releases = len(result["releases"])
+    if job is not None:
+        job["processed_releases"] = 0
+        job["total_releases"] = total_releases
+    registration_numbers = list(
+        {
+            company.registration_number
+            for release_bundle in result["releases"]
+            for company in release_bundle["companies"]
+            if company.registration_number
+        }
+    )
+    reference_numbers = list(
+        {
+            release_bundle["tender"].reference_number
+            for release_bundle in result["releases"]
+            if release_bundle["tender"].reference_number
+        }
+    )
+    contract_numbers = list(
+        {
+            contract.contract_number
+            for release_bundle in result["releases"]
+            for contract in release_bundle["contracts"]
+            if contract.contract_number
+        }
+    )
 
     async with async_session() as db:
-        async with db.begin():
-            for release_bundle in result["releases"]:
+        try:
+            existing_companies = await _load_companies_by_registration(
+                db, registration_numbers
+            )
+            existing_tenders = await _load_tenders_by_reference(db, reference_numbers)
+            existing_contracts = await _load_contracts_by_number(db, contract_numbers)
+            existing_bids = await _load_bids_by_tender_ids(
+                db, [tender.id for tender in existing_tenders.values()]
+            )
+
+            for index, release_bundle in enumerate(result["releases"], start=1):
                 company_id_map: dict[str, str] = {}
 
                 for company in release_bundle["companies"]:
-                    saved_company = await _persist_company(db, company)
+                    saved_company = await _persist_company(
+                        db,
+                        company,
+                        existing_companies=existing_companies,
+                    )
                     if saved_company:
                         company_id_map[company.id] = saved_company.id
                         companies_saved += 1
@@ -319,7 +457,11 @@ async def sync_ppip(request: PPIPSyncRequest, current_user: SupervisorOrAdmin):
                 tender = release_bundle["tender"]
                 if tender.awarded_to:
                     tender.awarded_to = company_id_map.get(tender.awarded_to)
-                saved_tender = await _persist_tender(db, tender)
+                saved_tender = await _persist_tender(
+                    db,
+                    tender,
+                    existing_tenders=existing_tenders,
+                )
                 tender_db_id = saved_tender.id if saved_tender else None
                 if saved_tender:
                     tenders_saved += 1
@@ -334,6 +476,7 @@ async def sync_ppip(request: PPIPSyncRequest, current_user: SupervisorOrAdmin):
                             bid,
                             tender_db_id=tender_db_id,
                             company_db_id=company_db_id,
+                            existing_bids=existing_bids,
                         )
                         if saved_bid:
                             bids_saved += 1
@@ -349,9 +492,30 @@ async def sync_ppip(request: PPIPSyncRequest, current_user: SupervisorOrAdmin):
                             contract,
                             tender_db_id=tender_db_id,
                             company_db_id=company_db_id,
+                            existing_contracts=existing_contracts,
                         )
                         if saved_contract:
                             contracts_saved += 1
+
+                if index % PPIP_PERSIST_BATCH_SIZE == 0:
+                    await db.flush()
+                    await db.commit()
+                    if job is not None:
+                        job["processed_releases"] = index
+                    logger.info(
+                        "PPIP sync FY %s persisted %s/%s release bundles",
+                        fiscal_year,
+                        index,
+                        total_releases,
+                    )
+
+            await db.flush()
+            await db.commit()
+            if job is not None:
+                job["processed_releases"] = total_releases
+        except Exception:
+            await db.rollback()
+            raise
 
     stats = result["stats"]
     stats["tenders_persisted"] = tenders_saved
@@ -359,10 +523,91 @@ async def sync_ppip(request: PPIPSyncRequest, current_user: SupervisorOrAdmin):
     stats["bids_persisted"] = bids_saved
     stats["contracts_persisted"] = contracts_saved
 
-    return PPIPSyncResponse(
-        status="ok",
+    return {
+        "status": "ok",
+        "fiscal_year": fiscal_year,
+        "stats": stats,
+    }
+
+
+async def _run_ppip_sync_job(job_id: str, fiscal_year: str):
+    _ppip_sync_jobs[job_id]["status"] = JobStatus.RUNNING
+    _ppip_sync_jobs[job_id]["started_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        result = await _run_ppip_sync(fiscal_year, _ppip_sync_jobs[job_id])
+        _ppip_sync_jobs[job_id].update(
+            status=JobStatus.DONE,
+            fiscal_year=fiscal_year,
+            stats=result["stats"],
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        logger.info("PPIP sync job %s completed for FY %s", job_id, fiscal_year)
+    except HTTPException as e:
+        _ppip_sync_jobs[job_id].update(
+            status=JobStatus.FAILED,
+            fiscal_year=fiscal_year,
+            error=str(e.detail),
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        logger.error(
+            "PPIP sync job %s failed for FY %s: %s", job_id, fiscal_year, e.detail
+        )
+    except Exception as e:
+        _ppip_sync_jobs[job_id].update(
+            status=JobStatus.FAILED,
+            fiscal_year=fiscal_year,
+            error=str(e),
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        logger.error("PPIP sync job %s failed for FY %s: %s", job_id, fiscal_year, e)
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.post("/ppip/sync", response_model=PPIPSyncAcceptedResponse, status_code=202)
+async def sync_ppip(
+    request: PPIPSyncRequest,
+    current_user: SupervisorOrAdmin,
+):
+    """
+    Sync PPIP OCDS tenders for a given fiscal year.
+    Fetches from tenders.go.ke, normalizes, and persists.
+    Requires supervisor or admin role.
+    """
+    job_id = str(uuid.uuid4())
+    _ppip_sync_jobs[job_id] = {
+        "status": JobStatus.PENDING,
+        "fiscal_year": request.fiscal_year,
+        "queued_at": datetime.now(timezone.utc).isoformat(),
+        "triggered_by": current_user.username,
+        "processed_releases": 0,
+        "total_releases": None,
+    }
+    asyncio.create_task(_run_ppip_sync_job(job_id, request.fiscal_year))
+    return PPIPSyncAcceptedResponse(
+        status="accepted",
         fiscal_year=request.fiscal_year,
-        stats=stats,
+        job_id=job_id,
+    )
+
+
+@router.get("/ppip/sync/status/{job_id}", response_model=PPIPSyncStatusResponse)
+async def sync_ppip_status(job_id: str, current_user: SupervisorOrAdmin):
+    job = _ppip_sync_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    raw_status = job["status"]
+    status = raw_status.value if isinstance(raw_status, JobStatus) else str(raw_status)
+    return PPIPSyncStatusResponse(
+        status=status,
+        fiscal_year=job["fiscal_year"],
+        stats=job.get("stats"),
+        error=job.get("error"),
+        processed_releases=job.get("processed_releases"),
+        total_releases=job.get("total_releases"),
     )
 
 

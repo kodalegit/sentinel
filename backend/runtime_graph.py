@@ -7,6 +7,10 @@ from state import AppState
 def ensure_runtime_graph(state: AppState) -> nx.Graph:
     if state.graph_loaded:
         return state.graph
+    if not state.graph_inputs_loaded:
+        raise RuntimeError(
+            "NetworkX fallback is unavailable because graph inputs were not loaded at startup. Use Neo4j-backed graph routes or recompute analysis to restore in-memory graph inputs."
+        )
 
     graph = build_procurement_graph(
         tenders=state.tenders,

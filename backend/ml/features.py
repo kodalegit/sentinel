@@ -73,7 +73,7 @@ def extract_tender_features(
     tenders: dict[str, Tender],
     companies: dict[str, Company],
     bids: list[Bid],
-    graph: nx.Graph,
+    graph: nx.Graph | None,
     bids_by_tender: dict[str, list[Bid]] | None = None,
     company_graph_features: dict[str, dict[str, int]] | None = None,
 ) -> pd.DataFrame:
@@ -91,6 +91,10 @@ def extract_tender_features(
             bids_by_tender[b.tender_id].append(b)
 
     if company_graph_features is None:
+        if graph is None:
+            raise ValueError(
+                "graph is required when company_graph_features are not provided"
+            )
         company_graph_features = materialize_company_graph_features(graph)
 
     # Category-level stats for z-scores
@@ -205,6 +209,11 @@ def extract_tender_features(
                 "official_distance": min(official_distance, 10),
                 "community_size": community_size,
             }
+        )
+
+    if not rows:
+        return pd.DataFrame(
+            columns=FEATURE_COLUMNS, index=pd.Index([], name="tender_id")
         )
 
     df = pd.DataFrame(rows).set_index("tender_id")

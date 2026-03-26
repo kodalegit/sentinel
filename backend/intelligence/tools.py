@@ -314,7 +314,10 @@ def search_graph_connections(
     if not ctx or not ctx.app_state:
         return "Graph not available."
 
-    graph = ensure_runtime_graph(ctx.app_state)
+    try:
+        graph = ensure_runtime_graph(ctx.app_state)
+    except RuntimeError as exc:
+        return str(exc)
 
     matching_nodes = []
     entity_lower = entity_name.lower()

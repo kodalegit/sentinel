@@ -4,6 +4,7 @@ Hybrid risk scorer combining rule-based detection with Isolation Forest ML.
 
 import networkx as nx
 import pandas as pd
+from collections import defaultdict
 
 from models import (
     Tender,
@@ -15,6 +16,7 @@ from models import (
     RiskFactor,
     RiskFactorType,
     RiskCategory,
+    TenderStatus,
 )
 from risk.engine import compute_risk_score
 from graph.communities import detect_communities, get_cartel_sets, Cluster
@@ -42,7 +44,7 @@ class HybridRiskScorer:
         tenders: dict[str, Tender],
         companies: dict[str, Company],
         bids: list[Bid],
-        graph: nx.Graph,
+        graph: nx.Graph | None,
         bids_by_tender: dict[str, list[Bid]] | None = None,
         company_graph_features: dict[str, dict[str, int]] | None = None,
     ):
@@ -57,6 +59,9 @@ class HybridRiskScorer:
         )
         self.last_features_df = features_df.copy()
         self.last_company_graph_features = company_graph_features or {}
+        if features_df.empty:
+            self.last_ml_scores = None
+            return
         self.detector.fit(features_df)
         self.detector.save("default")
 
@@ -67,10 +72,11 @@ class HybridRiskScorer:
         directors: dict[str, Director],
         officials: dict[str, PublicOfficial],
         bids: list[Bid],
-        graph: nx.Graph,
+        graph: nx.Graph | None,
         communities: list[Cluster] | None = None,
         bids_by_tender: dict[str, list[Bid]] | None = None,
         company_graph_features: dict[str, dict[str, int]] | None = None,
+        conflict_paths: dict[tuple[str, str], dict[str, list[str]]] | None = None,
     ) -> dict[str, RiskScore]:
         """
         Compute hybrid risk scores for all tenders.
@@ -93,6 +99,9 @@ class HybridRiskScorer:
         )
         self.last_features_df = features_df.copy()
         self.last_company_graph_features = company_graph_features or {}
+        if features_df.empty:
+            self.last_ml_scores = None
+            return {}
         ml_scores = None
 
         if not self.detector.is_fitted:
@@ -113,8 +122,22 @@ class HybridRiskScorer:
 
         # Use Louvain communities for cartel detection (unified algorithm)
         if communities is None:
+            if graph is None:
+                raise ValueError("graph is required when communities are not provided")
             communities = detect_communities(graph, tenders, bids, companies)
         cartel_clusters = get_cartel_sets(communities)
+        category_price_stats: dict[str, dict[str, float | int]] = defaultdict(
+            lambda: {"sum_awarded_amount": 0.0, "awarded_count": 0}
+        )
+        for current_tender in tenders.values():
+            if (
+                current_tender.category
+                and current_tender.awarded_amount
+                and current_tender.status == TenderStatus.AWARDED
+            ):
+                stats = category_price_stats[current_tender.category]
+                stats["sum_awarded_amount"] += current_tender.awarded_amount
+                stats["awarded_count"] += 1
 
         results = {}
         for tid, tender in tenders.items():
@@ -128,8 +151,10 @@ class HybridRiskScorer:
                 officials=officials,
                 bids=tender_bids,
                 graph=graph,
+                conflict_paths=conflict_paths,
                 cartel_clusters=cartel_clusters,
                 all_tenders=tenders,
+                category_price_stats=category_price_stats,
             )
 
             # ML anomaly score

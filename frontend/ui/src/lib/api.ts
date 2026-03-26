@@ -5,7 +5,7 @@
 import type {
   AnalysisSnapshotInfo,
   DashboardStats,
-  TenderWithRisk,
+  PaginatedTenderResults,
   TenderDetail,
   TenderEvidencePack,
   GraphData,
@@ -18,7 +18,8 @@ import type {
   RiskCategory,
   TenderStatus,
   IngestionResponse,
-  PPIPSyncResponse,
+  PPIPSyncAcceptedResponse,
+  PPIPSyncStatusResponse,
   RecomputeResponse,
   CaseEvent,
   CaseEvidenceLink,
@@ -266,16 +267,18 @@ export async function getTenders(options?: {
   status?: TenderStatus;
   sortBy?: "risk" | "value" | "date";
   limit?: number;
-}): Promise<TenderWithRisk[]> {
+  offset?: number;
+}): Promise<PaginatedTenderResults> {
   const params = new URLSearchParams();
   if (options?.riskLevel) params.set("risk_level", options.riskLevel);
   if (options?.status) params.set("status", options.status);
   if (options?.sortBy) params.set("sort_by", options.sortBy);
   if (options?.limit) params.set("limit", options.limit.toString());
+  if (options?.offset) params.set("offset", options.offset.toString());
 
   const queryString = params.toString();
   const endpoint = `/api/tenders${queryString ? `?${queryString}` : ""}`;
-  return fetchApi<TenderWithRisk[]>(endpoint);
+  return fetchApi<PaginatedTenderResults>(endpoint);
 }
 
 export async function getTenderDetail(tenderId: string): Promise<TenderDetail> {
@@ -523,10 +526,16 @@ export async function markNotificationRead(
 
 // --- Ingestion ---
 
-export async function syncPPIP(fiscalYear: string): Promise<PPIPSyncResponse> {
-  return postApi<PPIPSyncResponse>("/api/ingest/ppip/sync", {
+export async function syncPPIP(fiscalYear: string): Promise<PPIPSyncAcceptedResponse> {
+  return postApi<PPIPSyncAcceptedResponse>("/api/ingest/ppip/sync", {
     fiscal_year: fiscalYear,
   });
+}
+
+export async function getPPIPSyncStatus(
+  jobId: string,
+): Promise<PPIPSyncStatusResponse> {
+  return fetchApi<PPIPSyncStatusResponse>(`/api/ingest/ppip/sync/status/${jobId}`);
 }
 
 export async function ingestEGPTenders(

@@ -187,15 +187,18 @@ Without an LLM key, the system falls back to structured template explanations.
 - **Shadow graph**: Companies, directors, officials, bids as nodes
 - **Community detection**: Neo4j GDS Louvain with NetworkX fallback
 - **Path finding**: Neo4j shortest paths with sub-millisecond traversals
+- **Neo4j-first graph APIs**: Search, pathfinding, neighborhood, tender graph, and evidence path resolution now prefer Neo4j and only fall back to NetworkX on failure
 - **Cluster-first UX**: Ranked suspicious communities, progressive disclosure
 - **Explainable cluster scoring**: Suspicion score messaging now reflects the shared scoring contract across NetworkX and Neo4j
-- **Performance**: Hash-based edge detection (O(n) vs O(n²)), edge limits per entity, and strict filtering of vague/generic shared attributes
+- **Performance**: Hash-based edge detection (O(n) vs O(n²)), edge limits per entity, strict filtering of vague/generic shared attributes, incremental Neo4j sync, and debounced DB-backed graph search in the Graph Explorer
 
 ### Analysis Persistence
 
 - **Persisted analysis snapshots**: Each recompute creates an `analysis_run_id` and stores linked risk assessments
 - **Fast startup recovery**: Backend can load the latest persisted analysis into `AppState`
 - **Snapshot metadata API**: `GET /api/analysis/latest` powers dashboard and sources-page analysis status
+- **Incremental graph refresh**: Normal recompute paths upsert Neo4j nodes, prune stale nodes, and rebuild managed relationships instead of fully deleting the graph
+- **Bulk snapshot writes**: Large analysis runs now persist company graph features and risk assessments in batches instead of per-row sequential writes
 
 ### LLM Intelligence
 
@@ -245,6 +248,7 @@ Without an LLM key, the system falls back to structured template explanations.
 - [x] **Graph Performance Optimization** (O(n) edge detection, pagination, large graph handling)
 - [x] **Persisted Analysis Snapshots** (analysis runs, snapshot-aware risk loading, latest snapshot metadata endpoint)
 - [x] **Graph Noise Reduction** (specific-only shared address edges, generic phone/email suppression, aligned Neo4j filtering)
+- [x] **Neo4j-First Graph Serving** (Neo4j-backed graph search, evidence/path/neighborhood resolution, incremental sync, reduced lazy NetworkX loads)
 - [x] **Investigation Workflow Hardening** (case assignment, supervisor dashboard, case timeline)
 - [x] **System Robustness** (Async job tracking, Pytest core logic suite, JWT guards)
 - [x] **Milestone 7 Polish** (responsive shell, notifications panel, backend model catalog, knowledge-base refresh, export flows, evidence/scoring consistency)
@@ -338,6 +342,46 @@ The current direction is designed to stay robust across Kenyan procurement sourc
 - bidder participation is preserved even when price disclosures are absent
 - price-spread and winner-margin analytics activate only when actual bid amounts exist
 - synthetic data remains the clearest way to communicate the intended product behavior, while real-source ingestion demonstrates graceful degradation under sparse or uneven data
+
+## Performance Notes
+
+- **Small seeded datasets** may still feel faster with pure in-memory NetworkX because there is no database roundtrip cost.
+- **Larger datasets** benefit from Neo4j-first graph traversal because request-time pathfinding, search, and neighborhood queries no longer depend on loading the full NetworkX graph.
+- **Runtime monitoring** now uses lightweight structured timing logs for recompute and snapshot stages instead of heavy always-on profilers.
+- The main remaining scale constraints are now mostly **Python-side**:
+  - full entity hydration from PostgreSQL into Python memory
+  - batch `score_all()` evaluation across all tenders
+  - per-tender ML feature extraction
+  - Isolation Forest fitting and SHAP explainability cost
+  - full recompute orchestration across large analysis runs, even after snapshot persistence batching
+
+This means the recommended architecture remains hybrid: PostgreSQL as source of truth, Neo4j as the primary graph engine, and Python for bounded scoring and ML.
+
+### Performance Monitoring
+
+- **Recommended default**: keep the built-in timing logs enabled and use the profiling script only when you need a focused benchmark.
+- **Runtime logs**: recompute now emits `performance_metric` log lines for `load_data`, Neo4j graph preparation, `score_all`, snapshot persistence, and total wall time.
+- **Snapshot logs**: analysis snapshot persistence also emits per-stage timings for analysis-run creation, company feature writes, risk assessment payload preparation, and bulk risk assessment insertion.
+
+Example log shape:
+
+```text
+performance_metric event=recompute stage=neo4j_graph_prepare duration_ms=2711.4 communities=2 company_graph_features=11012 conflict_paths=11
+performance_metric event=analysis_snapshot stage=create_risk_assessments duration_ms=842.7 rows=12705
+```
+
+### Profiling Script
+
+From `backend/`, you can run:
+
+- **Neo4j stage benchmark**
+  - `uv run --prerelease=allow python profile_recompute.py --mode neo4j-stages`
+- **Snapshot persistence benchmark**
+  - `uv run --prerelease=allow python profile_recompute.py --mode snapshot --graph-source neo4j`
+- **Full recompute benchmark**
+  - `uv run --prerelease=allow python profile_recompute.py --mode recompute --neo4j-timeout-seconds 15`
+
+The profiler prints JSON with per-stage timings so you can compare datasets, detect regressions, and see whether time is being spent in Neo4j graph prep, Python scoring, or PostgreSQL persistence.
 
 ## Default Credentials
 

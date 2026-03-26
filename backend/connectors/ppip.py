@@ -30,6 +30,15 @@ from models import (
 logger = logging.getLogger(__name__)
 
 
+def _limit_text(value: Optional[str], max_length: int) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text[:max_length]
+
+
 def _canonical_company_name(name: Optional[str]) -> Optional[str]:
     normalized = normalize_name(name)
     if not normalized:
@@ -191,14 +200,10 @@ def normalize_ocds_tender(
 
     # Award amount (take the first award if present)
     awarded_amount = None
-    awarded_company_name = None
     if awards:
         first_award = awards[0]
         award_value = first_award.get("value", {})
         awarded_amount = clean_amount(award_value.get("amount"))
-        suppliers = first_award.get("suppliers", [])
-        if suppliers:
-            awarded_company_name = suppliers[0].get("name")
 
     # Tender period
     tender_period = tender_data.get("tenderPeriod", {})
@@ -214,20 +219,22 @@ def normalize_ocds_tender(
         reference_number=ref_number,
         title=tender_data.get("title", "Untitled"),
         description=tender_data.get("description"),
-        procuring_entity=buyer.get("name", "Unknown"),
-        category=tender_data.get("mainProcurementCategory"),
+        procuring_entity=_limit_text(buyer.get("name", "Unknown"), 255) or "Unknown",
+        category=_limit_text(tender_data.get("mainProcurementCategory"), 100),
         estimated_value=estimated_value,
         published_date=published_date,
         deadline=deadline,
         status=tender_status,
         awarded_to=awarded_to,
         awarded_amount=awarded_amount,
-        procurement_method=method_details or method,
-        procurement_category=tender_data.get("mainProcurementCategory"),
-        currency=currency,
+        procurement_method=_limit_text(method_details or method, 100),
+        procurement_category=_limit_text(
+            tender_data.get("mainProcurementCategory"), 100
+        ),
+        currency=_limit_text(currency, 10) or "KES",
         ocds_id=ocid,
-        buyer_id=buyer.get("id"),
-        source_system="ppip",
+        buyer_id=_limit_text(buyer.get("id"), 50),
+        source_system=_limit_text("ppip", 20),
         source_record_id=ocid,
     )
 
@@ -355,13 +362,18 @@ def extract_ocds_contracts(
                 title=rc.get("title"),
                 description=rc.get("description"),
                 contract_amount=clean_amount(value.get("amount")),
-                currency=value.get("currency", "KES"),
+                currency=_limit_text(value.get("currency", "KES"), 10) or "KES",
                 start_date=parse_date(period.get("startDate")),
                 end_date=parse_date(period.get("endDate")),
                 effective_date=parse_date(rc.get("dateSigned")),
-                status=rc.get("status"),
-                pe_name=buyer.get("name"),
-                source_system="ppip",
+                status=_limit_text(rc.get("status"), 50),
+                procurement_method=_limit_text(rc.get("procurementMethod"), 100),
+                procurement_category=_limit_text(
+                    rc.get("mainProcurementCategory"), 100
+                ),
+                pe_name=_limit_text(buyer.get("name"), 255),
+                pe_type=_limit_text(buyer.get("identifier", {}).get("scheme"), 100),
+                source_system=_limit_text("ppip", 20),
                 source_record_id=contract_id,
             )
         )
@@ -377,14 +389,15 @@ async def sync_ppip_fiscal_year(fiscal_year: str) -> dict:
     releases = await fetch_ocds_releases(fiscal_year)
 
     normalized_releases = []
-    all_tenders = []
-    all_companies = []
-    all_bids = []
-    all_contracts = []
+    tender_count = 0
+    company_count = 0
+    bid_count = 0
+    contract_count = 0
     skipped = 0
 
     for release in releases:
         companies = extract_ocds_companies(release)
+        company_count += len(companies)
         by_registration, by_name = _build_company_lookup(companies)
 
         awarded_to = None
@@ -397,15 +410,14 @@ async def sync_ppip_fiscal_year(fiscal_year: str) -> dict:
 
         tender = normalize_ocds_tender(release, awarded_to=awarded_to)
         if tender:
-            all_tenders.append(tender)
+            tender_count += 1
         else:
             skipped += 1
 
-        all_companies.extend(companies)
         bids = extract_ocds_bids(release, tender, companies) if tender else []
-        all_bids.extend(bids)
+        bid_count += len(bids)
         contracts = extract_ocds_contracts(release, tender, companies) if tender else []
-        all_contracts.extend(contracts)
+        contract_count += len(contracts)
         if tender:
             normalized_releases.append(
                 {
@@ -417,24 +429,20 @@ async def sync_ppip_fiscal_year(fiscal_year: str) -> dict:
             )
 
     logger.info(
-        f"PPIP sync complete: {len(all_tenders)} tenders, "
-        f"{len(all_companies)} companies, {len(all_bids)} bids, "
-        f"{len(all_contracts)} contracts, "
+        f"PPIP sync complete: {tender_count} tenders, "
+        f"{company_count} companies, {bid_count} bids, "
+        f"{contract_count} contracts, "
         f"{skipped} skipped"
     )
 
     return {
         "releases": normalized_releases,
-        "tenders": all_tenders,
-        "companies": all_companies,
-        "bids": all_bids,
-        "contracts": all_contracts,
         "stats": {
             "releases_fetched": len(releases),
-            "tenders_normalized": len(all_tenders),
-            "companies_extracted": len(all_companies),
-            "bids_extracted": len(all_bids),
-            "contracts_extracted": len(all_contracts),
+            "tenders_normalized": tender_count,
+            "companies_extracted": company_count,
+            "bids_extracted": bid_count,
+            "contracts_extracted": contract_count,
             "skipped": skipped,
         },
     }

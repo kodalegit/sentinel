@@ -7,7 +7,6 @@ from models import GraphData, GraphNode, GraphEdge
 from state import State
 from graph.builder import get_tender_subgraph, graph_to_frontend_format
 from graph.neo4j_communities import get_entity_neighborhood_neo4j
-from graph.neo4j_driver import check_neo4j_health
 from runtime_graph import ensure_runtime_graph
 
 router = APIRouter(prefix="/api", tags=["tenders"])
@@ -24,18 +23,19 @@ async def get_tender_graph(
     # Neo4j-first: index-free adjacency is ideal for k-hop tender subgraphs
     if settings.neo4j_enabled:
         try:
-            health = await check_neo4j_health()
-            if health["status"] == "healthy":
-                result = await get_entity_neighborhood_neo4j(tender_id, depth)
-                if result and result.get("nodes"):
-                    return GraphData(
-                        nodes=[GraphNode(**n) for n in result["nodes"]],
-                        edges=[GraphEdge(**e) for e in result["edges"]],
-                    )
+            result = await get_entity_neighborhood_neo4j(tender_id, depth)
+            if result and result.get("nodes"):
+                return GraphData(
+                    nodes=[GraphNode(**n) for n in result["nodes"]],
+                    edges=[GraphEdge(**e) for e in result["edges"]],
+                )
         except Exception:
             pass  # Fall through to NetworkX
 
     # NetworkX fallback
-    graph = ensure_runtime_graph(state)
+    try:
+        graph = ensure_runtime_graph(state)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     subgraph = get_tender_subgraph(graph, tender_id, depth=depth)
     return graph_to_frontend_format(subgraph)

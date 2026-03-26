@@ -101,6 +101,14 @@ export interface TenderWithRisk {
   bidder_count: number;
 }
 
+export interface PaginatedTenderResults {
+  items: TenderWithRisk[];
+  total: number;
+  skip: number;
+  limit: number;
+  has_more: boolean;
+}
+
 export interface TenderDetail {
   tender: Tender;
   risk: RiskScore;
@@ -193,7 +201,6 @@ export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
 }
-
 
 // Dashboard
 export interface DashboardStats {
@@ -378,10 +385,19 @@ export interface IngestionResponse {
   counts: Record<string, number>;
 }
 
-export interface PPIPSyncResponse {
+export interface PPIPSyncAcceptedResponse {
   status: string;
   fiscal_year: string;
-  stats: Record<string, number>;
+  job_id: string;
+}
+
+export interface PPIPSyncStatusResponse {
+  status: string;
+  fiscal_year: string;
+  stats?: Record<string, number>;
+  error?: string;
+  processed_releases?: number;
+  total_releases?: number;
 }
 
 export interface RecomputeResponse {

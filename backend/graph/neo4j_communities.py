@@ -36,16 +36,14 @@ async def _detect_communities_gds(min_cluster_size: int = 2) -> list[Cluster]:
     async with get_neo4j_session() as session:
         await _drop_projection_if_exists(session)
 
-        # Create graph projection for bidding communities.
-        # Company-Tender bidding links better match co-bid behavior than
-        # broad attribute/director similarity links.
+        # Create graph projection for strict company-company co-bid communities.
         await session.run(
             """
             CALL gds.graph.project(
                 $graph_name,
-                ['Company', 'Tender'],
+                ['Company'],
                 {
-                    BID_ON: {orientation: 'UNDIRECTED'}
+                    CO_BID: {orientation: 'UNDIRECTED'}
                 }
             )
         """,
@@ -124,10 +122,10 @@ async def _detect_communities_gds(min_cluster_size: int = 2) -> list[Cluster]:
 async def _detect_communities_basic() -> list[Cluster]:
     """Basic community detection without GDS using co-bid connected components."""
     async with get_neo4j_session() as session:
-        # Build company-pair adjacency from actual co-bids.
+        # Build company-pair adjacency from strict analytic co-bid edges.
         result = await session.run(
             """
-            MATCH (c1:Company)-[:BID_ON]->(t:Tender)<-[:BID_ON]-(c2:Company)
+            MATCH (c1:Company)-[:CO_BID]-(c2:Company)
             WHERE c1.id < c2.id
             RETURN c1.id AS c1_id, c1.name AS c1_name,
                    c2.id AS c2_id, c2.name AS c2_name
@@ -236,8 +234,12 @@ async def _get_shared_attributes(session, company_ids: list[str]) -> dict:
         """
         MATCH (c1:Company)-[r:SHARES_ADDRESS]-(c2:Company)
         WHERE c1.id IN $ids AND c2.id IN $ids AND c1.id < c2.id
-        RETURN c1.physical_address AS address, 
-               collect(DISTINCT c1.name) + collect(DISTINCT c2.name) AS companies
+        WITH coalesce(c1.physical_address, c1.address) AS address,
+             collect(DISTINCT c1.id) + collect(DISTINCT c2.id) AS company_ids
+        WHERE address IS NOT NULL AND trim(address) <> ''
+        RETURN address,
+               company_ids AS companies
+        ORDER BY address
     """,
         ids=company_ids,
     )
@@ -257,8 +259,12 @@ async def _get_shared_attributes(session, company_ids: list[str]) -> dict:
         """
         MATCH (c1:Company)-[r:SHARES_PHONE]-(c2:Company)
         WHERE c1.id IN $ids AND c2.id IN $ids AND c1.id < c2.id
-        RETURN c1.phone AS phone,
-               collect(DISTINCT c1.name) + collect(DISTINCT c2.name) AS companies
+        WITH c1.phone AS phone,
+             collect(DISTINCT c1.id) + collect(DISTINCT c2.id) AS company_ids
+        WHERE phone IS NOT NULL AND trim(phone) <> ''
+        RETURN phone,
+               company_ids AS companies
+        ORDER BY phone
     """,
         ids=company_ids,
     )
@@ -278,8 +284,9 @@ async def _get_shared_attributes(session, company_ids: list[str]) -> dict:
         """
         MATCH (c1:Company)-[:DIRECTED_BY]->(d:Director)<-[:DIRECTED_BY]-(c2:Company)
         WHERE c1.id IN $ids AND c2.id IN $ids AND c1.id < c2.id
-        RETURN d.name AS director,
-               collect(DISTINCT c1.name) + collect(DISTINCT c2.name) AS companies
+        RETURN d.id AS director_id,
+               collect(DISTINCT c1.id) + collect(DISTINCT c2.id) AS companies
+        ORDER BY director_id
     """,
         ids=company_ids,
     )
@@ -288,7 +295,7 @@ async def _get_shared_attributes(session, company_ids: list[str]) -> dict:
     for record in director_records:
         shared["directors"].append(
             {
-                "director_id": record["director"],
+                "director_id": record["director_id"],
                 "companies": list(set(record["companies"])),
             }
         )
@@ -411,6 +418,67 @@ async def get_entity_neighborhood_neo4j(
             "nodes": record["nodes"],
             "edges": record["edges"],
         }
+
+
+async def search_graph_entities_neo4j(query: str, limit: int = 12) -> list[dict]:
+    """Search graph entities directly in Neo4j without materializing NetworkX."""
+    normalized_search = query.strip().lower()
+    if not normalized_search:
+        return []
+
+    async with get_neo4j_session() as session:
+        result = await session.run(
+            """
+            MATCH (n)
+            WHERE (n:Company OR n:Director OR n:Official OR n:Tender)
+              AND toLower(coalesce(n.name, n.title, n.id)) CONTAINS $search
+            WITH n,
+                 CASE
+                    WHEN n:Company THEN 'COMPANY'
+                    WHEN n:Director THEN 'DIRECTOR'
+                    WHEN n:Official THEN 'OFFICIAL'
+                    ELSE 'TENDER'
+                 END AS node_type,
+                 coalesce(n.name, n.title, n.id) AS label
+            OPTIONAL MATCH (n)<-[:DIRECTED_BY]-(c:Company)
+            WITH n, node_type, label, count(DISTINCT c) AS company_count
+            RETURN n.id AS id,
+                   node_type AS type,
+                   label,
+                   n.risk_level AS risk_level,
+                   CASE
+                       WHEN node_type = 'TENDER' THEN coalesce(n.reference, n.procuring_entity, n.procurement_method)
+                       WHEN node_type = 'OFFICIAL' THEN CASE
+                           WHEN coalesce(n.department, '') <> '' AND coalesce(n.position, '') <> ''
+                               THEN n.department + ' · ' + n.position
+                           ELSE coalesce(n.department, n.position)
+                       END
+                       WHEN node_type = 'COMPANY' THEN coalesce(n.address, n.source_system)
+                       WHEN node_type = 'DIRECTOR' AND company_count > 0 THEN
+                           'Linked to ' + toString(company_count) + ' ' + CASE WHEN company_count = 1 THEN 'company' ELSE 'companies' END
+                       ELSE null
+                   END AS subtitle,
+                   CASE WHEN toLower(label) STARTS WITH $search THEN 0 ELSE 1 END AS rank_prefix,
+                   size(label) AS rank_length,
+                   toLower(label) AS rank_label
+            ORDER BY rank_prefix, rank_length, rank_label
+            LIMIT $limit
+            """,
+            search=normalized_search,
+            limit=limit,
+        )
+        records = [record async for record in result]
+
+    return [
+        {
+            "id": record["id"],
+            "type": record["type"],
+            "label": record["label"],
+            "risk_level": record["risk_level"],
+            "subtitle": record["subtitle"],
+        }
+        for record in records
+    ]
 
 
 async def get_cluster_subgraph_neo4j(

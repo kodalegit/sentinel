@@ -242,6 +242,20 @@ class TenderWithRisk(BaseModel):
     bidder_count: int = 0
 
 
+class TenderBidStats(BaseModel):
+    bidder_count: int = 0
+    priced_bid_count: int = 0
+    participation_only_count: int = 0
+
+
+class PaginatedTenderResults(BaseModel):
+    items: list[TenderWithRisk] = Field(default_factory=list)
+    total: int = 0
+    skip: int = 0
+    limit: int = 50
+    has_more: bool = False
+
+
 class TenderDetail(BaseModel):
     """Full tender details including bids and risk breakdown."""
 

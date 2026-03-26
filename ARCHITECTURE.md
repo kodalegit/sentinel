@@ -127,11 +127,21 @@ Syncs PostgreSQL entities to Neo4j on recomputation:
 ```
 PostgreSQL → sync_graph_to_neo4j()
   → Create Company, Director, Official, Tender nodes
-  → Create DIRECTED_BY, BID_ON, RELATED_TO edges
-  → Create SHARES_ADDRESS, SHARES_PHONE, SHARES_EMAIL, SHARES_DIRECTOR edges
+  → Create DIRECTED_BY, BID_ON, AWARDED_BY, RELATED_TO edges
+  → Create SHARES_ADDRESS, SHARES_PHONE, SHARES_EMAIL, SHARES_DIRECTOR, CO_BID edges
 ```
 
 Neo4j shared-attribute edges use the same normalization and filtering rules as the NetworkX analysis graph so recompute output and graph exploration stay aligned.
+
+**Key decision: incremental Neo4j refresh by default for normal recompute paths.**
+The scalable sync pattern is now:
+
+- upsert nodes with `MERGE`
+- prune stale nodes that no longer exist in PostgreSQL
+- delete only relationships fully managed by the sync layer
+- rebuild managed relationships from the latest canonical data
+
+This avoids a full `MATCH (n) DETACH DELETE n` rebuild during normal recompute while preserving graph parity for graph exploration and analytics.
 
 ### Community Detection (`graph/neo4j_communities.py`)
 
@@ -157,6 +167,22 @@ The `get_cartel_sets()` helper extracts simple `list[set[str]]` from Louvain clu
 
 - The recompute pipeline and rule-based cartel detection use the NetworkX communities built from the strict co-bid rule (edges require ≥2 shared tenders). This keeps the analysis snapshot, risk scoring, and UI summaries aligned.
 - Neo4j remains the primary graph-exploration engine (pathfinding, neighborhoods) and can run community algorithms, but its current fallback groups one-off co-bidders and would drift from the stricter NetworkX signal. We keep NetworkX as the authoritative source until Neo4j community construction enforces the same co-bid and filtering rules.
+
+### Request-Time Graph Serving
+
+**Key decision: Neo4j-first on graph APIs, NetworkX only on failure.**
+
+For large graphs, request-time graph APIs should not eagerly materialize the full NetworkX graph. The current preferred path is:
+
+- `/api/graph/search` → Neo4j-backed entity search
+- `/api/graph/path` → Neo4j shortest path
+- `/api/graph/entity/{id}` and tender graph endpoints → Neo4j neighborhood queries
+- evidence/explain graph paths → Neo4j-first resolution without forcing lazy NetworkX graph load
+
+NetworkX remains a fallback if Neo4j query execution fails, not as the default preflight path.
+
+**Key decision: debounce frontend graph search inputs.**
+Because graph entity search now hits the backend database instead of an in-memory browser list, the Graph Explorer search input should not fire on every keystroke indefinitely. A small client-side debounce keeps the UI responsive while reducing avoidable request volume and query churn.
 
 ### Suspicion Scoring
 
@@ -234,16 +260,48 @@ Sparse Kenyan procurement data is a reality. The system uses explicit data-quali
 
 ```
 PostgreSQL → load_data_from_db()
-  → build_procurement_graph()
-  → detect_communities()           ← cached in AppState
-  → HybridRiskScorer.score_all()   ← uses cached communities
-    → extract_tender_features()    ← uses pre-computed bids_by_tender
-    → AnomalyDetector.fit/score()  ← SHAP + sigmoid normalization
-    → compute_risk_score() per tender (rules)
-    → fuse scores (60/40)
+  → Neo4j-first recompute when enabled and healthy
+    → sync_graph_to_neo4j(incremental=True)
+    → detect_communities_neo4j()
+    → materialize_company_graph_features_neo4j()
+    → precompute_conflict_paths_neo4j()
+    → HybridRiskScorer.score_all()
+      → extract_tender_features()
+      → AnomalyDetector.fit/score()  ← SHAP + sigmoid normalization
+      → compute_risk_score() per tender (rules)
+      → fuse scores (60/40)
+  → fallback path: build_procurement_graph() + detect_communities() if Neo4j is unavailable or times out
   → persist_analysis_snapshot() → PostgreSQL
   → AppState (in-memory singleton + latest snapshot metadata)
 ```
+
+### Current Scale Bottlenecks
+
+**Key decision: the next scale ceiling is Python-side analysis, not only graph traversal.**
+
+Recent graph changes remove several avoidable bottlenecks, but at `10k–100k` tenders the main remaining constraints are:
+
+1. **Python-side entity loading**
+   - `load_data_from_db()` still hydrates the full working set into Python objects.
+   - This increases startup/recompute memory pressure before graph analytics even begin.
+
+2. **Batch scoring over all tenders**
+   - `HybridRiskScorer.score_all()` still iterates the full tender set in Python.
+   - Even after removing repeated category scans for price anomaly checks, the scorer remains O(number of tenders + feature extraction work).
+
+3. **ML feature extraction**
+   - `extract_tender_features()` still computes per-tender features in Python and depends on preloaded graph-derived or bid-derived context.
+   - This is acceptable for current scale, but it will become a dominant cost before Neo4j traversal does.
+
+4. **Model fitting and explainability**
+   - Isolation Forest fitting and SHAP attribution are not free.
+   - SHAP especially should be treated as a bounded or optional explainability cost as volumes grow.
+
+5. **Persisted snapshot writes**
+   - Persisting a full analysis run and linked risk assessments scales with the full tender set.
+   - This is operationally correct, but it adds write amplification during recompute.
+
+The practical near-term target is therefore a hybrid architecture: PostgreSQL as source of truth, Neo4j for graph analytics, and Python for bounded batch scoring plus ML.
 
 ### Persisted Analysis Snapshots
 

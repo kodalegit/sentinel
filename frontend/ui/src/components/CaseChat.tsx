@@ -520,6 +520,14 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
     [markShouldAnchor, runStream],
   );
 
+  const handleQuickAction = useCallback(
+    (message: string, action: "chat" | "summary" | "next_steps") => {
+      markShouldAnchor();
+      runStream(message, action);
+    },
+    [markShouldAnchor, runStream],
+  );
+
   const handleNewThread = useCallback(() => {
     updateThreadUrl(null, "push");
     setShowThreads(false);
@@ -574,33 +582,6 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
           >
             <Plus className="mr-1.5 h-3.5 w-3.5" />
             New chat
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 hover:bg-muted"
-            onClick={() => {
-              markShouldAnchor();
-              runStream("Generate a case summary", "summary");
-            }}
-            disabled={isStreaming}
-            title="Generate Case Summary"
-          >
-            <Sparkles className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 hover:bg-muted"
-            onClick={() => {
-              markShouldAnchor();
-              runStream("Suggest next steps", "next_steps");
-            }}
-            disabled={isStreaming}
-            title="Suggest Next Steps"
-          >
-            <ListChecks className="h-4 w-4" />
           </Button>
 
           <div className="h-4 w-px bg-border/80 mx-1"></div>
@@ -712,14 +693,25 @@ export function CaseChat({ caseId, className = "" }: CaseChatProps) {
                 I can analyze evidence, verify legal compliance, extract insights, and formulate investigation next steps.
               </p>
               <div className="mt-8 grid grid-cols-1 gap-2 w-full max-w-sm">
+                <Button
+                  variant="outline"
+                  className="text-xs h-9 justify-start"
+                  onClick={() => handleQuickAction("Generate a case summary", "summary")}
+                >
+                  <Sparkles className="mr-2 h-3.5 w-3.5 text-primary" /> Generate case summary
+                </Button>
+                <Button
+                  variant="outline"
+                  className="text-xs h-9 justify-start"
+                  onClick={() => handleQuickAction("Suggest next steps", "next_steps")}
+                >
+                  <ListChecks className="mr-2 h-3.5 w-3.5 text-sky-500" /> Suggest next steps
+                </Button>
                 <Button variant="outline" className="text-xs h-9 justify-start" onClick={() => handleSuggestedQuery("Summarize the main risk factors in this case")}>
                   <Sparkles className="mr-2 h-3.5 w-3.5 text-primary" /> Summarize risk factors
                 </Button>
                 <Button variant="outline" className="text-xs h-9 justify-start" onClick={() => handleSuggestedQuery("Find legal grounds to dismiss this case")}>
                   <FileText className="mr-2 h-3.5 w-3.5 text-emerald-500" /> Find legal precedents
-                </Button>
-                <Button variant="outline" className="text-xs h-9 justify-start" onClick={() => handleSuggestedQuery("List the submitted evidence")}>
-                  <Search className="mr-2 h-3.5 w-3.5 text-amber-500" /> Review evidence
                 </Button>
               </div>
             </div>

@@ -3,7 +3,8 @@ Risk scoring engine for Sentinel.
 Computes explainable risk scores based on 5 core rules.
 """
 
-from datetime import date, timedelta
+import networkx as nx
+
 from models import (
     Tender,
     Company,
@@ -17,9 +18,8 @@ from models import (
     TenderStatus,
     AddressQuality,
 )
-from connectors.normalize import classify_address
+from connectors.normalize import classify_address, is_postal_style_address
 from graph.builder import find_conflict_path
-import networkx as nx
 
 
 # Risk weights for each factor type
@@ -38,9 +38,11 @@ def compute_risk_score(
     directors: dict[str, Director],
     officials: dict[str, PublicOfficial],
     bids: list[Bid],
-    graph: nx.Graph,
+    graph: nx.Graph | None,
     cartel_clusters: list[set[str]],
+    conflict_paths: dict[tuple[str, str], dict[str, list[str]]] | None = None,
     all_tenders: dict[str, Tender] = None,
+    category_price_stats: dict[str, dict[str, float | int]] | None = None,
 ) -> RiskScore:
     """
     Compute a comprehensive risk score for a tender.
@@ -54,7 +56,14 @@ def compute_risk_score(
     tender_bids = [b for b in bids if b.tender_id == tender.id]
 
     # Rule 1: Conflict of Interest
-    coi_factor = check_conflict_of_interest(tender, winner, directors, officials, graph)
+    coi_factor = check_conflict_of_interest(
+        tender,
+        winner,
+        directors,
+        officials,
+        graph,
+        conflict_paths=conflict_paths,
+    )
     if coi_factor:
         factors.append(coi_factor)
 
@@ -71,7 +80,11 @@ def compute_risk_score(
         factors.append(shell_factor)
 
     # Rule 4: Price Anomaly
-    price_factor = check_price_anomaly(tender, all_tenders)
+    price_factor = check_price_anomaly(
+        tender,
+        all_tenders,
+        category_price_stats=category_price_stats,
+    )
     if price_factor:
         factors.append(price_factor)
 
@@ -108,7 +121,8 @@ def check_conflict_of_interest(
     winner: Company | None,
     directors: dict[str, Director],
     officials: dict[str, PublicOfficial],
-    graph: nx.Graph,
+    graph: nx.Graph | None,
+    conflict_paths: dict[tuple[str, str], dict[str, list[str]]] | None = None,
 ) -> RiskFactor | None:
     """
     Check if there's a relationship path between winner and procurement officer.
@@ -141,7 +155,27 @@ def check_conflict_of_interest(
                 related_entity_ids=[director_id, official.id, winner.id],
             )
 
+    lookup_key = (winner.id, tender.procurement_officer_id)
+    path_info = conflict_paths.get(lookup_key) if conflict_paths else None
+    if path_info:
+        node_ids = path_info.get("node_ids", [])
+        node_labels = path_info.get("node_labels", [])
+        return RiskFactor(
+            type=RiskFactorType.CONFLICT_OF_INTEREST,
+            description=f"Connection path found between winner and procurement officer",
+            weight=RISK_WEIGHTS[RiskFactorType.CONFLICT_OF_INTEREST]
+            - 10,  # Reduced weight for indirect
+            evidence=[
+                f"Path: {' → '.join(node_labels or node_ids)}",
+                f"Path length: {len(node_ids) - 1} connections",
+            ],
+            related_entity_ids=node_ids,
+        )
+
     # Check graph for indirect paths
+    if graph is None:
+        return None
+
     path = find_conflict_path(graph, winner.id, tender.procurement_officer_id)
     if path and len(path) <= 4:  # Within 3 hops
         path_description = " → ".join(
@@ -206,7 +240,6 @@ _SHELL_SIGNAL_WEIGHTS = {
     "address_missing": 10,  # No address at all
     "no_directors": 12,  # Zero directors listed
     "no_ownership": 8,  # No ownership info
-    "generic_email": 5,  # Gmail/Yahoo contact
     "large_value_new_company": 20,  # High contract value + new company
     "missing_registration": 10,  # No registration date
 }
@@ -252,9 +285,17 @@ def check_shell_company(tender: Tender, winner: Company | None) -> RiskFactor | 
         evidence.append("No registration date on record")
 
     # --- Signal 2: Address quality ---
-    addr = winner.physical_address or winner.address
+    physical_addr = (winner.physical_address or "").strip()
+    fallback_addr = (winner.address or "").strip()
+    addr = physical_addr or fallback_addr
     addr_quality = classify_address(addr)
-    if addr_quality == AddressQuality.PLACEHOLDER:
+    if not addr:
+        composite_score += _SHELL_SIGNAL_WEIGHTS["address_missing"]
+        signals.append("address_missing")
+        evidence.append("No address on record")
+    elif not physical_addr and is_postal_style_address(fallback_addr):
+        addr_quality = AddressQuality.UNKNOWN
+    elif addr_quality == AddressQuality.PLACEHOLDER:
         composite_score += _SHELL_SIGNAL_WEIGHTS["address_placeholder"]
         signals.append("address_placeholder")
         evidence.append(f"Placeholder address: '{addr}'")
@@ -262,10 +303,6 @@ def check_shell_company(tender: Tender, winner: Company | None) -> RiskFactor | 
         composite_score += _SHELL_SIGNAL_WEIGHTS["address_vague"]
         signals.append("address_vague")
         evidence.append(f"Vague address: '{addr}'")
-    elif addr_quality == AddressQuality.UNKNOWN:
-        composite_score += _SHELL_SIGNAL_WEIGHTS["address_missing"]
-        signals.append("address_missing")
-        evidence.append("No address on record")
 
     # --- Signal 3: Director count ---
     director_count = quality.get("director_count", len(winner.director_ids))
@@ -282,16 +319,7 @@ def check_shell_company(tender: Tender, winner: Company | None) -> RiskFactor | 
         signals.append("no_ownership")
         evidence.append("No ownership records")
 
-    # --- Signal 5: Generic email domain ---
-    if (
-        quality.get("email_is_public_webmail") is True
-        or quality.get("email_is_generic") is True
-    ):
-        composite_score += _SHELL_SIGNAL_WEIGHTS["generic_email"]
-        signals.append("generic_email")
-        evidence.append(f"Generic email: {winner.contact_email}")
-
-    # --- Signal 6: Large contract + new company ---
+    # --- Signal 5: Large contract + new company ---
     if tender.awarded_amount and tender.awarded_amount > 1_000_000:
         is_new = (
             "company_age_very_new" in signals
@@ -326,7 +354,9 @@ def check_shell_company(tender: Tender, winner: Company | None) -> RiskFactor | 
 
 
 def check_price_anomaly(
-    tender: Tender, all_tenders: dict[str, Tender]
+    tender: Tender,
+    all_tenders: dict[str, Tender],
+    category_price_stats: dict[str, dict[str, float | int]] | None = None,
 ) -> RiskFactor | None:
     """
     Check if awarded amount is significantly above estimate or comparable tenders.
@@ -343,14 +373,30 @@ def check_price_anomaly(
         percentage = int((price_ratio - 1) * 100)
 
         # Find comparable tenders in same category
-        comparable = [
-            t
-            for t in all_tenders.values()
-            if t.id != tender.id
-            and t.category == tender.category
-            and t.awarded_amount
-            and t.status == TenderStatus.AWARDED
-        ]
+        comparable = None
+        avg_comparable = None
+        if category_price_stats and tender.category in category_price_stats:
+            stats = category_price_stats[tender.category]
+            total_amount = float(stats.get("sum_awarded_amount", 0.0))
+            total_count = int(stats.get("awarded_count", 0))
+            if tender.status == TenderStatus.AWARDED and tender.awarded_amount:
+                total_amount -= tender.awarded_amount
+                total_count -= 1
+            if total_count > 0:
+                avg_comparable = total_amount / total_count
+        else:
+            comparable = [
+                t
+                for t in all_tenders.values()
+                if t.id != tender.id
+                and t.category == tender.category
+                and t.awarded_amount
+                and t.status == TenderStatus.AWARDED
+            ]
+            if comparable:
+                avg_comparable = sum(t.awarded_amount for t in comparable) / len(
+                    comparable
+                )
 
         evidence = [
             f"Awarded amount: KES {tender.awarded_amount:,.0f}",
@@ -358,8 +404,7 @@ def check_price_anomaly(
             f"Deviation: {percentage}% above estimate",
         ]
 
-        if comparable:
-            avg_comparable = sum(t.awarded_amount for t in comparable) / len(comparable)
+        if avg_comparable is not None:
             if tender.awarded_amount > avg_comparable * 1.5:
                 evidence.append(f"Category average: KES {avg_comparable:,.0f}")
 

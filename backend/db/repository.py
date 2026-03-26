@@ -4,10 +4,10 @@ Provides async CRUD operations for all entities.
 """
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -37,15 +37,19 @@ from db.models import (
 )
 
 _UNSET = object()
+_BULK_INSERT_BATCH_SIZE = 1000
 
 
 # --- Company ---
 
 
-async def get_companies(db: AsyncSession) -> list[CompanyDB]:
-    result = await db.execute(
-        select(CompanyDB).options(selectinload(CompanyDB.directors))
-    )
+async def get_companies(
+    db: AsyncSession, *, include_directors: bool = True
+) -> list[CompanyDB]:
+    query = select(CompanyDB)
+    if include_directors:
+        query = query.options(selectinload(CompanyDB.directors))
+    result = await db.execute(query)
     return list(result.scalars().all())
 
 
@@ -61,10 +65,18 @@ async def get_company(db: AsyncSession, company_id: uuid.UUID) -> CompanyDB | No
 # --- Director ---
 
 
-async def get_directors(db: AsyncSession) -> list[DirectorDB]:
-    result = await db.execute(
-        select(DirectorDB).options(selectinload(DirectorDB.companies))
-    )
+async def get_directors(
+    db: AsyncSession, *, include_companies: bool = True
+) -> list[DirectorDB]:
+    query = select(DirectorDB)
+    if include_companies:
+        query = query.options(selectinload(DirectorDB.companies))
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
+async def get_company_director_links(db: AsyncSession) -> list[CompanyDirectorDB]:
+    result = await db.execute(select(CompanyDirectorDB))
     return list(result.scalars().all())
 
 
@@ -85,18 +97,36 @@ async def get_tenders(
     db: AsyncSession,
     status: Optional[str] = None,
     category: Optional[str] = None,
+    *,
+    include_related: bool = True,
 ) -> list[TenderDB]:
-    query = select(TenderDB).options(
-        selectinload(TenderDB.bids),
-        selectinload(TenderDB.winning_company),
-        selectinload(TenderDB.procurement_officer),
-    )
+    query = select(TenderDB)
+    if include_related:
+        query = query.options(
+            selectinload(TenderDB.bids),
+            selectinload(TenderDB.winning_company),
+            selectinload(TenderDB.procurement_officer),
+        )
     if status:
         query = query.where(TenderDB.status == status)
     if category:
         query = query.where(TenderDB.category == category)
     result = await db.execute(query)
     return list(result.scalars().all())
+
+
+async def get_tender_with_bids(
+    db: AsyncSession, tender_id: uuid.UUID
+) -> TenderDB | None:
+    result = await db.execute(
+        select(TenderDB)
+        .options(
+            selectinload(TenderDB.bids),
+            selectinload(TenderDB.winning_company).selectinload(CompanyDB.directors),
+        )
+        .where(TenderDB.id == tender_id)
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_tender(db: AsyncSession, tender_id: uuid.UUID) -> TenderDB | None:
@@ -131,6 +161,100 @@ async def get_bids(
 async def get_all_bids(db: AsyncSession) -> list[BidDB]:
     result = await db.execute(select(BidDB))
     return list(result.scalars().all())
+
+
+async def get_bid_stats_by_tender(
+    db: AsyncSession,
+) -> list[tuple[uuid.UUID, int, int, int]]:
+    result = await db.execute(
+        select(
+            BidDB.tender_id,
+            func.count(func.distinct(BidDB.company_id)).label("bidder_count"),
+            func.count(func.distinct(BidDB.company_id))
+            .filter(BidDB.amount.is_not(None))
+            .label("priced_bid_count"),
+            func.count(func.distinct(BidDB.company_id))
+            .filter(BidDB.amount.is_(None))
+            .label("participation_only_count"),
+        ).group_by(BidDB.tender_id)
+    )
+    return [
+        (
+            tender_id,
+            int(bidder_count or 0),
+            int(priced_bid_count or 0),
+            int(participation_only_count or 0),
+        )
+        for tender_id, bidder_count, priced_bid_count, participation_only_count in result.all()
+    ]
+
+
+async def get_tender_page(
+    db: AsyncSession,
+    *,
+    analysis_run_id: uuid.UUID | None,
+    risk_level: Optional[str] = None,
+    status: Optional[str] = None,
+    sort_by: str = "risk",
+    skip: int = 0,
+    limit: int = 50,
+) -> tuple[list[tuple[TenderDB, RiskAssessmentDB | None, int]], int]:
+    if analysis_run_id is None:
+        latest_run = await get_latest_analysis_run(db)
+        analysis_run_id = latest_run.id if latest_run is not None else None
+
+    bid_counts = (
+        select(
+            BidDB.tender_id.label("tender_id"),
+            func.count(func.distinct(BidDB.company_id)).label("bidder_count"),
+        )
+        .group_by(BidDB.tender_id)
+        .subquery()
+    )
+
+    query = select(
+        TenderDB,
+        RiskAssessmentDB,
+        func.coalesce(bid_counts.c.bidder_count, 0).label("bidder_count"),
+    ).outerjoin(bid_counts, bid_counts.c.tender_id == TenderDB.id)
+
+    count_query = select(func.count(TenderDB.id))
+
+    if analysis_run_id is not None:
+        risk_join_clause = (RiskAssessmentDB.tender_id == TenderDB.id) & (
+            RiskAssessmentDB.analysis_run_id == analysis_run_id
+        )
+        query = query.outerjoin(RiskAssessmentDB, risk_join_clause)
+        count_query = count_query.outerjoin(RiskAssessmentDB, risk_join_clause)
+
+    if risk_level:
+        query = query.where(RiskAssessmentDB.category == risk_level)
+        count_query = count_query.where(RiskAssessmentDB.category == risk_level)
+    if status:
+        query = query.where(TenderDB.status == status)
+        count_query = count_query.where(TenderDB.status == status)
+
+    if sort_by == "value":
+        query = query.order_by(
+            func.coalesce(TenderDB.estimated_value, 0).desc(),
+            TenderDB.published_date.desc(),
+            TenderDB.id.desc(),
+        )
+    elif sort_by == "date":
+        query = query.order_by(TenderDB.published_date.desc(), TenderDB.id.desc())
+    else:
+        query = query.order_by(
+            func.coalesce(RiskAssessmentDB.overall_score, 0).desc(),
+            TenderDB.published_date.desc(),
+            TenderDB.id.desc(),
+        )
+
+    total = int((await db.execute(count_query)).scalar_one() or 0)
+    result = await db.execute(query.offset(skip).limit(limit))
+    return [
+        (tender, risk, int(bidder_count or 0))
+        for tender, risk, bidder_count in result.all()
+    ], total
 
 
 # --- Risk Assessment ---
@@ -264,16 +388,80 @@ async def create_company_graph_features(
     analysis_run_id: uuid.UUID,
     company_features: dict[str, dict[str, int]],
 ) -> None:
-    for company_id, feature_values in company_features.items():
-        db.add(
-            CompanyGraphFeatureDB(
-                analysis_run_id=analysis_run_id,
-                company_id=uuid.UUID(company_id),
-                graph_degree=feature_values.get("graph_degree", 0),
-                suspicious_edges=feature_values.get("suspicious_edges", 0),
-                official_distance=feature_values.get("official_distance", 99),
-                community_size=feature_values.get("community_size", 0),
-            )
+    if not company_features:
+        return
+
+    created_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    rows = [
+        {
+            "id": uuid.uuid4(),
+            "analysis_run_id": analysis_run_id,
+            "company_id": uuid.UUID(company_id),
+            "graph_degree": feature_values.get("graph_degree", 0),
+            "suspicious_edges": feature_values.get("suspicious_edges", 0),
+            "official_distance": feature_values.get("official_distance", 99),
+            "community_size": feature_values.get("community_size", 0),
+            "created_at": created_at,
+        }
+        for company_id, feature_values in company_features.items()
+    ]
+    for start in range(0, len(rows), _BULK_INSERT_BATCH_SIZE):
+        await db.execute(
+            insert(CompanyGraphFeatureDB),
+            rows[start : start + _BULK_INSERT_BATCH_SIZE],
+        )
+    await db.flush()
+
+
+async def create_risk_assessments(
+    db: AsyncSession,
+    *,
+    analysis_run_id: uuid.UUID,
+    risk_assessments: list[dict],
+) -> None:
+    if not risk_assessments:
+        return
+
+    tender_ids = [payload["tender_id"] for payload in risk_assessments]
+    version_result = await db.execute(
+        select(
+            RiskAssessmentDB.tender_id,
+            func.max(RiskAssessmentDB.version).label("max_version"),
+        )
+        .where(RiskAssessmentDB.tender_id.in_(tender_ids))
+        .group_by(RiskAssessmentDB.tender_id)
+    )
+    versions_by_tender = {
+        tender_id: int(max_version or 0)
+        for tender_id, max_version in version_result.all()
+    }
+    assessed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    rows: list[dict] = []
+    for payload in risk_assessments:
+        tender_id = payload["tender_id"]
+        next_version = versions_by_tender.get(tender_id, 0) + 1
+        versions_by_tender[tender_id] = next_version
+        rows.append(
+            {
+                "id": uuid.uuid4(),
+                "analysis_run_id": analysis_run_id,
+                "tender_id": tender_id,
+                "version": next_version,
+                "overall_score": payload["overall_score"],
+                "category": payload["category"],
+                "rule_factors": payload["rule_factors"],
+                "recommendation": payload["recommendation"],
+                "ml_anomaly_score": payload["ml_anomaly_score"],
+                "ml_feature_importance": payload["ml_feature_importance"],
+                "model_version": payload["model_version"],
+                "assessed_at": assessed_at,
+            }
+        )
+
+    for start in range(0, len(rows), _BULK_INSERT_BATCH_SIZE):
+        await db.execute(
+            insert(RiskAssessmentDB),
+            rows[start : start + _BULK_INSERT_BATCH_SIZE],
         )
     await db.flush()
 

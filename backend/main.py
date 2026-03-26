@@ -3,6 +3,7 @@ Sentinel API - FastAPI backend for public procurement oversight.
 """
 
 import asyncio
+import time
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -15,8 +16,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+import networkx as nx
+
 from config import settings
-from models import Bid, RiskScore
+from models import Bid, Company, Director, RiskScore, TenderBidStats
 from state import AppState
 from db.config import async_session
 from db import repository as repo
@@ -31,10 +34,16 @@ from db.mappers import (
 )
 from graph.builder import build_procurement_graph
 from graph.communities import detect_communities, Cluster
+from graph.neo4j_analytics import (
+    materialize_company_graph_features_neo4j,
+    precompute_conflict_paths_neo4j,
+    update_tender_risk_levels_neo4j,
+)
+from graph.neo4j_communities import detect_communities_neo4j
 from ml.hybrid_scorer import HybridRiskScorer
 from ml.features import materialize_company_graph_features
 from graph.neo4j_driver import close_neo4j_driver, check_neo4j_health
-from graph.neo4j_sync import sync_graph_to_neo4j
+from graph.neo4j_sync import sync_graph_to_neo4j, get_graph_stats_from_neo4j
 from routes.stats import router as stats_router
 from routes.tenders import router as tenders_router
 from routes.tenders_graph import router as tenders_graph_router
@@ -67,6 +76,33 @@ class JobStatus(str, Enum):
 _recompute_jobs: dict[str, dict[str, Any]] = {}
 
 ANALYSIS_MODEL_VERSION = "hybrid-v1"
+
+
+def _log_performance_metric(
+    event: str,
+    stage: str,
+    started_at: float,
+    **metrics: Any,
+) -> None:
+    duration_ms = (time.perf_counter() - started_at) * 1000
+    metric_suffix = " ".join(f"{key}={value}" for key, value in metrics.items())
+    if metric_suffix:
+        metric_suffix = f" {metric_suffix}"
+    logger.info(
+        "performance_metric event=%s stage=%s duration_ms=%.1f%s",
+        event,
+        stage,
+        duration_ms,
+        metric_suffix,
+    )
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, float) and value != value:
+        return None
+    return float(value)
 
 
 def _communities_to_json(communities: list[Cluster]) -> list[dict]:
@@ -103,20 +139,51 @@ def _communities_from_json(items: list[dict] | None) -> list[Cluster]:
     ]
 
 
-def _company_graph_features_from_rows(rows) -> dict[str, dict[str, int]]:
-    return {
-        str(row.company_id): {
-            "graph_degree": row.graph_degree,
+def _company_graph_features_from_rows(rows: list[Any]) -> dict[str, dict[str, int]]:
+    features: dict[str, dict[str, int]] = {}
+    for row in rows:
+        features[str(row.company_id)] = {
+            "graph_degree": int(row.graph_degree or 0),
             "suspicious_edges": row.suspicious_edges,
             "official_distance": row.official_distance,
             "community_size": row.community_size,
         }
-        for row in rows
+    return features
+
+
+def _build_bid_stats_from_bids(bids: list[Bid]) -> dict[str, TenderBidStats]:
+    participants_by_tender: dict[str, set[str]] = {}
+    priced_by_tender: dict[str, set[str]] = {}
+    participation_only_by_tender: dict[str, set[str]] = {}
+
+    for bid in bids:
+        participants_by_tender.setdefault(bid.tender_id, set()).add(bid.company_id)
+        if bid.amount is None:
+            participation_only_by_tender.setdefault(bid.tender_id, set()).add(
+                bid.company_id
+            )
+        else:
+            priced_by_tender.setdefault(bid.tender_id, set()).add(bid.company_id)
+
+    tender_ids = (
+        set(participants_by_tender)
+        | set(priced_by_tender)
+        | set(participation_only_by_tender)
+    )
+    return {
+        tender_id: TenderBidStats(
+            bidder_count=len(participants_by_tender.get(tender_id, set())),
+            priced_bid_count=len(priced_by_tender.get(tender_id, set())),
+            participation_only_count=len(
+                participation_only_by_tender.get(tender_id, set())
+            ),
+        )
+        for tender_id in tender_ids
     }
 
 
 async def load_persisted_analysis(app: FastAPI) -> dict | None:
-    data = await load_data_from_db()
+    data = await load_data_from_db(include_bids=False)
 
     async with async_session() as db:
         analysis_run = await repo.get_latest_analysis_run(db)
@@ -141,6 +208,7 @@ async def load_persisted_analysis(app: FastAPI) -> dict | None:
         officials=data["officials"],
         bids=data["bids"],
         bids_by_tender=data["bids_by_tender"],
+        bid_stats_by_tender=data["bid_stats_by_tender"],
         risk_scores=risk_scores,
         communities=communities,
         analysis_run_id=str(analysis_run.id),
@@ -148,7 +216,8 @@ async def load_persisted_analysis(app: FastAPI) -> dict | None:
         analysis_model_version=analysis_run.model_version,
         analysis_created_at=analysis_run.created_at,
         graph_loaded=False,
-        graph_source="persisted",
+        graph_inputs_loaded=data["graph_inputs_loaded"],
+        graph_source=analysis_run.graph_source,
         snapshot_source="persisted",
         analysis_summary={
             "tenders": analysis_run.tender_count,
@@ -180,13 +249,16 @@ async def persist_analysis_snapshot(
     company_graph_features: dict[str, dict[str, int]],
     scorer: HybridRiskScorer,
     summary: dict[str, int],
+    graph_source: str,
 ) -> str:
+    snapshot_started = time.perf_counter()
     async with async_session() as db:
         async with db.begin():
+            analysis_run_started = time.perf_counter()
             analysis_run = await repo.create_analysis_run(
                 db=db,
                 status="COMPLETED",
-                graph_source="networkx",
+                graph_source=graph_source,
                 model_version=ANALYSIS_MODEL_VERSION,
                 tender_count=summary["tenders"],
                 company_count=summary["companies"],
@@ -196,47 +268,259 @@ async def persist_analysis_snapshot(
                 run_metadata=summary,
                 communities=_communities_to_json(communities),
             )
+            _log_performance_metric(
+                "analysis_snapshot",
+                "create_analysis_run",
+                analysis_run_started,
+                graph_source=graph_source,
+            )
+
+            graph_features_started = time.perf_counter()
             await repo.create_company_graph_features(
                 db=db,
                 analysis_run_id=analysis_run.id,
                 company_features=company_graph_features,
             )
+            _log_performance_metric(
+                "analysis_snapshot",
+                "create_company_graph_features",
+                graph_features_started,
+                rows=len(company_graph_features),
+            )
 
             ml_scores = scorer.last_ml_scores
+            ml_scores_by_tender = (
+                ml_scores.to_dict(orient="index") if ml_scores is not None else {}
+            )
             model_version = f"{ANALYSIS_MODEL_VERSION}:{analysis_run.id}"
+            risk_payload_build_started = time.perf_counter()
+            risk_assessment_rows = []
             for tender_id, risk in risk_scores.items():
-                ml_row = None
-                if ml_scores is not None and tender_id in ml_scores.index:
-                    ml_row = ml_scores.loc[tender_id]
-                await repo.upsert_risk_assessment(
-                    db=db,
-                    analysis_run_id=analysis_run.id,
-                    tender_id=uuid.UUID(tender_id),
-                    overall_score=risk.overall,
-                    category=risk.category.value,
-                    rule_factors=risk_factors_to_json(risk.factors),
-                    recommendation=risk.recommendation,
-                    ml_anomaly_score=(
-                        float(ml_row["anomaly_score"]) if ml_row is not None else None
-                    ),
-                    ml_feature_importance=(
-                        ml_row["feature_importance"] if ml_row is not None else None
-                    ),
-                    model_version=model_version,
+                ml_row = ml_scores_by_tender.get(tender_id)
+                risk_assessment_rows.append(
+                    {
+                        "tender_id": uuid.UUID(tender_id),
+                        "overall_score": risk.overall,
+                        "category": risk.category.value,
+                        "rule_factors": risk_factors_to_json(risk.factors),
+                        "recommendation": risk.recommendation,
+                        "ml_anomaly_score": (
+                            _optional_float(ml_row.get("anomaly_score"))
+                            if ml_row is not None
+                            else None
+                        ),
+                        "ml_feature_importance": (
+                            ml_row.get("feature_importance")
+                            if ml_row is not None
+                            else None
+                        ),
+                        "model_version": model_version,
+                    }
                 )
+            _log_performance_metric(
+                "analysis_snapshot",
+                "prepare_risk_assessments",
+                risk_payload_build_started,
+                rows=len(risk_assessment_rows),
+            )
+
+            risk_insert_started = time.perf_counter()
+            await repo.create_risk_assessments(
+                db=db,
+                analysis_run_id=analysis_run.id,
+                risk_assessments=risk_assessment_rows,
+            )
+            _log_performance_metric(
+                "analysis_snapshot",
+                "create_risk_assessments",
+                risk_insert_started,
+                rows=len(risk_assessment_rows),
+            )
+
+    _log_performance_metric(
+        "analysis_snapshot",
+        "total",
+        snapshot_started,
+        graph_source=graph_source,
+        risk_scores=len(risk_scores),
+        companies=len(company_graph_features),
+        communities=len(communities),
+    )
 
     return str(analysis_run.id)
 
 
-async def recompute_app_state(app: FastAPI) -> dict:
+async def recompute_app_state(
+    app: FastAPI,
+    *,
+    prefer_neo4j_primary: bool = True,
+    neo4j_timeout_seconds: float = 15.0,
+) -> dict:
     """
     Reload all data from DB, rebuild graph, recompute risk scores,
     and update the in-memory app state. Called at startup and after ingestion.
     Returns summary stats.
     """
+    recompute_started = time.perf_counter()
+    data_load_started = time.perf_counter()
     data = await load_data_from_db()
+    _log_performance_metric(
+        "recompute",
+        "load_data",
+        data_load_started,
+        tenders=len(data["tenders"]),
+        companies=len(data["companies"]),
+        bids=len(data["bids"]),
+    )
+
+    if settings.neo4j_enabled and prefer_neo4j_primary:
+        try:
+            neo4j_prepare_started = time.perf_counter()
+            async with asyncio.timeout(neo4j_timeout_seconds):
+                neo4j_health = await check_neo4j_health()
+                if neo4j_health["status"] != "healthy":
+                    raise RuntimeError("Neo4j health check did not return healthy")
+
+                await sync_graph_to_neo4j(
+                    companies=data["companies"],
+                    directors=data["directors"],
+                    officials=data["officials"],
+                    tenders=data["tenders"],
+                    bids=data["bids"],
+                    incremental=True,
+                )
+
+                communities = await detect_communities_neo4j()
+                company_graph_features = (
+                    await materialize_company_graph_features_neo4j()
+                )
+                conflict_paths = await precompute_conflict_paths_neo4j(data["tenders"])
+            _log_performance_metric(
+                "recompute",
+                "neo4j_graph_prepare",
+                neo4j_prepare_started,
+                communities=len(communities),
+                company_graph_features=len(company_graph_features),
+                conflict_paths=len(conflict_paths),
+            )
+
+            scoring_started = time.perf_counter()
+            scorer = HybridRiskScorer()
+            risk_scores = scorer.score_all(
+                tenders=data["tenders"],
+                companies=data["companies"],
+                directors=data["directors"],
+                officials=data["officials"],
+                bids=data["bids"],
+                graph=None,
+                communities=communities,
+                bids_by_tender=data["bids_by_tender"],
+                company_graph_features=company_graph_features,
+                conflict_paths=conflict_paths,
+            )
+            _log_performance_metric(
+                "recompute",
+                "score_all",
+                scoring_started,
+                graph_source="neo4j",
+                risk_scores=len(risk_scores),
+            )
+
+            neo4j_update_started = time.perf_counter()
+            await update_tender_risk_levels_neo4j(
+                {
+                    tender_id: risk.category.value
+                    for tender_id, risk in risk_scores.items()
+                }
+            )
+            _log_performance_metric(
+                "recompute",
+                "update_tender_risk_levels_neo4j",
+                neo4j_update_started,
+                risk_scores=len(risk_scores),
+            )
+
+            graph_stats_started = time.perf_counter()
+            neo4j_stats = await get_graph_stats_from_neo4j()
+            _log_performance_metric(
+                "recompute",
+                "get_graph_stats_from_neo4j",
+                graph_stats_started,
+                nodes=neo4j_stats.get("total_nodes", 0),
+                edges=neo4j_stats.get("total_edges", 0),
+            )
+            summary = {
+                "tenders": len(data["tenders"]),
+                "companies": len(data["companies"]),
+                "nodes": neo4j_stats.get("total_nodes", 0),
+                "edges": neo4j_stats.get("total_edges", 0),
+                "communities": len(communities),
+                "risk_scores": len(risk_scores),
+            }
+            snapshot_started = time.perf_counter()
+            analysis_run_id = await persist_analysis_snapshot(
+                risk_scores=risk_scores,
+                communities=communities,
+                company_graph_features=company_graph_features,
+                scorer=scorer,
+                summary=summary,
+                graph_source="neo4j",
+            )
+            _log_performance_metric(
+                "recompute",
+                "persist_analysis_snapshot",
+                snapshot_started,
+                graph_source="neo4j",
+                analysis_run_id=analysis_run_id,
+            )
+
+            app.state.app_state = AppState(
+                tenders=data["tenders"],
+                companies=data["companies"],
+                directors=data["directors"],
+                officials=data["officials"],
+                bids=data["bids"],
+                bids_by_tender=data["bids_by_tender"],
+                bid_stats_by_tender=data["bid_stats_by_tender"],
+                graph=nx.Graph(),
+                graph_loaded=False,
+                graph_inputs_loaded=data["graph_inputs_loaded"],
+                graph_source="neo4j",
+                risk_scores=risk_scores,
+                communities=communities,
+                analysis_run_id=analysis_run_id,
+                analysis_status="COMPLETED",
+                analysis_model_version=ANALYSIS_MODEL_VERSION,
+                analysis_created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                snapshot_source="fresh",
+                analysis_summary=summary,
+                company_graph_features=company_graph_features,
+            )
+
+            _log_performance_metric(
+                "recompute",
+                "total",
+                recompute_started,
+                graph_source="neo4j",
+                snapshot_source="fresh",
+                analysis_run_id=analysis_run_id,
+            )
+
+            return {
+                **summary,
+                "analysis_run_id": analysis_run_id,
+                "snapshot_source": "fresh",
+            }
+        except TimeoutError:
+            logger.warning(
+                "Neo4j primary analysis timed out after %.1fs during graph preparation; falling back to NetworkX",
+                neo4j_timeout_seconds,
+            )
+        except Exception:
+            logger.exception("Neo4j primary analysis failed, falling back to NetworkX")
 
     # Build NetworkX graph (always needed for ML features)
+    graph_build_started = time.perf_counter()
     graph = build_procurement_graph(
         tenders=data["tenders"],
         companies=data["companies"],
@@ -244,14 +528,34 @@ async def recompute_app_state(app: FastAPI) -> dict:
         officials=data["officials"],
         bids=data["bids"],
     )
+    _log_performance_metric(
+        "recompute",
+        "build_procurement_graph",
+        graph_build_started,
+        nodes=graph.number_of_nodes(),
+        edges=graph.number_of_edges(),
+    )
 
-    # Detect communities using NetworkX (always available)
-    # Neo4j sync happens in background after initial load
+    communities_started = time.perf_counter()
     communities = detect_communities(
         graph, data["tenders"], data["bids"], data["companies"]
     )
+    _log_performance_metric(
+        "recompute",
+        "detect_communities_networkx",
+        communities_started,
+        communities=len(communities),
+    )
+    features_started = time.perf_counter()
     company_graph_features = materialize_company_graph_features(graph)
+    _log_performance_metric(
+        "recompute",
+        "materialize_company_graph_features_networkx",
+        features_started,
+        company_graph_features=len(company_graph_features),
+    )
 
+    scoring_started = time.perf_counter()
     scorer = HybridRiskScorer()
     risk_scores = scorer.score_all(
         tenders=data["tenders"],
@@ -263,6 +567,13 @@ async def recompute_app_state(app: FastAPI) -> dict:
         communities=communities,
         bids_by_tender=data["bids_by_tender"],
         company_graph_features=company_graph_features,
+    )
+    _log_performance_metric(
+        "recompute",
+        "score_all",
+        scoring_started,
+        graph_source="networkx",
+        risk_scores=len(risk_scores),
     )
 
     for tender_id, risk in risk_scores.items():
@@ -277,12 +588,21 @@ async def recompute_app_state(app: FastAPI) -> dict:
         "communities": len(communities),
         "risk_scores": len(risk_scores),
     }
+    snapshot_started = time.perf_counter()
     analysis_run_id = await persist_analysis_snapshot(
         risk_scores=risk_scores,
         communities=communities,
         company_graph_features=company_graph_features,
         scorer=scorer,
         summary=summary,
+        graph_source="networkx",
+    )
+    _log_performance_metric(
+        "recompute",
+        "persist_analysis_snapshot",
+        snapshot_started,
+        graph_source="networkx",
+        analysis_run_id=analysis_run_id,
     )
 
     app.state.app_state = AppState(
@@ -292,8 +612,10 @@ async def recompute_app_state(app: FastAPI) -> dict:
         officials=data["officials"],
         bids=data["bids"],
         bids_by_tender=data["bids_by_tender"],
+        bid_stats_by_tender=data["bid_stats_by_tender"],
         graph=graph,
         graph_loaded=True,
+        graph_inputs_loaded=data["graph_inputs_loaded"],
         graph_source="networkx",
         risk_scores=risk_scores,
         communities=communities,
@@ -306,7 +628,19 @@ async def recompute_app_state(app: FastAPI) -> dict:
         company_graph_features=company_graph_features,
     )
 
-    return {**summary, "analysis_run_id": analysis_run_id, "snapshot_source": "fresh"}
+    _log_performance_metric(
+        "recompute",
+        "total",
+        recompute_started,
+        graph_source="networkx",
+        snapshot_source="fresh",
+        analysis_run_id=analysis_run_id,
+    )
+    return {
+        **summary,
+        "analysis_run_id": analysis_run_id,
+        "snapshot_source": "fresh",
+    }
 
 
 async def sync_neo4j_background(app: FastAPI):
@@ -330,6 +664,13 @@ async def sync_neo4j_background(app: FastAPI):
             officials=state.officials,
             tenders=state.tenders,
             bids=state.bids,
+            incremental=True,
+        )
+        await update_tender_risk_levels_neo4j(
+            {
+                tender_id: risk.category.value
+                for tender_id, risk in state.risk_scores.items()
+            }
         )
         logger.info(f"Neo4j sync complete: {neo4j_stats}")
 
@@ -337,17 +678,56 @@ async def sync_neo4j_background(app: FastAPI):
         logger.error(f"Neo4j background sync failed: {e}")
 
 
-async def load_data_from_db():
-    """Load all entities from PostgreSQL and convert to Pydantic models."""
+async def load_data_from_db(*, include_bids: bool = True):
+    """Load entities from PostgreSQL and convert to Pydantic models."""
     async with async_session() as db:
-        companies_db = await repo.get_companies(db)
-        directors_db = await repo.get_directors(db)
+        companies_db = await repo.get_companies(db, include_directors=False)
+        directors_db = await repo.get_directors(db, include_companies=False)
+        company_director_links = await repo.get_company_director_links(db)
         officials_db = await repo.get_officials(db)
-        tenders_db = await repo.get_tenders(db)
-        bids_db = await repo.get_all_bids(db)
+        tenders_db = await repo.get_tenders(db, include_related=False)
+        bid_stats_rows = await repo.get_bid_stats_by_tender(db)
+        bids_db = await repo.get_all_bids(db) if include_bids else []
 
-    companies = {str(c.id): company_to_pydantic(c) for c in companies_db}
-    directors = {str(d.id): director_to_pydantic(d) for d in directors_db}
+    company_director_ids: dict[str, list[str]] = {}
+    director_company_ids: dict[str, list[str]] = {}
+    for link in company_director_links:
+        company_id = str(link.company_id)
+        director_id = str(link.director_id)
+        company_director_ids.setdefault(company_id, []).append(director_id)
+        director_company_ids.setdefault(director_id, []).append(company_id)
+
+    companies = {
+        str(c.id): Company(
+            id=str(c.id),
+            name=c.name,
+            registration_number=c.registration_number,
+            registration_date=c.registration_date,
+            address=c.address,
+            phone=c.phone,
+            director_ids=company_director_ids.get(str(c.id), []),
+            supplier_type=c.supplier_type,
+            brs_number=c.brs_number,
+            egp_registration_number=c.egp_registration_number,
+            contact_email=c.contact_email,
+            physical_address=c.physical_address,
+            postal_address=c.postal_address,
+            postal_code=c.postal_code,
+            source_system=c.source_system,
+            source_record_id=c.source_record_id,
+            data_quality_flags=c.data_quality_flags,
+        )
+        for c in companies_db
+    }
+    directors = {
+        str(d.id): Director(
+            id=str(d.id),
+            name=d.name,
+            national_id=d.national_id,
+            company_ids=director_company_ids.get(str(d.id), []),
+        )
+        for d in directors_db
+    }
     officials = {str(o.id): official_to_pydantic(o) for o in officials_db}
     tenders = {str(t.id): tender_to_pydantic(t) for t in tenders_db}
     bids = [bid_to_pydantic(b) for b in bids_db]
@@ -356,6 +736,17 @@ async def load_data_from_db():
     for b in bids:
         bids_by_tender.setdefault(b.tender_id, []).append(b)
 
+    bid_stats_by_tender = {
+        str(tender_id): TenderBidStats(
+            bidder_count=bidder_count,
+            priced_bid_count=priced_bid_count,
+            participation_only_count=participation_only_count,
+        )
+        for tender_id, bidder_count, priced_bid_count, participation_only_count in bid_stats_rows
+    }
+    if include_bids:
+        bid_stats_by_tender = _build_bid_stats_from_bids(bids)
+
     return {
         "companies": companies,
         "directors": directors,
@@ -363,6 +754,8 @@ async def load_data_from_db():
         "tenders": tenders,
         "bids": bids,
         "bids_by_tender": bids_by_tender,
+        "bid_stats_by_tender": bid_stats_by_tender,
+        "graph_inputs_loaded": include_bids,
     }
 
 
@@ -401,13 +794,13 @@ async def lifespan(app: FastAPI):
 
     stats = await load_persisted_analysis(app)
     if stats is None:
-        stats = await recompute_app_state(app)
+        stats = await recompute_app_state(app, prefer_neo4j_primary=False)
         print(f"Loaded {stats['tenders']} tenders from PostgreSQL")
         print(f"Built graph with {stats['nodes']} nodes and {stats['edges']} edges")
         print(f"Detected {stats['communities']} bidding communities")
         print(f"Computed and persisted {stats['risk_scores']} risk scores")
 
-        if settings.neo4j_enabled:
+        if settings.neo4j_enabled and app.state.app_state.graph_source != "neo4j":
             asyncio.ensure_future(sync_neo4j_background(app))
             print("Neo4j sync scheduled (background)")
     else:
