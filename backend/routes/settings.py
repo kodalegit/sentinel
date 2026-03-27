@@ -131,9 +131,12 @@ async def sync_runtime_llm_settings_from_db(db: AsyncSession | None = None) -> N
         _apply_runtime_llm_settings(settings_dict)
         return
 
-    async with async_session() as session:
-        settings_dict = await repo.get_agent_settings(session)
-    _apply_runtime_llm_settings(settings_dict)
+    try:
+        async with async_session() as session:
+            settings_dict = await repo.get_agent_settings(session)
+        _apply_runtime_llm_settings(settings_dict)
+    except Exception:
+        return
 
 
 @router.get("/llm", response_model=AgentSettingsResponse)
