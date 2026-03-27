@@ -4,6 +4,7 @@ Loads from environment variables and .env file.
 """
 
 from typing import Optional
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -60,10 +61,29 @@ class Settings(BaseSettings):
     neo4j_database: str = "neo4j"
     neo4j_enabled: bool = True  # Set to False to use NetworkX fallback
 
+    @model_validator(mode="after")
+    def fix_database_url(self) -> "Settings":
+        """Normalize DATABASE_URL for asyncpg compatibility.
+
+        Handles:
+        - Railway/Neon: postgres:// or postgresql:// → postgresql+asyncpg://
+        - Neon SSL: ?sslmode=require → ?ssl=require (asyncpg uses ssl= not sslmode=)
+        """
+        url = self.database_url
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        url = url.replace("sslmode=require", "ssl=require")
+        self.database_url = url
+        return self
+
     @property
     def sync_database_url(self) -> str:
-        """Sync URL for Alembic migrations."""
-        return self.database_url.replace("+asyncpg", "+psycopg2")
+        """Sync URL for Alembic migrations (psycopg2 driver, sslmode= not ssl=)."""
+        return self.database_url.replace("+asyncpg", "+psycopg2").replace(
+            "ssl=require", "sslmode=require"
+        )
 
 
 settings = Settings()
