@@ -4,6 +4,11 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from langchain.tools import ToolRuntime, tool
+from config import settings
+from graph.neo4j_communities import (
+    get_entity_neighborhood_neo4j,
+    search_graph_entities_neo4j,
+)
 from runtime_graph import ensure_runtime_graph
 
 logger = logging.getLogger(__name__)
@@ -305,7 +310,7 @@ def get_risk_analysis(
 
 
 @tool
-def search_graph_connections(
+async def search_graph_connections(
     entity_name: str,
     runtime: ToolRuntime[AgentRuntimeContext],
 ) -> str:
@@ -314,6 +319,59 @@ def search_graph_connections(
     if not ctx or not ctx.app_state:
         return "Graph not available."
 
+    # --- Neo4j-first path ---
+    if settings.neo4j_enabled:
+        try:
+            matches = await search_graph_entities_neo4j(entity_name, limit=5)
+            if not matches:
+                return f"No entities found matching '{entity_name}'."
+
+            lines = [f"Found {len(matches)} matching entities:"]
+            for match in matches:
+                entity_id = match["id"]
+                label = match.get("label", entity_id)
+                node_type = match.get("type", "unknown")
+                risk = match.get("risk_level")
+                subtitle = match.get("subtitle")
+
+                header = f"\n{label} ({node_type})"
+                if risk:
+                    header += f" — risk: {risk}"
+                if subtitle:
+                    header += f" — {subtitle}"
+                lines.append(header + ":")
+
+                try:
+                    neighborhood = await get_entity_neighborhood_neo4j(
+                        entity_id, depth=1
+                    )
+                    edges = neighborhood.get("edges", [])
+                    nodes_by_id = {n["id"]: n for n in neighborhood.get("nodes", [])}
+                    seen: set[str] = set()
+                    for edge in edges[:10]:
+                        src, tgt = edge.get("source"), edge.get("target")
+                        rel = edge.get("relationship", "connected to")
+                        neighbor_id = tgt if src == entity_id else src
+                        if neighbor_id in seen or neighbor_id == entity_id:
+                            continue
+                        seen.add(neighbor_id)
+                        neighbor_label = nodes_by_id.get(neighbor_id, {}).get(
+                            "label", neighbor_id
+                        )
+                        suspicious = " (suspicious)" if edge.get("suspicious") else ""
+                        lines.append(f"  - {rel}: {neighbor_label}{suspicious}")
+                    if not seen:
+                        lines.append("  (no direct connections found)")
+                except Exception:
+                    lines.append("  (could not load connections)")
+
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning(
+                "Neo4j graph search failed, falling back to NetworkX: %s", exc
+            )
+
+    # --- NetworkX fallback ---
     try:
         graph = ensure_runtime_graph(ctx.app_state)
     except RuntimeError as exc:
