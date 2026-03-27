@@ -778,6 +778,34 @@ async def neo4j_or_fallback(neo4j_coro, networkx_fn, *args, **kwargs):
     return networkx_fn(*args, **kwargs)
 
 
+async def initialize_app_state(app: FastAPI):
+    try:
+        await sync_runtime_llm_settings_from_db()
+
+        stats = await load_persisted_analysis(app)
+        if stats is None:
+            stats = await recompute_app_state(app, prefer_neo4j_primary=False)
+            print(f"Loaded {stats['tenders']} tenders from PostgreSQL")
+            print(f"Built graph with {stats['nodes']} nodes and {stats['edges']} edges")
+            print(f"Detected {stats['communities']} bidding communities")
+            print(f"Computed and persisted {stats['risk_scores']} risk scores")
+
+            if settings.neo4j_enabled and app.state.app_state.graph_source != "neo4j":
+                asyncio.ensure_future(sync_neo4j_background(app))
+                print("Neo4j sync scheduled (background)")
+        else:
+            print(f"Loaded {stats['tenders']} tenders from PostgreSQL")
+            print(f"Loaded persisted analysis snapshot {stats['analysis_run_id']}")
+            print(f"Loaded {stats['communities']} bidding communities")
+            print(f"Loaded {stats['risk_scores']} persisted risk scores")
+    except Exception as e:
+        logger.exception("Startup initialization failed")
+        app.state.app_state.analysis_status = "FAILED"
+        app.state.app_state.snapshot_source = "startup_failed"
+        app.state.app_state.analysis_summary = {"error": 1}
+        app.state.startup_error = str(e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize data on startup."""
@@ -790,26 +818,18 @@ async def lifespan(app: FastAPI):
             "Set JWT_SECRET_KEY in production!\n" + "=" * 70
         )
 
-    await sync_runtime_llm_settings_from_db()
-
-    stats = await load_persisted_analysis(app)
-    if stats is None:
-        stats = await recompute_app_state(app, prefer_neo4j_primary=False)
-        print(f"Loaded {stats['tenders']} tenders from PostgreSQL")
-        print(f"Built graph with {stats['nodes']} nodes and {stats['edges']} edges")
-        print(f"Detected {stats['communities']} bidding communities")
-        print(f"Computed and persisted {stats['risk_scores']} risk scores")
-
-        if settings.neo4j_enabled and app.state.app_state.graph_source != "neo4j":
-            asyncio.ensure_future(sync_neo4j_background(app))
-            print("Neo4j sync scheduled (background)")
-    else:
-        print(f"Loaded {stats['tenders']} tenders from PostgreSQL")
-        print(f"Loaded persisted analysis snapshot {stats['analysis_run_id']}")
-        print(f"Loaded {stats['communities']} bidding communities")
-        print(f"Loaded {stats['risk_scores']} persisted risk scores")
+    app.state.app_state = AppState(
+        analysis_status="INITIALIZING",
+        snapshot_source="startup",
+    )
+    app.state.startup_error = None
+    app.state.startup_task = asyncio.create_task(initialize_app_state(app))
 
     yield
+
+    startup_task = getattr(app.state, "startup_task", None)
+    if startup_task is not None and not startup_task.done():
+        startup_task.cancel()
 
     # Cleanup Neo4j connection
     if settings.neo4j_enabled:
