@@ -15,10 +15,15 @@ def _normalize_async_database_url(database_url: str) -> tuple[str, dict[str, obj
     parsed = urlsplit(database_url)
     query_params = parse_qsl(parsed.query, keep_blank_values=True)
 
+    # asyncpg-incompatible params to strip from URL (pass via connect_args or drop)
+    asyncpg_incompatible = {"channel_binding"}
+
     filtered_query_params: list[tuple[str, str]] = []
     for key, value in query_params:
         if key == "ssl" and value == "require":
             connect_args["ssl"] = "require"
+            continue
+        if key in asyncpg_incompatible:
             continue
         filtered_query_params.append((key, value))
 
