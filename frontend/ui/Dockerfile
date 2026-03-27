@@ -9,7 +9,9 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 
-# NEXT_PUBLIC_API_URL is injected by Railway at build time via service variables
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
 RUN pnpm build
 
 FROM node:22-alpine AS runner
