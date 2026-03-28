@@ -837,8 +837,7 @@ async def get_graph_stats_from_neo4j() -> dict[str, Any]:
             record = await result.single()
             node_types[label] = record["count"] if record else 0
 
-        edge_types: dict[str, int] = {}
-        for relationship_type in (
+        managed_relationship_types = (
             "DIRECTED_BY",
             "BID_ON",
             "AWARDED_BY",
@@ -848,12 +847,21 @@ async def get_graph_stats_from_neo4j() -> dict[str, Any]:
             "SHARES_EMAIL",
             "SHARES_DIRECTOR",
             "CO_BID",
-        ):
-            result = await session.run(
-                f"MATCH ()-[r:{relationship_type}]->() RETURN count(r) AS count"
-            )
-            record = await result.single()
-            edge_types[relationship_type] = record["count"] if record else 0
+        )
+        edge_types: dict[str, int] = {
+            relationship_type: 0 for relationship_type in managed_relationship_types
+        }
+        result = await session.run(
+            """
+            MATCH ()-[r]->()
+            WHERE type(r) IN $relationship_types
+            RETURN type(r) AS relationship_type, count(r) AS count
+            """,
+            relationship_types=list(managed_relationship_types),
+        )
+        records = [record async for record in result]
+        for record in records:
+            edge_types[record["relationship_type"]] = record["count"]
 
         # Totals
         result = await session.run("MATCH (n) RETURN count(n) as nodes")
