@@ -9,7 +9,6 @@ from graph.neo4j_communities import (
     get_entity_neighborhood_neo4j,
     search_graph_entities_neo4j,
 )
-from runtime_graph import ensure_runtime_graph
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +154,109 @@ def clear_citation_registry() -> None:
 
 def _require_citation_registry() -> Optional[CitationRegistry]:
     return get_citation_registry()
+
+
+def _search_graph_connections_from_state(entity_name: str, app_state: Any) -> str:
+    entity_lower = entity_name.lower().strip()
+    if not entity_lower:
+        return "Please provide an entity name to search."
+
+    matches: list[tuple[str, str, str, Optional[str], Optional[str]]] = []
+
+    for company in app_state.companies.values():
+        haystacks = [company.name, company.id, company.registration_number or ""]
+        if any(entity_lower in value.lower() for value in haystacks if value):
+            matches.append((company.id, company.name, "COMPANY", None, company.address))
+
+    for director in app_state.directors.values():
+        haystacks = [director.name, director.id, director.national_id or ""]
+        if any(entity_lower in value.lower() for value in haystacks if value):
+            matches.append((director.id, director.name, "DIRECTOR", None, None))
+
+    for official in app_state.officials.values():
+        haystacks = [official.name, official.id, official.department, official.position]
+        if any(entity_lower in value.lower() for value in haystacks if value):
+            subtitle = " · ".join(
+                value for value in [official.department, official.position] if value
+            )
+            matches.append(
+                (official.id, official.name, "OFFICIAL", None, subtitle or None)
+            )
+
+    for tender in app_state.tenders.values():
+        haystacks = [tender.title, tender.id, tender.reference_number]
+        if any(entity_lower in value.lower() for value in haystacks if value):
+            risk_score = app_state.risk_scores.get(tender.id)
+            risk = risk_score.category.value if risk_score else None
+            matches.append(
+                (
+                    tender.id,
+                    tender.title,
+                    "TENDER",
+                    risk,
+                    tender.procuring_entity,
+                )
+            )
+
+    if not matches:
+        return f"No entities found matching '{entity_name}'."
+
+    lines = [f"Found {len(matches[:5])} matching entities:"]
+    for entity_id, label, node_type, risk, subtitle in matches[:5]:
+        header = f"\n{label} ({node_type})"
+        if risk:
+            header += f" — risk: {risk}"
+        if subtitle:
+            header += f" — {subtitle}"
+        lines.append(header + ":")
+
+        connections: list[str] = []
+        if node_type == "COMPANY":
+            company = app_state.companies[entity_id]
+            for director_id in company.director_ids[:5]:
+                director = app_state.directors.get(director_id)
+                if director:
+                    connections.append(f"  - DIRECTED_BY: {director.name}")
+            awarded_tenders = [
+                tender
+                for tender in app_state.tenders.values()
+                if tender.awarded_to == entity_id
+            ][:5]
+            for tender in awarded_tenders:
+                connections.append(f"  - WON: {tender.title}")
+
+        elif node_type == "DIRECTOR":
+            director = app_state.directors[entity_id]
+            for company_id in director.company_ids[:5]:
+                company = app_state.companies.get(company_id)
+                if company:
+                    connections.append(f"  - DIRECTOR_OF: {company.name}")
+
+        elif node_type == "OFFICIAL":
+            official_tenders = [
+                tender
+                for tender in app_state.tenders.values()
+                if tender.procurement_officer_id == entity_id
+            ][:5]
+            for tender in official_tenders:
+                connections.append(f"  - AWARDED_BY: {tender.title}")
+
+        elif node_type == "TENDER":
+            tender = app_state.tenders[entity_id]
+            if tender.awarded_to:
+                company = app_state.companies.get(tender.awarded_to)
+                if company:
+                    connections.append(f"  - WON_BY: {company.name}")
+            if tender.procurement_officer_id:
+                official = app_state.officials.get(tender.procurement_officer_id)
+                if official:
+                    connections.append(f"  - AWARDED_BY: {official.name}")
+
+        if not connections:
+            connections.append("  (no direct connections found in persisted state)")
+        lines.extend(connections)
+
+    return "\n".join(lines)
 
 
 def _format_source_block(artifact: ToolArtifact, body_lines: list[str]) -> str:
@@ -323,6 +425,9 @@ async def search_graph_connections(
     if settings.neo4j_enabled:
         try:
             matches = await search_graph_entities_neo4j(entity_name, limit=5)
+            logger.info(
+                "search_graph_connections: using Neo4j (found %d matches)", len(matches)
+            )
             if not matches:
                 return f"No entities found matching '{entity_name}'."
 
@@ -367,34 +472,9 @@ async def search_graph_connections(
 
             return "\n".join(lines)
         except Exception as exc:
-            logger.warning(
-                "Neo4j graph search failed, falling back to NetworkX: %s", exc
-            )
+            logger.warning("Neo4j graph search failed, using state fallback: %s", exc)
+            logger.info("search_graph_connections: falling back to persisted state")
+    else:
+        logger.info("search_graph_connections: Neo4j disabled, using persisted state")
 
-    # --- NetworkX fallback ---
-    try:
-        graph = ensure_runtime_graph(ctx.app_state)
-    except RuntimeError as exc:
-        return str(exc)
-
-    matching_nodes = []
-    entity_lower = entity_name.lower()
-    for node in graph.nodes():
-        node_data = graph.nodes[node]
-        label = node_data.get("label", "").lower()
-        if entity_lower in label or entity_lower in node.lower():
-            matching_nodes.append((node, node_data))
-
-    if not matching_nodes:
-        return f"No entities found matching '{entity_name}'."
-
-    lines = [f"Found {len(matching_nodes)} matching entities:"]
-    for node_id, data in matching_nodes[:5]:
-        lines.append(f"\n{data.get('label', node_id)} ({data.get('type', 'unknown')}):")
-        neighbors = list(graph.neighbors(node_id))[:10]
-        for neighbor in neighbors:
-            edge_data = graph.edges.get((node_id, neighbor), {})
-            neighbor_data = graph.nodes.get(neighbor, {})
-            relationship = edge_data.get("relationship", "connected to")
-            lines.append(f"  - {relationship}: {neighbor_data.get('label', neighbor)}")
-    return "\n".join(lines)
+    return _search_graph_connections_from_state(entity_name, ctx.app_state)

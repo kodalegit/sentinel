@@ -80,8 +80,10 @@ async def close_neo4j_driver():
 
 @asynccontextmanager
 async def get_neo4j_session() -> AsyncGenerator[AsyncSession, None]:
-    """Get a Neo4j session for executing queries."""
-    driver = await ensure_neo4j_driver()
+    """Get a Neo4j session for executing queries.
+    Uses the cached driver without re-verifying connectivity on every call.
+    The driver's internal connection pool handles reconnections automatically."""
+    driver = await get_neo4j_driver()
     async with driver.session(database=settings.neo4j_database) as session:
         yield session
 
