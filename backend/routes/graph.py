@@ -1,10 +1,11 @@
 """Graph exploration routes."""
 
+import logging
 import networkx as nx
 from fastapi import APIRouter, HTTPException, Query
 
 from config import settings
-from models import GraphData, GraphNode, GraphEdge, GraphSearchResult
+from models import GraphData, GraphNode, GraphEdge, GraphSearchResult, EdgeType
 from state import State
 from graph.builder import (
     get_tender_subgraph,
@@ -18,12 +19,14 @@ from graph.neo4j_communities import (
     find_shortest_path_neo4j,
     get_entity_neighborhood_neo4j,
     get_cluster_subgraph_neo4j,
+    get_explore_graph_neo4j,
     search_graph_entities_neo4j,
 )
 from graph.neo4j_sync import get_graph_stats_from_neo4j
 from runtime_graph import ensure_runtime_graph
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
+logger = logging.getLogger(__name__)
 
 # Maximum nodes/edges to return in a single response to prevent memory exhaustion
 MAX_GRAPH_NODES = 500
@@ -143,6 +146,29 @@ def _build_search_subtitle(graph: nx.Graph, node_id: str, attrs: dict) -> str | 
     return None
 
 
+def _neo4j_edges_to_graph_edges(edges: list[dict]) -> list[GraphEdge]:
+    """Convert Neo4j edge dicts to GraphEdge models, generating required id field.
+    Skips edges whose relationship type is not in the EdgeType enum."""
+    result = []
+    valid_types = {e.value for e in EdgeType}
+    for i, e in enumerate(edges):
+        if e.get("relationship") not in valid_types:
+            logger.debug(
+                f"Skipping edge with unknown relationship type: {e.get('relationship')}"
+            )
+            continue
+        result.append(
+            GraphEdge(
+                id=f"edge-{i}",
+                source=e["source"],
+                target=e["target"],
+                relationship=e["relationship"],
+                suspicious=e.get("suspicious", False),
+            )
+        )
+    return result
+
+
 def _ensure_runtime_graph_or_503(state: State) -> nx.Graph:
     try:
         return ensure_runtime_graph(state)
@@ -200,7 +226,7 @@ async def get_graph_stats(state: State):
 
 
 @router.get("/explore", response_model=GraphData)
-def get_full_graph(
+async def get_full_graph(
     state: State,
     limit_nodes: int = Query(
         MAX_GRAPH_NODES, ge=1, le=1000, description="Max nodes to return"
@@ -213,7 +239,24 @@ def get_full_graph(
     ),
 ):
     """Get the shadow graph for exploration with pagination/limits.
-    For large graphs, use /communities or /entity/{id} endpoints instead."""
+    Neo4j-first. Falls back to NetworkX only if Neo4j is unavailable."""
+    if settings.neo4j_enabled:
+        try:
+            neo4j_result = await get_explore_graph_neo4j(
+                limit_nodes=limit_nodes,
+                limit_edges=limit_edges,
+                node_type=node_type,
+            )
+            if neo4j_result and neo4j_result.get("nodes"):
+                return GraphData(
+                    nodes=[GraphNode(**n) for n in neo4j_result["nodes"]],
+                    edges=_neo4j_edges_to_graph_edges(neo4j_result["edges"]),
+                )
+        except Exception as e:
+            logger.warning(f"Neo4j explore graph query failed: {e}")
+            pass  # Fall through to NetworkX
+
+    # NetworkX fallback — only reached when Neo4j is unavailable
     G = _ensure_runtime_graph_or_503(state)
 
     # If graph is small enough, return full graph
@@ -324,9 +367,12 @@ async def get_community_graph(
             if neo4j_result and neo4j_result.get("nodes"):
                 return GraphData(
                     nodes=[GraphNode(**n) for n in neo4j_result["nodes"]],
-                    edges=[GraphEdge(**e) for e in neo4j_result["edges"]],
+                    edges=_neo4j_edges_to_graph_edges(neo4j_result["edges"]),
                 )
-        except Exception:
+            else:
+                logger.warning(f"Neo4j returned empty result for cluster {cluster_id}")
+        except Exception as e:
+            logger.warning(f"Neo4j cluster subgraph query failed: {e}")
             pass  # Fall through to NetworkX
 
     # NetworkX fallback
@@ -423,9 +469,14 @@ async def get_entity_neighborhood(
             if result and result.get("nodes"):
                 return GraphData(
                     nodes=[GraphNode(**n) for n in result["nodes"]],
-                    edges=[GraphEdge(**e) for e in result["edges"]],
+                    edges=_neo4j_edges_to_graph_edges(result["edges"]),
                 )
-        except Exception:
+            else:
+                logger.warning(
+                    f"Neo4j returned empty neighborhood for entity {entity_id}"
+                )
+        except Exception as e:
+            logger.warning(f"Neo4j entity neighborhood query failed: {e}")
             pass
 
     # NetworkX fallback

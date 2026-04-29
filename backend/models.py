@@ -55,7 +55,9 @@ class NodeType(str, Enum):
 
 class EdgeType(str, Enum):
     DIRECTOR_OF = "DIRECTOR_OF"
+    DIRECTED_BY = "DIRECTED_BY"
     BID_ON = "BID_ON"
+    CO_BID = "CO_BID"
     WON = "WON"
     AWARDED_BY = "AWARDED_BY"
     RELATED_TO = "RELATED_TO"

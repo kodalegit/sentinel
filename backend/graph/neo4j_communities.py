@@ -391,10 +391,16 @@ async def get_entity_neighborhood_neo4j(
                 limit: $limit
             })
             YIELD nodes, relationships
-            RETURN 
+            RETURN
                 [n IN nodes | {
-                    id: n.id, 
-                    type: labels(n)[0], 
+                    id: n.id,
+                    type: CASE
+                        WHEN n:Company THEN 'COMPANY'
+                        WHEN n:Tender THEN 'TENDER'
+                        WHEN n:Director THEN 'DIRECTOR'
+                        WHEN n:Official THEN 'OFFICIAL'
+                        ELSE labels(n)[0]
+                    END,
                     label: coalesce(n.name, n.title, n.id),
                     risk_level: n.risk_level
                 }] AS nodes,
@@ -481,12 +487,83 @@ async def search_graph_entities_neo4j(query: str, limit: int = 12) -> list[dict]
     ]
 
 
+async def get_explore_graph_neo4j(
+    limit_nodes: int = 500,
+    limit_edges: int = 2000,
+    node_type: str | None = None,
+) -> dict:
+    """Get a prioritized exploration graph from Neo4j with pagination.
+
+    Returns high-risk tenders and their connected entities first, then fills
+    remaining slots with other nodes. All edges between selected nodes are included.
+    """
+    _LABEL_FILTER = {
+        "COMPANY": "n:Company",
+        "TENDER": "n:Tender",
+        "DIRECTOR": "n:Director",
+        "OFFICIAL": "n:Official",
+    }
+    type_clause = (
+        _LABEL_FILTER.get((node_type or "").upper(), "")
+        or "(n:Tender OR n:Company OR n:Director OR n:Official)"
+    )
+
+    query = f"""
+        MATCH (n)
+        WHERE {type_clause}
+        WITH n,
+          CASE WHEN n:Tender AND n.risk_level IN ['HIGH', 'MEDIUM'] THEN 0 ELSE 1 END AS priority
+        ORDER BY priority, n.id
+        LIMIT $limit_nodes
+        WITH collect(n) AS selected_nodes
+        UNWIND selected_nodes AS n
+        OPTIONAL MATCH (n)-[r]-(m)
+        WHERE m IN selected_nodes
+        WITH selected_nodes, collect(DISTINCT r) AS all_rels
+        RETURN
+          [node IN selected_nodes | {{
+            id: node.id,
+            type: CASE
+              WHEN node:Company THEN 'COMPANY'
+              WHEN node:Tender THEN 'TENDER'
+              WHEN node:Director THEN 'DIRECTOR'
+              ELSE 'OFFICIAL'
+            END,
+            label: coalesce(node.name, node.title, node.id),
+            risk_level: node.risk_level
+          }}] AS nodes,
+          [rel IN all_rels WHERE rel IS NOT NULL | {{
+            source: startNode(rel).id,
+            target: endNode(rel).id,
+            relationship: type(rel),
+            suspicious: coalesce(rel.suspicious, false)
+          }}] AS edges
+    """
+
+    async with get_neo4j_session() as session:
+        result = await session.run(query, limit_nodes=limit_nodes)
+        record = await result.single()
+
+    if not record:
+        return {"nodes": [], "edges": []}
+
+    nodes = record["nodes"] or []
+    edges = record["edges"] or []
+    if len(edges) > limit_edges:
+        edges = edges[:limit_edges]
+
+    return {"nodes": nodes, "edges": edges}
+
+
 async def get_cluster_subgraph_neo4j(
     company_ids: list[str],
     include_tenders: bool = True,
     include_officials: bool = True,
 ) -> dict:
     """Get subgraph for a cluster from Neo4j."""
+    if not company_ids:
+        return {"nodes": [], "edges": []}
+
     async with get_neo4j_session() as session:
         # Build node types to include
         node_types = ["Company", "Director"]
@@ -507,10 +584,16 @@ async def get_cluster_subgraph_neo4j(
             WITH collect(DISTINCT n) AS nodes, all_rels
             UNWIND all_rels AS r
             WITH nodes, collect(DISTINCT r) AS rels
-            RETURN 
+            RETURN
                 [n IN nodes WHERE n IS NOT NULL | {
                     id: n.id,
-                    type: labels(n)[0],
+                    type: CASE
+                        WHEN n:Company THEN 'COMPANY'
+                        WHEN n:Tender THEN 'TENDER'
+                        WHEN n:Director THEN 'DIRECTOR'
+                        WHEN n:Official THEN 'OFFICIAL'
+                        ELSE labels(n)[0]
+                    END,
                     label: coalesce(n.name, n.title, n.id),
                     risk_level: n.risk_level
                 }] AS nodes,

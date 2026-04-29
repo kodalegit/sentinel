@@ -24,8 +24,6 @@ from state import AppState
 from db.config import async_session
 from db import repository as repo
 from db.mappers import (
-    company_to_pydantic,
-    director_to_pydantic,
     official_to_pydantic,
     tender_to_pydantic,
     bid_to_pydantic,
